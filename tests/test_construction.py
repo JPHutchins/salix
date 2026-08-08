@@ -331,7 +331,7 @@ class TestMutableDefaults:
         does.
         """
 
-        with pytest.raises(TypeError, match="cannot be hashed"):
+        with pytest.raises(TypeError, match="whose value will not"):
 
             class Holder(Struct):
                 v: object = value
@@ -358,6 +358,46 @@ class TestMutableDefaults:
         assert Holder().v is value
         assert Holder().v is Holder().v
 
+    def test_the_probe_hashes_a_default_once(self):
+        """`build_defaults` checks the declared value and then the stored copy,
+        which for anything outside the four copied types is the same object. The
+        hash probe runs on the stored one only, so a class author's `__hash__`
+        is called once rather than twice.
+        """
+
+        calls = []
+
+        class Counted:
+            def __hash__(self) -> int:
+                calls.append(1)
+                return 7
+
+        value = Counted()
+
+        class Holder(Struct):
+            v: object = value
+
+        assert calls == [1]
+        assert Holder().v is value
+
+    def test_a_hash_that_fails_for_its_own_reasons_propagates_unchanged(self):
+        """The probe reads TypeError and ValueError as the instance declining.
+        Anything else is not that, and salix says so with the author's own
+        exception rather than claiming the value holds something mutable.
+
+        A deliberate consequence: such a class used to build and share the
+        value, and now does not.
+        """
+
+        class Angry:
+            def __hash__(self) -> int:
+                raise RuntimeError("boom")
+
+        with pytest.raises(RuntimeError, match="boom"):
+
+            class Holder(Struct):
+                v: object = Angry()
+
     def test_a_writable_memoryview_answers_ValueError_and_is_still_caught(self):
         """The trap: the probe is a hash that raises, and a writable memoryview
         raises ValueError where a tuple of lists raises TypeError. Catching only
@@ -368,7 +408,7 @@ class TestMutableDefaults:
         with pytest.raises(ValueError, match="cannot hash writable"):
             hash(memoryview(bytearray(b"abc")))
 
-        with pytest.raises(TypeError, match="cannot be hashed"):
+        with pytest.raises(TypeError, match="whose value will not"):
 
             class Holder(Struct):
                 v: object = memoryview(bytearray(b"abc"))

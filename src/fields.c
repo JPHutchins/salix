@@ -685,7 +685,7 @@ static enum result reject_unsafe_default(PyObject * const field_name, PyObject *
 	Py_ssize_t const filled = struct_copies_default(kind) ? PyObject_Size(value) : 0;
 
 	if (filled <= 0) {
-		return filled < 0 ? RESULT_ERROR : refuse_shared_mutable_contents(field_name, value);
+		return filled < 0 ? RESULT_ERROR : RESULT_OK;
 	}
 
 	PyErr_Format(
@@ -719,13 +719,14 @@ static enum result refuse_shared_mutable_contents(
 		return RESULT_OK;
 	}
 
-	if (PyObject_Hash(value) != -1) {
+	if (PyObject_Hash(value) != -1 || !PyErr_Occurred()) {
 		return RESULT_OK;
 	}
 
 	/* A writable memoryview answers ValueError where a tuple of lists answers
-	 * TypeError, and anything else -- a MemoryError, an interrupt -- is not the
-	 * instance declining and is left to propagate. */
+	 * TypeError, and anything else -- a MemoryError, an interrupt, whatever a
+	 * class author's own __hash__ raises -- is not the instance declining and
+	 * propagates with its own message rather than being read as this. */
 	if (!PyErr_ExceptionMatches(PyExc_TypeError) && !PyErr_ExceptionMatches(PyExc_ValueError)) {
 		return RESULT_ERROR;
 	}
@@ -734,9 +735,10 @@ static enum result refuse_shared_mutable_contents(
 
 	PyErr_Format(
 		PyExc_TypeError,
-		"field '%U' defaults to a %.100s that cannot be hashed, so it holds "
-		"something mutable that every instance would share; default it to one "
-		"that can be, and build the rest with set_field -- from __post_init__, "
+		"field '%U' defaults to a %.100s whose type hashes and whose value will "
+		"not, which is how a container of something mutable answers; salix "
+		"shares such a default across every instance, so give the field one "
+		"that hashes and build the rest with set_field -- from __post_init__, "
 		"or from your own __init__ if the body writes one",
 		field_name,
 		kind->tp_name
@@ -807,7 +809,11 @@ static PyObject * build_defaults(PyObject * const all_names, PyObject * const de
 
 		PyObject * const stored = struct_default_copy(value);
 
-		if (stored == NULL || reject_unsafe_default(field_name, stored) != RESULT_OK) {
+		if (
+			stored == NULL ||
+			reject_unsafe_default(field_name, stored) != RESULT_OK ||
+			refuse_shared_mutable_contents(field_name, stored) != RESULT_OK
+		) {
 			Py_XDECREF(stored);
 			Py_DECREF(defaults);
 

@@ -48,7 +48,7 @@ def test_a_value_may_be_a_default(value):
         return
 
     if refused_as_default(value):
-        with pytest.raises(TypeError, match="cannot be hashed"):
+        with pytest.raises(TypeError, match="whose value will not"):
 
             class SharesContents(Struct):
                 field: object = value
