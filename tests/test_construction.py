@@ -425,6 +425,35 @@ class TestMutableDefaults:
 
         assert Holder().w is loop
 
+    def test_a_mutable_whose_own_hash_recurses_is_shared_too(self):
+        """The price of sharing what the probe cannot classify, pinned rather
+        than left to be discovered: this one really is the aliasing bug, and it
+        gets through because a stack overflow is indistinguishable from the
+        self-referential struct above.
+
+        It is where the rule already stood -- a deque, an array and a
+        defaultdict are shared while holding mutables for the same reason, by
+        saying up front that they do not hash.
+        """
+
+        class RecursiveHash:
+            def __init__(self) -> None:
+                self.items: list[str] = []
+
+            def __hash__(self) -> int:
+                return hash(self)
+
+        value = RecursiveHash()
+
+        class Holder(Struct):
+            v: object = value
+
+        assert Holder().v is value
+
+        value.items.append("seen by every instance")
+
+        assert Holder().v.items == ["seen by every instance"]
+
     def test_a_hash_that_fails_for_its_own_reasons_propagates_unchanged(self):
         """The probe reads TypeError and ValueError as the instance declining.
         Anything else is not that, and salix says so with the author's own

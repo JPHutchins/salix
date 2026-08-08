@@ -729,10 +729,12 @@ static enum result refuse_shared_mutable_contents(
 		return RESULT_OK;
 	}
 
-	/* A value that holds itself runs the hash out of stack rather than declining
-	 * it, so the probe never reaches an answer. Sharing is what it got before
-	 * there was a probe, and a frozen struct is safe to share whatever it points
-	 * at -- including itself. */
+	/* A hash that runs out of stack never reaches an answer -- a value holding
+	 * itself is the way that happens without anyone meaning it -- so this shares
+	 * whatever it cannot classify, which is what a deque or an array gets for
+	 * saying up front that it does not hash. It is the incomplete half of the
+	 * rule and not a guarantee: a mutable whose own hash recurses is shared too,
+	 * and tests/test_construction.py says so. */
 	if (PyErr_ExceptionMatches(PyExc_RecursionError)) {
 		PyErr_Clear();
 
@@ -740,9 +742,9 @@ static enum result refuse_shared_mutable_contents(
 	}
 
 	/* A writable memoryview answers ValueError where a tuple of lists answers
-	 * TypeError, and anything else -- a MemoryError, an interrupt, whatever a
-	 * class author's own __hash__ raises -- is not the instance declining and
-	 * propagates with its own message rather than being read as this. */
+	 * TypeError, and anything else that is not the stack -- a MemoryError, an
+	 * interrupt, whatever a class author's own __hash__ raises -- is not the
+	 * instance declining and propagates rather than being read as this. */
 	if (!PyErr_ExceptionMatches(PyExc_TypeError) && !PyErr_ExceptionMatches(PyExc_ValueError)) {
 		return RESULT_ERROR;
 	}
