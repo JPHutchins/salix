@@ -256,9 +256,15 @@ static enum result append_declared(
 		/* A default is the class-body value bound to the field name. */
 		PyObject * const declared_default = PyDict_GetItem(namespace, field_name);
 
+		/* Probed here rather than where the defaults tuple is built, because that
+		 * walks the inherited ones too and would re-ask every subclass creation.
+		 * A base's defaults answered when the base was built. */
 		if (
 			declared_default != NULL &&
-			PyDict_SetItem(default_by_name, field_name, declared_default) < 0
+			(
+				PyDict_SetItem(default_by_name, field_name, declared_default) < 0 ||
+				refuse_shared_mutable_contents(field_name, declared_default) != RESULT_OK
+			)
 		) {
 			return RESULT_ERROR;
 		}
@@ -723,6 +729,16 @@ static enum result refuse_shared_mutable_contents(
 		return RESULT_OK;
 	}
 
+	/* A value that holds itself runs the hash out of stack rather than declining
+	 * it, so the probe never reaches an answer. Sharing is what it got before
+	 * there was a probe, and a frozen struct is safe to share whatever it points
+	 * at -- including itself. */
+	if (PyErr_ExceptionMatches(PyExc_RecursionError)) {
+		PyErr_Clear();
+
+		return RESULT_OK;
+	}
+
 	/* A writable memoryview answers ValueError where a tuple of lists answers
 	 * TypeError, and anything else -- a MemoryError, an interrupt, whatever a
 	 * class author's own __hash__ raises -- is not the instance declining and
@@ -809,11 +825,7 @@ static PyObject * build_defaults(PyObject * const all_names, PyObject * const de
 
 		PyObject * const stored = struct_default_copy(value);
 
-		if (
-			stored == NULL ||
-			reject_unsafe_default(field_name, stored) != RESULT_OK ||
-			refuse_shared_mutable_contents(field_name, stored) != RESULT_OK
-		) {
+		if (stored == NULL || reject_unsafe_default(field_name, stored) != RESULT_OK) {
 			Py_XDECREF(stored);
 			Py_DECREF(defaults);
 

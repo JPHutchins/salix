@@ -3,7 +3,7 @@
 import pytest
 from values import COPIED_WHEN_EMPTY, NON_EMPTY
 
-from salix import Struct
+from salix import Struct, set_field
 
 
 class Point(Struct):
@@ -379,6 +379,51 @@ class TestMutableDefaults:
 
         assert calls == [1]
         assert Holder().v is value
+
+    def test_a_subclass_does_not_re_probe_an_inherited_default(self):
+        """`build_defaults` walks the inherited defaults too, so probing there
+        re-asked every default on every subclass creation -- and a `__hash__`
+        that answers differently over time could then flip `class Child(Base):
+        pass` to refused. The probe reads what this body declares, and a base's
+        defaults answered when the base was built.
+        """
+
+        calls = []
+
+        class Counted:
+            def __hash__(self) -> int:
+                calls.append(1)
+                return 7
+
+        class Base(Struct):
+            v: object = Counted()
+
+        class Child(Base):
+            pass
+
+        class Grandchild(Child):
+            pass
+
+        assert calls == [1]
+        assert Grandchild().v is Base().v
+
+    def test_a_value_that_holds_itself_is_shared_rather_than_refused(self):
+        """A frozen struct pointing at itself, built through `set_field`, runs
+        the hash out of stack instead of declining it -- so the probe never
+        reaches an answer. Sharing is what it got before there was a probe, and
+        a frozen struct is safe to share whatever it points at, itself included.
+        """
+
+        class Loop(Struct):
+            v: object = None
+
+        loop = Loop(None)
+        set_field(loop, "v", loop)
+
+        class Holder(Struct):
+            w: object = loop
+
+        assert Holder().w is loop
 
     def test_a_hash_that_fails_for_its_own_reasons_propagates_unchanged(self):
         """The probe reads TypeError and ValueError as the instance declining.
