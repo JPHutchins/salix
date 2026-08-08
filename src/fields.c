@@ -77,6 +77,7 @@ static struct special_form named_special_form(PyObject * text, struct form_probe
 static bool names_form(PyObject * text, PyObject * needle);
 static bool continues_identifier(Py_UCS4 character);
 static PyObject * module_attribute(char const * module_name, char const * attribute);
+static enum result refuse_shared_mutable_contents(PyObject * field_name, PyObject * value);
 
 /* The plan only takes references once every step has succeeded; the working
  * collections belong to this scope either way. */
@@ -684,7 +685,7 @@ static enum result reject_unsafe_default(PyObject * const field_name, PyObject *
 	Py_ssize_t const filled = struct_copies_default(kind) ? PyObject_Size(value) : 0;
 
 	if (filled <= 0) {
-		return filled < 0 ? RESULT_ERROR : RESULT_OK;
+		return filled < 0 ? RESULT_ERROR : refuse_shared_mutable_contents(field_name, value);
 	}
 
 	PyErr_Format(
@@ -694,6 +695,49 @@ static enum result reject_unsafe_default(PyObject * const field_name, PyObject *
 		"one and fill it with set_field -- from __post_init__, or from your own "
 		"__init__ if the body writes one, which displaces the constructor "
 		"__post_init__ runs from",
+		field_name,
+		kind->tp_name
+	);
+
+	return RESULT_ERROR;
+}
+
+/*
+ * A type that says it hashes and an instance that then refuses is a container
+ * whose contents are mutable, and salix shares such a default across every
+ * instance. The four copied types answer above; a deque or an array declares
+ * __hash__ = None, says so before being asked, and is left shared as msgspec
+ * leaves it.
+ */
+static enum result refuse_shared_mutable_contents(
+	PyObject * const field_name,
+	PyObject * const value
+) {
+	PyTypeObject * const kind = Py_TYPE(value);
+
+	if (kind->tp_hash == NULL || kind->tp_hash == PyObject_HashNotImplemented) {
+		return RESULT_OK;
+	}
+
+	if (PyObject_Hash(value) != -1) {
+		return RESULT_OK;
+	}
+
+	/* A writable memoryview answers ValueError where a tuple of lists answers
+	 * TypeError, and anything else -- a MemoryError, an interrupt -- is not the
+	 * instance declining and is left to propagate. */
+	if (!PyErr_ExceptionMatches(PyExc_TypeError) && !PyErr_ExceptionMatches(PyExc_ValueError)) {
+		return RESULT_ERROR;
+	}
+
+	PyErr_Clear();
+
+	PyErr_Format(
+		PyExc_TypeError,
+		"field '%U' defaults to a %.100s that cannot be hashed, so it holds "
+		"something mutable that every instance would share; default it to one "
+		"that can be, and build the rest with set_field -- from __post_init__, "
+		"or from your own __init__ if the body writes one",
 		field_name,
 		kind->tp_name
 	);

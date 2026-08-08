@@ -276,7 +276,7 @@ class TestMutableDefaults:
         [
             pytest.param(__import__("array").array("i", [1, 2]), id="array"),
             pytest.param(__import__("collections").deque([1, 2]), id="deque"),
-            pytest.param(memoryview(bytearray(b"abc")), id="memoryview"),
+            pytest.param(__import__("collections").defaultdict(list), id="defaultdict"),
             pytest.param(Mutable(1), id="a_mutable_struct"),
             *(
                 pytest.param(subclass_of(kind)(NON_EMPTY[kind]), id=f"a_{kind.__name__}_subclass")
@@ -286,9 +286,10 @@ class TestMutableDefaults:
     )
     def test_a_mutable_container_outside_the_four_is_shared_and_not_refused(self, value):
         """The boundary is the four exact types, not mutability, so these are
-        neither copied nor refused. Every one is unhashable, which is the test
-        #51 argues should replace the list -- salix's own `frozen=False` struct
-        included, since `eq` without `frozen` sets `__hash__` to None.
+        neither copied nor refused. Every one of these declares `__hash__` is
+        None -- it says it does not hash before being asked -- which is what
+        #51's rule leaves alone; salix's own `frozen=False` struct included,
+        since `eq` without `frozen` sets `__hash__` to None.
 
         The four subclasses are the sharpest of them: a *non-empty* subclass of
         a type the refusal covers is shared outright, which is the aliasing bug
@@ -309,6 +310,68 @@ class TestMutableDefaults:
 
         assert Holder().v is Holder().v
         assert Holder._struct_defaults_[0] is value
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param(([],), id="a_tuple_of_a_list"),
+            pytest.param(((1, []),), id="a_tuple_two_deep"),
+            pytest.param(memoryview(bytearray(b"abc")), id="a_writable_memoryview"),
+            pytest.param((frozenset(), []), id="a_pair_holding_one_of_each"),
+        ],
+    )
+    def test_a_shallowly_immutable_container_of_something_mutable_is_refused(self, value):
+        """#51's addition to the rule. A tuple is not one of the four, so it was
+        shared outright -- and `xs: object = ([],)` handed every instance the
+        same inner list, which is the aliasing bug the four-type rule exists to
+        stop, one level down and outside its reach.
+
+        The type says it hashes and the instance then refuses, which is exactly
+        what a container of something mutable does and what nothing immutable
+        does.
+        """
+
+        with pytest.raises(TypeError, match="cannot be hashed"):
+
+            class Holder(Struct):
+                v: object = value
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param((1, 2), id="a_tuple_of_ints"),
+            pytest.param("text", id="a_string"),
+            pytest.param(frozenset({1}), id="a_frozenset"),
+            pytest.param(memoryview(b"abc"), id="a_read_only_memoryview"),
+            pytest.param(Point(1, 2), id="a_frozen_struct"),
+        ],
+    )
+    def test_an_immutable_container_is_still_shared(self, value):
+        """The control. Every one of these hashes, so none of them can be
+        holding anything mutable, and sharing is right: there is nothing an
+        instance could do to one that another instance would see.
+        """
+
+        class Holder(Struct):
+            v: object = value
+
+        assert Holder().v is value
+        assert Holder().v is Holder().v
+
+    def test_a_writable_memoryview_answers_ValueError_and_is_still_caught(self):
+        """The trap: the probe is a hash that raises, and a writable memoryview
+        raises ValueError where a tuple of lists raises TypeError. Catching only
+        TypeError would let it through and turn class creation into a ValueError
+        from nowhere.
+        """
+
+        with pytest.raises(ValueError, match="cannot hash writable"):
+            hash(memoryview(bytearray(b"abc")))
+
+        with pytest.raises(TypeError, match="cannot be hashed"):
+
+            class Holder(Struct):
+                v: object = memoryview(bytearray(b"abc"))
 
     def test_a_body_init_does_not_exempt_the_declared_default(self):
         """Its constructor never reads the default, so nothing is shared -- but
