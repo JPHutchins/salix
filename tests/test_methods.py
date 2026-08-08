@@ -629,6 +629,32 @@ class TestNameCollisions:
                 def y(self) -> str:
                     return "property"
 
+    def test_a_private_name_is_refused_although_the_compiler_mangles_it(self):
+        """`__x` binds `_Mangled__x` in the namespace and in `__annotations__`,
+        but `__qualname__` keeps the source spelling `Mangled.__x`. So a pattern
+        built from the field name as stored can never match, and this collision
+        was silently dropped while its unmangled twin was refused.
+        """
+
+        with pytest.raises(TypeError, match=r"'_Mangled__x' is a field.*binds a function"):
+
+            class Mangled(Struct):
+                __x: int
+
+                def __x(self) -> str:
+                    return "method"
+
+    def test_a_private_field_may_still_default_to_a_same_named_function(self):
+        """The other side of the unmangling: `handler` is module-level, so its
+        qualname is bare and does not name this class however the field is
+        spelled.
+        """
+
+        class Private(Struct):
+            __handler: object = handler
+
+        assert Private()._Private__handler is handler
+
     def test_the_message_names_the_remedy(self):
         with pytest.raises(TypeError, match="rename one of them"):
 
@@ -766,23 +792,31 @@ class TestRefusalsWiderThanTheDefect:
     to allow either has to update a test deliberately.
     """
 
-    def test_a_wrapper_object_used_as_a_default_is_refused(self):
-        """The three decorator types answer by type, with no way to tell a body
+    @pytest.mark.parametrize(
+        ("wrapper", "named"),
+        [
+            (staticmethod, "staticmethod"),
+            (classmethod, "classmethod"),
+            (property, "property"),
+        ],
+    )
+    def test_a_wrapper_object_used_as_a_default_is_refused(self, wrapper, named):
+        """All three decorator types answer by type, with no way to tell a body
         `@staticmethod def y()` from a `staticmethod` object written as a value:
         both are a `staticmethod` bound under the field's name. Allowing it
         needs the same `__qualname__` hop through `__func__`, which belongs with
         the wrapper spellings in the issue below.
         """
 
-        with pytest.raises(TypeError, match=r"'y' is a field.*binds a staticmethod"):
+        with pytest.raises(TypeError, match=rf"'y' is a field.*binds a {named}"):
 
             class Wrapped(Struct):
-                y: object = staticmethod(module_level_handler)
+                y: object = wrapper(module_level_handler)
 
     def test_a_method_of_a_class_sharing_this_struct_s_name_is_refused(self):
-        """`Elsewhere.handler` has qualname `...Colliding.handler` because the
-        other class is also called `Colliding`, and a qualname carries no way to
-        say whose nesting chain it came from.
+        """The other class is also called `Colliding`, so its method's qualname
+        is `...Colliding.handler` — and a qualname carries no way to say whose
+        nesting chain it came from.
         """
 
         class Colliding:

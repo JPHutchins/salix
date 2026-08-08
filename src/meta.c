@@ -106,6 +106,7 @@ static enum result refuse_colliding_methods(
 );
 static int defines_a_method(PyObject * bound, PyObject * field_name, PyObject * class_name);
 static int defined_in_this_body(PyObject * qualname, PyObject * field_name, PyObject * class_name);
+static PyObject * unmangled(PyObject * class_name, PyObject * field_name);
 static StructType * create_class(
 	PyTypeObject * metatype,
 	PyObject * name,
@@ -1011,27 +1012,68 @@ static int defined_in_this_body(
 		return 0;
 	}
 
-	PY_OWNED(own, PyUnicode_FromFormat("%U.%U", class_name, field_name));
+	PY_OWNED(source_name, unmangled(class_name, field_name));
+
+	if (source_name == NULL) {
+		return -1;
+	}
+
+	PY_OWNED(own, PyUnicode_FromFormat("%U.%U", class_name, source_name));
 
 	if (own == NULL) {
 		return -1;
 	}
 
-	int const written_here = PyObject_RichCompareBool(qualname, own, Py_EQ);
+	Py_ssize_t const length = PyUnicode_GET_LENGTH(qualname);
+	Py_ssize_t const tail = PyUnicode_GET_LENGTH(own);
+	Py_ssize_t const matched = PyUnicode_Tailmatch(qualname, own, 0, length, 1);
 
-	if (written_here != 0) {
-		return written_here;
+	if (matched <= 0) {
+		return matched < 0 ? -1 : 0;
 	}
 
-	PY_OWNED(nested, PyUnicode_FromFormat(".%U", own));
+	return length == tail || PyUnicode_ReadChar(qualname, length - tail - 1) == '.';
+}
 
-	if (nested == NULL) {
-		return -1;
+static PyObject * unmangled(PyObject * const class_name, PyObject * const field_name) {
+	Py_ssize_t const class_length = PyUnicode_GET_LENGTH(class_name);
+	Py_ssize_t leading = 0;
+
+	while (leading < class_length && PyUnicode_ReadChar(class_name, leading) == '_') {
+		++leading;
 	}
 
-	Py_ssize_t const matched = PyUnicode_Tailmatch(qualname, nested, 0, PY_SSIZE_T_MAX, 1);
+	if (leading == class_length) {
+		return Py_NewRef(field_name);
+	}
 
-	return matched < 0 ? -1 : matched != 0;
+	PY_OWNED(stripped, PyUnicode_Substring(class_name, leading, class_length));
+
+	if (stripped == NULL) {
+		return NULL;
+	}
+
+	PY_OWNED(prefix, PyUnicode_FromFormat("_%U__", stripped));
+
+	if (prefix == NULL) {
+		return NULL;
+	}
+
+	Py_ssize_t const mangled = PyUnicode_Tailmatch(field_name, prefix, 0, PY_SSIZE_T_MAX, -1);
+
+	if (mangled < 0) {
+		return NULL;
+	}
+
+	if (mangled == 0) {
+		return Py_NewRef(field_name);
+	}
+
+	return PyUnicode_Substring(
+		field_name,
+		PyUnicode_GET_LENGTH(prefix) - 2,
+		PyUnicode_GET_LENGTH(field_name)
+	);
 }
 
 static StructType * create_class(
