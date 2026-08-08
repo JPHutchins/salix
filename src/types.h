@@ -107,6 +107,28 @@ static inline PyObject * struct_type_dict(PyTypeObject * const type) {
 }
 #endif
 
+/*
+ * A strong reference to the value, or NULL if the key is gone.
+ *
+ * PyDict_GetItem hands back a borrowed one, and taking a reference to it is two
+ * steps: on a free-threaded build another thread can remove the key and drop
+ * the last reference in between. PyDict_GetItemRef takes it under the dict's
+ * own lock instead -- 3.13+, which is also every version that can have the
+ * race, so the older branch is the plain read it always was.
+ *
+ * It also reports a failed lookup rather than swallowing it, which is why the
+ * caller separates "gone" from "could not tell".
+ */
+static inline PyObject * dict_value_ref(PyObject * const mapping, PyObject * const key) {
+#if PY_VERSION_HEX >= 0x030D0000
+	PyObject * value = NULL;
+
+	return PyDict_GetItemRef(mapping, key, &value) < 0 ? NULL : value;
+#else
+	return Py_XNewRef(PyDict_GetItem(mapping, key));
+#endif
+}
+
 #if PY_VERSION_HEX < 0x030D0000
 #	define STRUCT_BEGIN_CRITICAL_SECTION(object) {
 #	define STRUCT_END_CRITICAL_SECTION() }

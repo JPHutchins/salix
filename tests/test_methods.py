@@ -1,9 +1,9 @@
 """Methods on a struct, in the shapes people actually write them.
 
 A struct's body is an ordinary class body, and the methods it defines are kept
--- except a name that collides with a field, which is not kept and not simply
-lost either: it becomes that field's default. These are the codec-shaped methods
-that motivate reaching for a struct in the first place -- `to_bytes`,
+-- except a name that collides with a field, which is refused outright rather
+than dropped for the descriptor that reads the field. These are the codec-shaped
+methods that motivate reaching for a struct in the first place -- `to_bytes`,
 `to_string`, a `from_bytes` classmethod -- plus the descriptors that sit
 alongside them, and the dunders that salix would otherwise generate.
 
@@ -652,52 +652,354 @@ class TestBindingsSalixOwns:
         assert Struct.__match_args__ == ()
 
 
-class TestNameCollisions:
-    """A method named after a field is not discarded -- it becomes that field's
-    default, which is worse. `append_declared` reads the class-body value bound
-    to the field name, and a `def` is a class-body value bound to a name.
+def module_level_handler(value: int) -> int:
+    """A function used as a field's default rather than as a method."""
 
-    So the class builds, `Collide.x` is the slot descriptor, and `Collide()`
-    hands back an instance whose int field holds a function. #54 is the issue.
+    return value
+
+
+def handler(value: int) -> int:
+    """Named exactly as the field that defaults to it, which is the case a rule
+    keyed on the function's own `__name__` cannot tell from a body `def`.
     """
 
-    @staticmethod
-    def colliding_method():
-        class Collide(Struct):
-            x: int
+    return value
 
-            def x(self) -> str:
-                return "method"
 
-        return Collide
+class TestNameCollisions:
+    """A method named after a field is refused. #54.
 
-    def test_the_method_is_gone_from_the_class(self):
-        Collide = self.colliding_method()
+    It used to be dropped, and dropping it was silent twice over: the class
+    lost a definition its body meant to keep, and `append_declared` read the
+    class-body value bound to the field name as that field's *default*, so
+    `Collide()` built an instance whose int field held a function and
+    `_struct_defaults_` reported it.
 
-        assert type(Collide.x).__name__ == "member_descriptor"
-        assert Collide(1).x == 1
+    salix is stricter than a dataclass or a NamedTuple here, all of which are
+    silent. `TestDefaultsThatAreCallable` is the other half of the rule: a
+    callable is still an ordinary default when it is not named after the field.
+    """
 
-    def test_but_it_became_the_default_and_the_class_is_constructible(self):
-        """The half `Collide(1).x == 1` cannot see. Constructing with no
-        argument is accepted, because the field now has a default.
+    def test_a_def_named_after_a_field_is_refused(self):
+        with pytest.raises(TypeError, match=r"'x' is a field.*binds a function"):
+
+            class Collide(Struct):
+                x: int
+
+                def x(self) -> str:
+                    return "method"
+
+    def test_a_property_named_after_a_field_is_refused(self):
+        with pytest.raises(TypeError, match=r"'y' is a field.*binds a property"):
+
+            class CollideProp(Struct):
+                y: int
+
+                @property
+                def y(self) -> str:
+                    return "property"
+
+    def test_a_classmethod_named_after_a_field_is_refused(self):
+        with pytest.raises(TypeError, match=r"'z' is a field.*binds a classmethod"):
+
+            class CollideClass(Struct):
+                z: int
+
+                @classmethod
+                def z(cls) -> str:
+                    return "classmethod"
+
+    def test_a_staticmethod_named_after_a_field_is_refused(self):
+        with pytest.raises(TypeError, match=r"'w' is a field.*binds a staticmethod"):
+
+            class CollideStatic(Struct):
+                w: int
+
+                @staticmethod
+                def w() -> str:
+                    return "staticmethod"
+
+    def test_the_field_may_be_one_the_base_declared(self):
+        """The original report: colliding with an *inherited* field, with no
+        annotation of its own. The name never reaches `append_declared`, so no
+        default was ever created -- the method was simply dropped in silence,
+        which every alternative also does and salix no longer does.
         """
 
-        Collide = self.colliding_method()
-        (default,) = Collide._struct_defaults_
+        class Base(Struct):
+            x: int
 
-        assert callable(default)
-        assert Collide().x is default
+        with pytest.raises(TypeError, match=r"'x' is a field.*binds a function"):
 
-    def test_a_property_collides_the_same_way(self):
-        class CollideProp(Struct):
+            class Child(Base):
+                def x(self) -> str:
+                    return "method"
+
+    def test_a_property_collides_with_an_inherited_field_too(self):
+        """The type-check branch against `all_names` rather than this class's own
+        annotations, which is the half the `def` test above cannot see.
+        """
+
+        class Base(Struct):
             y: int
 
-            @property
-            def y(self) -> str:
-                return "property"
+        with pytest.raises(TypeError, match=r"'y' is a field.*binds a property"):
 
-        (default,) = CollideProp._struct_defaults_
+            class Child(Base):
+                @property
+                def y(self) -> str:
+                    return "property"
 
-        assert isinstance(default, property)
-        assert CollideProp().y is default
-        assert CollideProp(1).y == 1
+    def test_a_private_name_is_refused_although_the_compiler_mangles_it(self):
+        """`__x` binds `_Mangled__x` in the namespace and in `__annotations__`,
+        but `__qualname__` keeps the source spelling `Mangled.__x`. So a pattern
+        built from the field name as stored can never match, and this collision
+        was silently dropped while its unmangled twin was refused.
+        """
+
+        with pytest.raises(TypeError, match=r"'__x' is a field.*binds a function"):
+
+            class Mangled(Struct):
+                __x: int
+
+                def __x(self) -> str:
+                    return "method"
+
+    def test_a_name_that_only_looks_mangled_is_refused_as_written(self):
+        """`_C__x` is what the compiler stores for `__x` in class `C`, and it is
+        also a name someone can write outright -- both bind the same key, and
+        the stored name cannot say which. Rebuilding the pattern from the
+        unmangled spelling alone made this one silently drop.
+        """
+
+        with pytest.raises(TypeError, match=r"'_C__x' is a field.*binds a function"):
+
+            class C(Struct):
+                _C__x: int
+
+                def _C__x(self) -> str:
+                    return "method"
+
+    def test_a_private_field_may_still_default_to_a_same_named_function(self):
+        """The other side of the unmangling: `handler` is module-level, so its
+        qualname is bare and does not name this class however the field is
+        spelled.
+        """
+
+        class Private(Struct):
+            __handler: object = handler
+
+        assert Private()._Private__handler is handler
+
+    def test_the_message_names_the_remedy(self):
+        with pytest.raises(TypeError, match="rename one of them"):
+
+            class Collide(Struct):
+                x: int
+
+                def x(self) -> str:
+                    return "method"
+
+    def test_a_struct_at_module_scope_is_refused_the_same_way(self):
+        """Every other struct here is nested in a test method, so its methods'
+        qualnames carry a `<locals>.` prefix and only the suffix branch of the
+        rule fires. A class at module scope gives `Collide.x` exactly, which is
+        the common spelling and the branch nothing else reaches.
+        """
+
+        source = "class Collide(Struct):\n    x: int\n\n    def x(self):\n        return 1\n"
+
+        with pytest.raises(TypeError, match=r"'x' is a field.*binds a function"):
+            exec(source, {"Struct": Struct})
+
+    def test_a_method_not_named_after_a_field_is_untouched(self):
+        """The control. Without it the refusal could be refusing every method
+        and these tests would still pass.
+        """
+
+        class Fine(Struct):
+            x: int
+
+            def doubled(self) -> int:
+                return self.x * 2
+
+        assert Fine(21).doubled() == 42
+
+
+class TestDefaultsThatAreCallable:
+    """The negative control for #54's refusal, and the reason it asks a
+    function for its name rather than asking whether the value is a descriptor.
+
+    Every one of these is a callable default that works, and a rule keyed on
+    `__get__` would refuse the first two. `functools.partial` is the case that
+    would also have been version-dependent -- it gained `__get__` in 3.13, so a
+    descriptor test would build on 3.10 through 3.12 and refuse from there.
+    """
+
+    def test_a_module_level_function_defaults_a_field(self):
+        class WithHandler(Struct):
+            handler: object = module_level_handler
+
+        assert WithHandler().handler is module_level_handler
+
+    def test_a_lambda_defaults_a_field(self):
+        """A real lambda, whose `__qualname__` ends in `<lambda>` and so can
+        never match a field name however the class is spelled.
+        """
+
+        identity = lambda value: value  # noqa: E731 -- the lambda is the subject
+
+        class WithLambda(Struct):
+            handler: object = identity
+
+        assert WithLambda().handler is identity
+
+    def test_a_function_whose_name_matches_the_field_defaults_it(self):
+        """The false positive the first version of this rule had: the class dict
+        records `handler -> function` identically whether the body wrote
+        `def handler(self)` or defaulted the field to a module-level `handler`.
+        Only `__qualname__` separates them.
+        """
+
+        class WithSameName(Struct):
+            handler: object = handler
+
+        assert WithSameName().handler is handler
+
+    def test_re_defaulting_an_inherited_field_to_a_same_named_function(self):
+        class Base(Struct):
+            handler: object = None
+
+        class Child(Base):
+            handler: object = handler
+
+        assert Child().handler is handler
+
+    def test_a_method_of_another_class_defaults_a_field(self):
+        """`__qualname__` is `Source.handler`, which is not this class's own
+        `handler`, so the last two components do not match.
+        """
+
+        class Source:
+            def handler(self) -> int:
+                return 1
+
+        class WithForeign(Struct):
+            handler: object = Source.handler
+
+        assert WithForeign().handler is Source.handler
+
+    def test_a_partial_defaults_a_field(self):
+        bound = functools.partial(module_level_handler, 1)
+
+        class WithPartial(Struct):
+            handler: object = bound
+
+        assert WithPartial().handler is bound
+
+    def test_a_bound_method_defaults_a_field(self):
+        class Source:
+            def handle(self, value: int) -> int:
+                return value
+
+        bound = Source().handle
+
+        class WithBound(Struct):
+            handler: object = bound
+
+        assert WithBound().handler is bound
+
+    def test_a_type_defaults_a_field(self):
+        class WithType(Struct):
+            kind: object = int
+
+        assert WithType().kind is int
+
+    def test_a_builtin_defaults_a_field(self):
+        class WithBuiltin(Struct):
+            emit: object = print
+
+        assert WithBuiltin().emit is print
+
+
+class TestRefusalsWiderThanTheDefect:
+    """Two shapes refused that a body arguably meant as values. Both are pinned
+    rather than argued about, so the over-refusal is visible and a later change
+    to allow either has to update a test deliberately.
+    """
+
+    @pytest.mark.parametrize(
+        ("wrapper", "named"),
+        [
+            (staticmethod, "staticmethod"),
+            (classmethod, "classmethod"),
+            (property, "property"),
+        ],
+    )
+    def test_a_wrapper_object_used_as_a_default_is_refused(self, wrapper, named):
+        """All three decorator types answer by type, with no way to tell a body
+        `@staticmethod def y()` from a `staticmethod` object written as a value:
+        both are a `staticmethod` bound under the field's name. Allowing it
+        needs the same `__qualname__` hop through `__func__`, which belongs with
+        the wrapper spellings in the issue below.
+        """
+
+        with pytest.raises(TypeError, match=rf"'y' is a field.*binds a {named}"):
+
+            class Wrapped(Struct):
+                y: object = wrapper(module_level_handler)
+
+    def test_a_method_of_a_class_sharing_this_struct_s_name_is_refused(self):
+        """The other class is also called `Colliding`, so its method's qualname
+        is `...Colliding.handler` — and a qualname carries no way to say whose
+        nesting chain it came from.
+        """
+
+        class Colliding:
+            def handler(self) -> int:
+                return 1
+
+        with pytest.raises(TypeError, match=r"'handler' is a field.*binds a function"):
+
+            class Colliding(Struct):
+                handler: object = Colliding.handler
+
+
+class TestCollisionsStillNotRefused:
+    """The wrapped spellings the four-spelling rule does not reach, pinned so
+    the silent defaulting cannot regress unnoticed. #54's refusal covers a
+    `def` and the three decorators; a `functools` wrapper is neither a
+    `property` subclass nor a function, so it is dropped and becomes the
+    field's default exactly as before -- a required field silently turning
+    optional, which is the corruption #54 describes.
+
+    Not widened here because no version-stable test separates these from a
+    default someone means: `functools.partial` is a descriptor from 3.13 and
+    not before, and a bound method is one on every version. Tracked as its
+    own issue.
+    """
+
+    def test_a_cached_property_named_after_a_field_still_becomes_its_default(self):
+        class Cached(Struct):
+            x: int
+
+            @functools.cached_property
+            def x(self) -> int:
+                return 99
+
+        (default,) = Cached._struct_defaults_
+
+        assert isinstance(default, functools.cached_property)
+        assert Cached().x is default
+
+    def test_a_cache_wrapped_method_named_after_a_field_does_the_same(self):
+        class Wrapped(Struct):
+            y: int
+
+            @functools.cache  # noqa: B019 -- the wrapper is the subject, not the caching
+            def y(self) -> int:
+                return 99
+
+        (default,) = Wrapped._struct_defaults_
+
+        assert Wrapped().y is default

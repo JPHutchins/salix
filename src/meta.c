@@ -105,6 +105,25 @@ static enum result bind_hash(
 	bool inherits_body_eq
 );
 static enum result drop_class_variables(PyObject * namespace, PyObject * all_names);
+static enum result refuse_colliding_methods(
+	PyObject * original_namespace,
+	PyObject * all_names,
+	PyObject * class_name
+);
+static int defines_a_method(
+	PyObject * bound,
+	PyObject * field_name,
+	PyObject * class_name,
+	PyObject * * spelling
+);
+static int defined_in_this_body(
+	PyObject * qualname,
+	PyObject * field_name,
+	PyObject * class_name,
+	PyObject * * spelling
+);
+static int names_this_body(PyObject * qualname, PyObject * class_name, PyObject * name);
+static PyObject * unmangled(PyObject * class_name, PyObject * field_name);
 static StructType * create_class(
 	PyTypeObject * metatype,
 	PyObject * name,
@@ -294,12 +313,13 @@ static PyObject * build_struct_class(
 	}
 
 	if (
+		refuse_colliding_methods(original_namespace, plan.all_names, name) != RESULT_OK ||
 		refuse_displaced_slots(
-			original_namespace,
-			plan.all_names,
-			request.options.weakref || any_base_has_weakref_slot(bases)
-		) !=
-		RESULT_OK
+				original_namespace,
+				plan.all_names,
+				request.options.weakref || any_base_has_weakref_slot(bases)
+			) !=
+			RESULT_OK
 	) {
 		field_plan_clear(&plan);
 
@@ -1027,6 +1047,178 @@ static enum result drop_class_variables(PyObject * const namespace, PyObject * c
 	}
 
 	return RESULT_OK;
+}
+
+static enum result refuse_colliding_methods(
+	PyObject * const original_namespace,
+	PyObject * const all_names,
+	PyObject * const class_name
+) {
+	for (Py_ssize_t i = 0; i < PyList_GET_SIZE(all_names); ++i) {
+		PyObject * const field_name = PyList_GET_ITEM(all_names, i);
+		PY_OWNED(bound, dict_value_ref(original_namespace, field_name));
+
+		if (bound == NULL) {
+			if (PyErr_Occurred()) {
+				return RESULT_ERROR;
+			}
+
+			continue;
+		}
+
+		PY_MOVABLE(spelling, NULL);
+		int const method = defines_a_method(bound, field_name, class_name, &spelling);
+
+		if (method < 0) {
+			return RESULT_ERROR;
+		}
+
+		if (method == 1) {
+			PyErr_Format(
+				PyExc_TypeError,
+				"'%U' is a field, and the class body binds a %.100s to that name "
+				"which salix would drop for the descriptor that reads the field; "
+				"rename one of them",
+				spelling != NULL ? spelling : field_name,
+				Py_TYPE(bound)->tp_name
+			);
+
+			return RESULT_ERROR;
+		}
+	}
+
+	return RESULT_OK;
+}
+
+static int defines_a_method(
+	PyObject * const bound,
+	PyObject * const field_name,
+	PyObject * const class_name,
+	PyObject * * const spelling
+) {
+	if (
+		PyObject_TypeCheck(bound, &PyProperty_Type) ||
+		PyObject_TypeCheck(bound, &PyClassMethod_Type) ||
+		PyObject_TypeCheck(bound, &PyStaticMethod_Type)
+	) {
+		return 1;
+	}
+
+	if (!PyFunction_Check(bound)) {
+		return 0;
+	}
+
+	return defined_in_this_body(
+		((PyFunctionObject *) bound)->func_qualname,
+		field_name,
+		class_name,
+		spelling
+	);
+}
+
+/*
+ * Either spelling counts, because which one the compiler stored cannot be
+ * recovered from the stored name alone: `_C__x` is what `def __x` becomes in
+ * class C, and it is also a name someone can write outright, and both bind the
+ * same key. Whichever pattern matches is the one the source used, so it is also
+ * the spelling to quote back.
+ */
+static int defined_in_this_body(
+	PyObject * const qualname,
+	PyObject * const field_name,
+	PyObject * const class_name,
+	PyObject * * const spelling
+) {
+	if (qualname == NULL || !PyUnicode_Check(qualname)) {
+		return 0;
+	}
+
+	int const stored = names_this_body(qualname, class_name, field_name);
+
+	if (stored != 0) {
+		*spelling = stored == 1 ? Py_NewRef(field_name) : NULL;
+
+		return stored;
+	}
+
+	PY_OWNED(source_name, unmangled(class_name, field_name));
+
+	if (source_name == NULL) {
+		return -1;
+	}
+
+	if (source_name == field_name) {
+		return 0;
+	}
+
+	int const written = names_this_body(qualname, class_name, source_name);
+
+	*spelling = written == 1 ? Py_NewRef(source_name) : NULL;
+
+	return written;
+}
+
+static int names_this_body(
+	PyObject * const qualname,
+	PyObject * const class_name,
+	PyObject * const name
+) {
+	PY_OWNED(own, PyUnicode_FromFormat("%U.%U", class_name, name));
+
+	if (own == NULL) {
+		return -1;
+	}
+
+	Py_ssize_t const length = PyUnicode_GET_LENGTH(qualname);
+	Py_ssize_t const tail = PyUnicode_GET_LENGTH(own);
+	Py_ssize_t const matched = PyUnicode_Tailmatch(qualname, own, 0, length, 1);
+
+	if (matched <= 0) {
+		return matched < 0 ? -1 : 0;
+	}
+
+	return length == tail || PyUnicode_ReadChar(qualname, length - tail - 1) == '.';
+}
+
+static PyObject * unmangled(PyObject * const class_name, PyObject * const field_name) {
+	Py_ssize_t const class_length = PyUnicode_GET_LENGTH(class_name);
+	Py_ssize_t leading = 0;
+
+	while (leading < class_length && PyUnicode_ReadChar(class_name, leading) == '_') {
+		++leading;
+	}
+
+	if (leading == class_length) {
+		return Py_NewRef(field_name);
+	}
+
+	PY_OWNED(stripped, PyUnicode_Substring(class_name, leading, class_length));
+
+	if (stripped == NULL) {
+		return NULL;
+	}
+
+	PY_OWNED(prefix, PyUnicode_FromFormat("_%U__", stripped));
+
+	if (prefix == NULL) {
+		return NULL;
+	}
+
+	Py_ssize_t const mangled = PyUnicode_Tailmatch(field_name, prefix, 0, PY_SSIZE_T_MAX, -1);
+
+	if (mangled < 0) {
+		return NULL;
+	}
+
+	if (mangled == 0) {
+		return Py_NewRef(field_name);
+	}
+
+	return PyUnicode_Substring(
+		field_name,
+		PyUnicode_GET_LENGTH(prefix) - 2,
+		PyUnicode_GET_LENGTH(field_name)
+	);
 }
 
 static StructType * create_class(
