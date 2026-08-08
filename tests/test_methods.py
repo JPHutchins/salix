@@ -757,12 +757,27 @@ class TestNameCollisions:
         was silently dropped while its unmangled twin was refused.
         """
 
-        with pytest.raises(TypeError, match=r"'_Mangled__x' is a field.*binds a function"):
+        with pytest.raises(TypeError, match=r"'__x' is a field.*binds a function"):
 
             class Mangled(Struct):
                 __x: int
 
                 def __x(self) -> str:
+                    return "method"
+
+    def test_a_name_that_only_looks_mangled_is_refused_as_written(self):
+        """`_C__x` is what the compiler stores for `__x` in class `C`, and it is
+        also a name someone can write outright -- both bind the same key, and
+        the stored name cannot say which. Rebuilding the pattern from the
+        unmangled spelling alone made this one silently drop.
+        """
+
+        with pytest.raises(TypeError, match=r"'_C__x' is a field.*binds a function"):
+
+            class C(Struct):
+                _C__x: int
+
+                def _C__x(self) -> str:
                     return "method"
 
     def test_a_private_field_may_still_default_to_a_same_named_function(self):
