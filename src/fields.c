@@ -76,6 +76,7 @@ static struct special_form named_special_form(PyObject * text, struct form_probe
 static bool names_form(PyObject * text, PyObject * needle);
 static bool continues_identifier(Py_UCS4 character);
 static PyObject * module_attribute(char const * module_name, char const * attribute);
+static enum result refuse_shared_mutable_contents(PyObject * field_name, PyObject * value);
 
 /* The plan only takes references once every step has succeeded; the working
  * collections belong to this scope either way. */
@@ -254,9 +255,15 @@ static enum result append_declared(
 		/* A default is the class-body value bound to the field name. */
 		PyObject * const declared_default = PyDict_GetItem(namespace, field_name);
 
+		/* Probed here rather than where the defaults tuple is built, because that
+		 * walks the inherited ones too and would re-ask every subclass creation.
+		 * A base's defaults answered when the base was built. */
 		if (
 			declared_default != NULL &&
-			PyDict_SetItem(default_by_name, field_name, declared_default) < 0
+			(
+				PyDict_SetItem(default_by_name, field_name, declared_default) < 0 ||
+				refuse_shared_mutable_contents(field_name, declared_default) != RESULT_OK
+			)
 		) {
 			return RESULT_ERROR;
 		}
@@ -671,6 +678,63 @@ static enum result reject_unsafe_default(PyObject * const field_name, PyObject *
 		"one and fill it with set_field -- from __post_init__, or from your own "
 		"__init__ if the body writes one, which displaces the constructor "
 		"__post_init__ runs from",
+		field_name,
+		kind->tp_name
+	);
+
+	return RESULT_ERROR;
+}
+
+/*
+ * A type that says it hashes and an instance that then refuses is a container
+ * whose contents are mutable, and salix shares such a default across every
+ * instance. The four copied types answer above; a deque or an array declares
+ * __hash__ = None, says so before being asked, and is left shared as msgspec
+ * leaves it.
+ */
+static enum result refuse_shared_mutable_contents(
+	PyObject * const field_name,
+	PyObject * const value
+) {
+	PyTypeObject * const kind = Py_TYPE(value);
+
+	if (kind->tp_hash == NULL || kind->tp_hash == PyObject_HashNotImplemented) {
+		return RESULT_OK;
+	}
+
+	if (PyObject_Hash(value) != -1 || !PyErr_Occurred()) {
+		return RESULT_OK;
+	}
+
+	/* A hash that runs out of stack never reaches an answer -- a value holding
+	 * itself is the way that happens without anyone meaning it -- so this shares
+	 * whatever it cannot classify, which is what a deque or an array gets for
+	 * saying up front that it does not hash. It is the incomplete half of the
+	 * rule and not a guarantee: a mutable whose own hash recurses is shared too,
+	 * and tests/test_construction.py says so. */
+	if (PyErr_ExceptionMatches(PyExc_RecursionError)) {
+		PyErr_Clear();
+
+		return RESULT_OK;
+	}
+
+	/* A writable memoryview answers ValueError where a tuple of lists answers
+	 * TypeError, and anything else that is not the stack -- a MemoryError, an
+	 * interrupt, whatever a class author's own __hash__ raises -- is not the
+	 * instance declining and propagates rather than being read as this. */
+	if (!PyErr_ExceptionMatches(PyExc_TypeError) && !PyErr_ExceptionMatches(PyExc_ValueError)) {
+		return RESULT_ERROR;
+	}
+
+	PyErr_Clear();
+
+	PyErr_Format(
+		PyExc_TypeError,
+		"field '%U' defaults to a %.100s whose type hashes and whose value will "
+		"not, which is how a container of something mutable answers; salix "
+		"shares such a default across every instance, so give the field one "
+		"that hashes and build the rest with set_field -- from __post_init__, "
+		"or from your own __init__ if the body writes one",
 		field_name,
 		kind->tp_name
 	);

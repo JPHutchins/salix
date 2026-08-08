@@ -3,7 +3,7 @@
 import pytest
 from values import COPIED_WHEN_EMPTY, NON_EMPTY
 
-from salix import Struct
+from salix import Struct, set_field
 
 
 class Point(Struct):
@@ -276,7 +276,7 @@ class TestMutableDefaults:
         [
             pytest.param(__import__("array").array("i", [1, 2]), id="array"),
             pytest.param(__import__("collections").deque([1, 2]), id="deque"),
-            pytest.param(memoryview(bytearray(b"abc")), id="memoryview"),
+            pytest.param(__import__("collections").defaultdict(list), id="defaultdict"),
             pytest.param(Mutable(1), id="a_mutable_struct"),
             *(
                 pytest.param(subclass_of(kind)(NON_EMPTY[kind]), id=f"a_{kind.__name__}_subclass")
@@ -286,9 +286,10 @@ class TestMutableDefaults:
     )
     def test_a_mutable_container_outside_the_four_is_shared_and_not_refused(self, value):
         """The boundary is the four exact types, not mutability, so these are
-        neither copied nor refused. Every one is unhashable, which is the test
-        #51 argues should replace the list -- salix's own `frozen=False` struct
-        included, since `eq` without `frozen` sets `__hash__` to None.
+        neither copied nor refused. Every one of these declares `__hash__` is
+        None -- it says it does not hash before being asked -- which is what
+        #51's rule leaves alone; salix's own `frozen=False` struct included,
+        since `eq` without `frozen` sets `__hash__` to None.
 
         The four subclasses are the sharpest of them: a *non-empty* subclass of
         a type the refusal covers is shared outright, which is the aliasing bug
@@ -309,6 +310,182 @@ class TestMutableDefaults:
 
         assert Holder().v is Holder().v
         assert Holder._struct_defaults_[0] is value
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param(([],), id="a_tuple_of_a_list"),
+            pytest.param(((1, []),), id="a_tuple_two_deep"),
+            pytest.param(memoryview(bytearray(b"abc")), id="a_writable_memoryview"),
+            pytest.param((frozenset(), []), id="a_pair_holding_one_of_each"),
+        ],
+    )
+    def test_a_shallowly_immutable_container_of_something_mutable_is_refused(self, value):
+        """#51's addition to the rule. A tuple is not one of the four, so it was
+        shared outright -- and `xs: object = ([],)` handed every instance the
+        same inner list, which is the aliasing bug the four-type rule exists to
+        stop, one level down and outside its reach.
+
+        The type says it hashes and the instance then refuses, which is exactly
+        what a container of something mutable does and what nothing immutable
+        does.
+        """
+
+        with pytest.raises(TypeError, match="whose value will not"):
+
+            class Holder(Struct):
+                v: object = value
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param((1, 2), id="a_tuple_of_ints"),
+            pytest.param("text", id="a_string"),
+            pytest.param(frozenset({1}), id="a_frozenset"),
+            pytest.param(memoryview(b"abc"), id="a_read_only_memoryview"),
+            pytest.param(Point(1, 2), id="a_frozen_struct"),
+        ],
+    )
+    def test_an_immutable_container_is_still_shared(self, value):
+        """The control. Every one of these hashes, so none of them can be
+        holding anything mutable, and sharing is right: there is nothing an
+        instance could do to one that another instance would see.
+        """
+
+        class Holder(Struct):
+            v: object = value
+
+        assert Holder().v is value
+        assert Holder().v is Holder().v
+
+    def test_the_probe_hashes_a_default_once(self):
+        """`build_defaults` checks the declared value and then the stored copy,
+        which for anything outside the four copied types is the same object. The
+        hash probe runs on the stored one only, so a class author's `__hash__`
+        is called once rather than twice.
+        """
+
+        calls = []
+
+        class Counted:
+            def __hash__(self) -> int:
+                calls.append(1)
+                return 7
+
+        value = Counted()
+
+        class Holder(Struct):
+            v: object = value
+
+        assert calls == [1]
+        assert Holder().v is value
+
+    def test_a_subclass_does_not_re_probe_an_inherited_default(self):
+        """`build_defaults` walks the inherited defaults too, so probing there
+        re-asked every default on every subclass creation -- and a `__hash__`
+        that answers differently over time could then flip `class Child(Base):
+        pass` to refused. The probe reads what this body declares, and a base's
+        defaults answered when the base was built.
+        """
+
+        calls = []
+
+        class Counted:
+            def __hash__(self) -> int:
+                calls.append(1)
+                return 7
+
+        class Base(Struct):
+            v: object = Counted()
+
+        class Child(Base):
+            pass
+
+        class Grandchild(Child):
+            pass
+
+        assert calls == [1]
+        assert Grandchild().v is Base().v
+
+    def test_a_value_that_holds_itself_is_shared_rather_than_refused(self):
+        """A frozen struct pointing at itself, built through `set_field`, runs
+        the hash out of stack instead of declining it -- so the probe never
+        reaches an answer. Sharing is what it got before there was a probe, and
+        a frozen struct is safe to share whatever it points at, itself included.
+        """
+
+        class Loop(Struct):
+            v: object = None
+
+        loop = Loop(None)
+        set_field(loop, "v", loop)
+
+        class Holder(Struct):
+            w: object = loop
+
+        assert Holder().w is loop
+
+    def test_a_mutable_whose_own_hash_recurses_is_shared_too(self):
+        """The price of sharing what the probe cannot classify, pinned rather
+        than left to be discovered: this one really is the aliasing bug, and it
+        gets through because a stack overflow is indistinguishable from the
+        self-referential struct above.
+
+        It is where the rule already stood -- a deque, an array and a
+        defaultdict are shared while holding mutables for the same reason, by
+        saying up front that they do not hash.
+        """
+
+        class RecursiveHash:
+            def __init__(self) -> None:
+                self.items: list[str] = []
+
+            def __hash__(self) -> int:
+                return hash(self)
+
+        value = RecursiveHash()
+
+        class Holder(Struct):
+            v: object = value
+
+        assert Holder().v is value
+
+        value.items.append("seen by every instance")
+
+        assert Holder().v.items == ["seen by every instance"]
+
+    def test_a_hash_that_fails_for_its_own_reasons_propagates_unchanged(self):
+        """The probe reads TypeError and ValueError as the instance declining.
+        Anything else is not that, and salix says so with the author's own
+        exception rather than claiming the value holds something mutable.
+
+        A deliberate consequence: such a class used to build and share the
+        value, and now does not.
+        """
+
+        class Angry:
+            def __hash__(self) -> int:
+                raise RuntimeError("boom")
+
+        with pytest.raises(RuntimeError, match="boom"):
+
+            class Holder(Struct):
+                v: object = Angry()
+
+    def test_a_writable_memoryview_answers_ValueError_and_is_still_caught(self):
+        """The trap: the probe is a hash that raises, and a writable memoryview
+        raises ValueError where a tuple of lists raises TypeError. Catching only
+        TypeError would let it through and turn class creation into a ValueError
+        from nowhere.
+        """
+
+        with pytest.raises(ValueError, match="cannot hash writable"):
+            hash(memoryview(bytearray(b"abc")))
+
+        with pytest.raises(TypeError, match="whose value will not"):
+
+            class Holder(Struct):
+                v: object = memoryview(bytearray(b"abc"))
 
     def test_a_body_init_does_not_exempt_the_declared_default(self):
         """Its constructor never reads the default, so nothing is shared -- but

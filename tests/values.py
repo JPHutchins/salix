@@ -157,6 +157,40 @@ assert all(
 )
 
 
+def _shares_mutable_contents(value: object) -> bool:
+    """The type says it hashes and the instance then refuses, which is how a
+    container of something mutable answers. `refuse_shared_mutable_contents` in
+    src/fields.c is what this mirrors. ValueError as well as TypeError: a
+    writable memoryview raises the first.
+    """
+
+    if type(value).__hash__ is None:
+        return False
+
+    try:
+        hash(value)
+    except (TypeError, ValueError):
+        return True
+
+    return False
+
+
+# What salix refuses as a class-body default for holding something mutable that
+# every instance would otherwise share. Selected from EVERY rather than built
+# fresh, because the callers below test identity against the parametrized value.
+REFUSED_AS_DEFAULT = tuple(value for value in EVERY if _shares_mutable_contents(value))
+
+# The membership, stated rather than left to the rule, so widening or narrowing
+# the rule has to come here and say so. A writable memoryview is the only value
+# in the set whose type claims a hash that the instance then refuses; everything
+# else unhashable here declares __hash__ = None before being asked.
+assert [type(value).__name__ for value in REFUSED_AS_DEFAULT] == ["memoryview"]
+
+
+def refused_as_default(value: object) -> bool:
+    return any(value is refused for refused in REFUSED_AS_DEFAULT)
+
+
 def identify(value: object) -> str:
     """A stable, readable parametrize id for values whose repr is unwieldy."""
 
