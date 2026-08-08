@@ -151,14 +151,14 @@ struct slot_pair {
 /*
  * A new reference to a field, taken under the same lock the writer takes.
  *
- * #7 made the write side safe by going through PyMember_SetOne, which holds a
- * critical section on the instance over the store and defers the release past
+ * The write side is safe because it goes through PyMember_SetOne, which holds
+ * a critical section on the instance over the store and defers the release past
  * the end of it. Every reader here loaded the slot and then increffed what it
  * found, which is two steps with a window between them: on a free-threaded
  * build a concurrent write frees the pointer inside that window, and repr and
  * == segfault. Measured, 3.14t, four writers and three readers of one kind:
  * `repr` exited 134/139/134 and `==` 139/134/134, while the same loop reading
- * through CPython's own member descriptor survived every time. #46.
+ * through CPython's own member descriptor survived every time.
  *
  * Every acquisition is in this file, so a fifth reader cannot forget one. The
  * macros are a bare scope on a build with the GIL, so all three of these are

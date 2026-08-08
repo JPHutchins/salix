@@ -73,9 +73,9 @@ static PyGetSetDef Struct_getset[] = {
  * whatever the co-base defines would mean walking the MRO for something to
  * borrow, on a path reachable only by subclassing a private class.
  *
- * Hash is the exception, and #66 is why: it cannot be a local decision, because
- * hashing and equality have to agree and equality here is the co-base's. It
- * refuses instead. See src/hash.c.
+ * Hash is the exception: it cannot be a local decision, because hashing and
+ * equality have to agree and equality here is the co-base's. It refuses
+ * instead. See src/hash.c.
  *
  * Setattr takes object's too, and that one is worth saying out loud because it
  * *overrides* rather than falls back: a co-base with its own `__setattr__`
@@ -85,8 +85,8 @@ static PyGetSetDef Struct_getset[] = {
  * walking the MRO for a setter to borrow, on a path reachable only by
  * subclassing a private class.
  *
- * Equality is left intransitive by all of this, and #66's fix does not change
- * it. `rich_compare` answers NotImplemented for a non-struct, so two
+ * Equality is left intransitive by all of this, and refusing to hash does not
+ * change it. `rich_compare` answers NotImplemented for a non-struct, so two
  * content-equal impostors fall back to identity and compare unequal, while each
  * compares equal to the plain value they wrap through the co-base's reflected
  * `__eq__`. Pinned in tests/test_struct_identity.py rather than left to be
@@ -96,10 +96,9 @@ static PyGetSetDef Struct_getset[] = {
  * The metadata getsets are the exception either way -- all four of them, the
  * two salix defines and the two it answers to for msgspec's sake: they report
  * struct metadata and nothing else, so there is nothing to fall back to and
- * they raise. An
- * AttributeError rather than a TypeError, because "this object does not have
- * that attribute" is what happened and it is what `hasattr` and `getattr`'s
- * default are written to catch.
+ * they raise. An AttributeError rather than a TypeError, because "this object
+ * does not have that attribute" is what happened and it is what `hasattr` and
+ * `getattr`'s default are written to catch.
  */
 static PyObject * metadata_of(
 	PyObject * const self,

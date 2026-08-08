@@ -271,7 +271,7 @@ static enum result fill_defaults(
  * whitelists the same four types.
  *
  * Every one of them is unhashable, which is the single test that would replace
- * this list; #51 is where that is argued. msgspec shares them as well.
+ * this list. msgspec shares them as well.
  *
  * dataclasses refuses the shape outright and needs default_factory to express
  * it at all. This copies, so the common spelling means what it looks like it

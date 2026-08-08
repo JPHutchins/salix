@@ -334,9 +334,8 @@ static enum inheritance inherits_field(StructType const * const base, PyObject *
  *
  * The annotation is walked rather than probed once, because
  * Annotated[ClassVar[int], ...] reaches ClassVar two hops down and is otherwise
- * the same bug wearing a wrapper. A tree since #57's ruling and not a chain:
- * __origin__, every element of __args__, and a PEP 695 alias's __value__ are
- * all edges.
+ * the same bug wearing a wrapper. A tree and not a chain: __origin__, every
+ * element of __args__, and a PEP 695 alias's __value__ are all edges.
  */
 enum : int {
 	/* A budget on work rather than on depth, because bounding the shape stopped
@@ -413,14 +412,14 @@ static struct special_form special_form_of(
  * The form can be anywhere in a subscripted annotation, not only at the end of
  * the __origin__ chain. `Optional[Annotated[ClassVar[int], 'm']]` keeps it in
  * the arguments, where a chain walk never looks, so it became a field while
- * the text path refused the same source -- #14 again, on the path almost every
- * class takes. Both are walked now, per #57's ruling.
+ * the text path refused the same source, on the path almost every class takes.
+ * Both are walked now.
  *
  * It does not reach `Annotated[int, ClassVar]`, where the form is metadata
  * rather than the type, because Annotated keeps metadata in __metadata__ and
  * not in __args__ -- so that shape is still a field here while the text path
- * refuses it. #57 owns the disagreement; when this comment claimed the walk had
- * closed it, the test one file over already said otherwise.
+ * refuses it. The disagreement is left open here; when this comment claimed the
+ * walk had closed it, the test one file over already said otherwise.
  *
  * A str reached by the walk is walked and not matched, which costs nothing
  * today: the only strings in an __args__ are the ones a caller put there, and
@@ -555,8 +554,8 @@ static struct special_form named_special_form(
  * than the type -- including when it is quoted, since a quote is a boundary.
  * That last one is deliberate: `x: 'ClassVar[int]'` is a nested forward
  * reference and has to be refused, and nothing short of parsing tells the two
- * apart. #57 keeps the list. The object path is exact, and it is what
- * runs unless the module asked for `from __future__ import annotations`.
+ * apart. The object path is exact, and it is what runs unless the module asked
+ * for `from __future__ import annotations`.
  */
 static bool continues_identifier(Py_UCS4 const character) {
 	/* Python owns the answer and spells it one way in the C API: a name is an
@@ -615,7 +614,8 @@ static bool names_form(PyObject * const text, PyObject * const needle) {
  * and turns the guard off for this class because there is nothing it could be
  * naming. NULL *with* an exception set is a failure, and the caller has to tell
  * them apart: swallowing the second one turns a MemoryError into a silently
- * unguarded class, which is #14 again with no way to notice.
+ * unguarded class, where a ClassVar becomes a field again with no way to
+ * notice.
  */
 static PyObject * module_attribute(char const * const module_name, char const * const attribute) {
 	PY_OWNED(name, PyUnicode_FromString(module_name));
@@ -651,11 +651,10 @@ static PyObject * module_attribute(char const * const module_name, char const * 
  * every other: Struct_new writes that class's declared defaults before the
  * __init__ runs, so a non-empty one would be copied per instance and is
  * shallow there for the same reason. It used to over-fire on a declaration
- * nothing would ever hand out, which is what #56 was; the message states the
- * rule rather than a consequence because that reads the same either way, and
- * names the remedy that still works there: __post_init__ runs from the
- * constructor a body __init__ displaces, so only set_field from that __init__
- * is left.
+ * nothing would ever hand out; the message states the rule rather than a
+ * consequence because that reads the same either way, and names the remedy
+ * that still works there: __post_init__ runs from the constructor a body
+ * __init__ displaces, so only set_field from that __init__ is left.
  */
 static enum result reject_unsafe_default(PyObject * const field_name, PyObject * const value) {
 	PyTypeObject * const kind = Py_TYPE(value);
@@ -732,8 +731,7 @@ static PyObject * build_defaults(PyObject * const all_names, PyObject * const de
 		 * the work the first check exists to skip and not the invariant.
 		 *
 		 * `_struct_defaults_` still hands the stored object out, so filling it
-		 * through there defeats this. That route is out of contract and #51 is
-		 * where the whole type list is argued. */
+		 * through there defeats this. That route is out of contract. */
 		if (reject_unsafe_default(field_name, value) != RESULT_OK) {
 			Py_DECREF(defaults);
 
