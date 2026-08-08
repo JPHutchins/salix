@@ -66,6 +66,7 @@ static struct definition any_base_defines(PyObject * bases, Py_ssize_t first, Py
 static struct options inherited_options(PyObject * bases, StructType const * behaviour);
 static bool any_struct_base_is_mutable(PyObject * bases);
 static bool has_weakref_slot(StructType const * base);
+static bool any_base_has_weakref_slot(PyObject * bases);
 static struct options base_options(StructType const * base);
 static PyObject * build_class_namespace(
 	PyObject * original_namespace,
@@ -78,6 +79,11 @@ static PyObject * build_class_namespace(
 	bool body_defines_eq,
 	bool inherits_body_eq,
 	bool derive_not_equal
+);
+static enum result refuse_displaced_slots(
+	PyObject * original_namespace,
+	PyObject * all_names,
+	bool carries_a_weakref_slot
 );
 static PyObject * build_slots(PyObject * new_names, bool weakref);
 static enum result set_match_args(PyObject * namespace, PyObject * all_names, bool wanted);
@@ -284,6 +290,19 @@ static PyObject * build_struct_class(
 	struct field_plan plan = field_plan_build(base, original_namespace);
 
 	if (field_plan_failed(&plan)) {
+		return NULL;
+	}
+
+	if (
+		refuse_displaced_slots(
+			original_namespace,
+			plan.all_names,
+			request.options.weakref || any_base_has_weakref_slot(bases)
+		) !=
+		RESULT_OK
+	) {
+		field_plan_clear(&plan);
+
 		return NULL;
 	}
 
@@ -664,6 +683,18 @@ static bool has_weakref_slot(StructType const * const base) {
 	return base != NULL && base->heap_type.ht_type.tp_weaklistoffset != 0;
 }
 
+static bool any_base_has_weakref_slot(PyObject * const bases) {
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(bases); ++i) {
+		PyObject * const base = PyTuple_GET_ITEM(bases, i);
+
+		if (PyType_Check(base) && ((PyTypeObject *) base)->tp_weaklistoffset != 0) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
 /* The namespace handed to type.__new__: a copy of the original with every
  * class-body binding of a field name removed (so none of them clashes with the
  * __slots__ descriptor that reads the value) plus __slots__ / __match_args__
@@ -704,6 +735,78 @@ static PyObject * build_class_namespace(
 	}
 
 	return NULL;
+}
+
+static enum result refuse_displaced_slots(
+	PyObject * const original_namespace,
+	PyObject * const all_names,
+	bool const carries_a_weakref_slot
+) {
+	PyObject * const declared = PyDict_GetItemString(original_namespace, "__slots__");
+
+	if (declared == NULL) {
+		return PyErr_Occurred() ? RESULT_ERROR : RESULT_OK;
+	}
+
+	PY_OWNED(
+		entries,
+		PyUnicode_Check(declared) ? PyTuple_Pack(1, declared) : PySequence_Tuple(declared)
+	);
+
+	if (entries == NULL) {
+		return RESULT_ERROR;
+	}
+
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(entries); ++i) {
+		PyObject * const entry = PyTuple_GET_ITEM(entries, i);
+
+		if (!PyUnicode_Check(entry)) {
+			PyErr_Format(
+				PyExc_TypeError,
+				"__slots__ items must be strings, not '%.200s'",
+				Py_TYPE(entry)->tp_name
+			);
+
+			return RESULT_ERROR;
+		}
+
+		if (PyUnicode_CompareWithASCIIString(entry, "__weakref__") == 0) {
+			if (carries_a_weakref_slot) {
+				continue;
+			}
+
+			PyErr_SetString(
+				PyExc_TypeError,
+				"__slots__ names __weakref__ and this class carries no weakref "
+				"slot to name; a struct gets one from weakref=True or from a base "
+				"that has one"
+			);
+
+			return RESULT_ERROR;
+		}
+
+		int const named_by_a_field = PySequence_Contains(all_names, entry);
+
+		if (named_by_a_field < 0) {
+			return RESULT_ERROR;
+		}
+
+		if (named_by_a_field == 1) {
+			continue;
+		}
+
+		PyErr_Format(
+			PyExc_TypeError,
+			"__slots__ names %R, which is not a field of this class; a struct's "
+			"fields are its slots, so salix would drop it -- declare it as a field, "
+			"or drop __slots__",
+			entry
+		);
+
+		return RESULT_ERROR;
+	}
+
+	return RESULT_OK;
 }
 
 /* __weakref__ is a slot like any other; a class that wants to be the target of
