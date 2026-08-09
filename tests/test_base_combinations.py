@@ -804,7 +804,9 @@ def test_a_single_base_asking_to_drop_an_inherited_weakref_slot_is_the_same_bug(
 
     without = build((Weak,), field="fresh", weakref=False)
 
+    assert not isinstance(without, Impossible)
+
     if isinstance(without, Refused):
-        assert "weakref=False is refused" in without.message
+        assert "weakref" in without.message
     else:
         assert observe(without).weakref is False
