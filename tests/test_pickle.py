@@ -1044,3 +1044,24 @@ def test_deepcopy_of_a_string_reduce_returns_the_object_unchanged():
 
     assert copy.deepcopy(instance) is instance
     assert copy.copy(instance) is instance
+
+
+def test_deepcopy_falls_back_to_reduce_when_reduce_ex_is_none():
+    """A class that sets __reduce_ex__ = None routes reduction through
+    __reduce__, matching stdlib copy.deepcopy's getattr(x, "__reduce_ex__",
+    None) treating None as absence. copy.copy works because it has no
+    __copy__; deepcopy must agree.
+    """
+
+    class ReduceExNone(Struct):
+        x: int
+
+        __reduce_ex__ = None
+
+        def __reduce__(self):
+            return (ReduceExNone, (self.x,))
+
+    instance = ReduceExNone(3)
+
+    assert copy.deepcopy(instance) == instance
+    assert copy.copy(instance) == instance

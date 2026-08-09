@@ -486,11 +486,13 @@ static PyObject * instance_dict_ref(PyObject * const self) {
 			*slot = NULL;
 			Py_DECREF(materialized);
 			materialized = NULL;
+		} else if (materialized != NULL) {
+			materialized = Py_NewRef(materialized);
 		}
 		STRUCT_END_CRITICAL_SECTION();
 
 		if (materialized != NULL) {
-			return Py_NewRef(materialized);
+			return materialized;
 		}
 	}
 #endif
