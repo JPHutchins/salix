@@ -775,25 +775,32 @@ PyObject * Struct_set_state(PyObject * const self, PyObject * const state) {
 			return NULL;
 		}
 
+		/* The clear and the swap both mutate the instance's dict storage, so
+		 * each runs under the instance's critical section (the same lock a
+		 * concurrent writer's attr store takes) -- otherwise a writer's store
+		 * landing between the read and the mutation is silently dropped. The
+		 * replacement is built up front and swapped only on full success, so a
+		 * failing merge leaves the instance untouched; the swap replaces the
+		 * dict object and strands external references, the accepted cost of
+		 * atomicity. The None branch clears in place. */
 		if (instance_dict == Py_None) {
+			STRUCT_BEGIN_CRITICAL_SECTION(self);
 			PyDict_Clear(dict);
+			STRUCT_END_CRITICAL_SECTION();
 		} else if (instance_dict != dict) {
-			/* Build the replacement up front and swap it in only on full
-			 * success, so a failing merge (a key whose hash or equality
-			 * raises, or a resize MemoryError) leaves the instance dict
-			 * untouched. The swap replaces the dict object; external
-			 * references to the previous dict go stale, which is the accepted
-			 * cost of atomicity. The None branch clears in place (it must, to
-			 * empty the existing object); the two branches' aliasing contracts
-			 * are documented rather than made identical, because in-place
-			 * refill cannot be atomic. */
 			PY_MOVABLE(fresh, PyDict_New());
 
 			if (fresh == NULL || PyDict_Update(fresh, instance_dict) < 0) {
 				return NULL;
 			}
 
-			if (PyObject_GenericSetDict(self, fresh, NULL) < 0) {
+			int swapped;
+
+			STRUCT_BEGIN_CRITICAL_SECTION(self);
+			swapped = PyObject_GenericSetDict(self, fresh, NULL);
+			STRUCT_END_CRITICAL_SECTION();
+
+			if (swapped < 0) {
 				return NULL;
 			}
 		}

@@ -260,9 +260,11 @@ def test_concurrent_getstate_while_another_thread_writes_the_instance_dict():
     """
 
     shared = DictCarrying(0)
-    # Seed an entry before the threads race, so a reader that runs before the
-    # writer's first store still observes a non-empty dict and sets the flag.
-    shared.extra = 0
+    # A fresh instance: its dict slot is NULL, so every __getstate__ until the
+    # writer's first store exercises instance_dict_ref's empty-dict
+    # materialize-and-restore branch -- the path the read-side race fix is
+    # about. No seed, because seeding would make the dict non-empty from the
+    # start and skip that branch entirely.
     rounds = ITERATIONS * 5
     saw_dict_entry = [False]
 
@@ -292,6 +294,9 @@ def test_concurrent_getstate_while_another_thread_writes_the_instance_dict():
 
     run_on_every_thread(work)
 
+    # The writer stores on every one of its `rounds` iterations, so by the time
+    # every thread has run to completion at least one store must have landed
+    # and been observed.
     assert saw_dict_entry[0]
 
 

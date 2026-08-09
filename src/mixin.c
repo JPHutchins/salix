@@ -178,9 +178,18 @@ static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) 
 	} else {
 		rv = PyObject_CallMethod(self, "__reduce_ex__", "i", 4);
 
+		/* Fall back to __reduce__ only when __reduce_ex__ is absent, matching
+		 * stdlib copy.deepcopy: a present __reduce_ex__ that raises AttributeError
+		 * propagates, it is not treated as absence. */
 		if (rv == NULL && PyErr_ExceptionMatches(PyExc_AttributeError)) {
-			PyErr_Clear();
-			rv = PyObject_CallMethod(self, "__reduce__", NULL);
+			PyObject * const reduce_ex = PyObject_GetAttrString(self, "__reduce_ex__");
+
+			if (reduce_ex == NULL && PyErr_ExceptionMatches(PyExc_AttributeError)) {
+				PyErr_Clear();
+				rv = PyObject_CallMethod(self, "__reduce__", NULL);
+			} else {
+				Py_XDECREF(reduce_ex);
+			}
 		}
 	}
 
