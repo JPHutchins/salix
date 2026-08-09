@@ -5,7 +5,6 @@
 #include "result.h"
 #include "types.h"
 
-/* Which field a keyword argument names, if any. */
 struct field_lookup {
 	enum { FIELD_LOOKUP_FOUND, FIELD_LOOKUP_MISSING, FIELD_LOOKUP_ERROR } tag;
 	Py_ssize_t index;
@@ -38,11 +37,6 @@ static enum result write_slot(
 );
 static enum result run_post_init(StructType const * type, PyObject * self);
 
-/*
- * Instances are built straight into slot memory: allocate, then let each of
- * the three argument sources write the slots it owns. A half-written struct is
- * a valid object with NULL slots, so unwinding is just Py_DECREF.
- */
 PyObject * Struct_vectorcall(
 	PyObject * const struct_class,
 	PyObject * const * const arguments,
@@ -85,28 +79,6 @@ PyObject * Struct_vectorcall(
 	return py_move(&self);
 }
 
-/*
- * What a class whose body writes __init__ allocates with. That class declined
- * the generated constructor, and fill_defaults went with it: a declared default
- * was never written, for the class and for every subclass, so
- * _struct_defaults_ advertised a value no instance would ever carry.
- * Writing them here means the __init__ runs over a struct that already holds
- * them and overwrites whatever it means to -- which is where a dataclass leaves
- * them too, on the class, readable.
- *
- * Fields with no default are left NULL. Supplying those is what the body's
- * __init__ is for, and reading one it did not write raises AttributeError as
- * it did before. __post_init__ is not run here for the same reason: it is the
- * generated constructor's last step, and this class does not have one.
- *
- * The arguments go unread, exactly as PyType_GenericNew left them: they are the
- * __init__'s to interpret. Which is also what this costs an __init__ that
- * overwrites every default from its own arguments: the copy is written and
- * thrown away, because nothing here can know that. fill_defaults can, since the
- * vectorcall sees which slots the caller filled. Measured on 3.14, a two-field
- * class whose __init__ assigns both: 115.1ns against 99.9 for
- * PyType_GenericNew, and a class declaring no defaults pays nothing.
- */
 PyObject * Struct_new(
 	PyTypeObject * const struct_class,
 	PyObject * const arguments,
@@ -120,22 +92,12 @@ PyObject * Struct_new(
 
 	StructType const * const type = (StructType *) struct_class;
 
-	/* fill_defaults with nothing supplied, which is what this is: every slot of
-	 * a fresh instance is NULL so its skip never fires, and starting at
-	 * required_count makes its missing-argument branch unreachable. Calling it
-	 * rather than repeating it keeps one copy of what a default costs. */
 	return (
 		fill_defaults(type, self, struct_required_count(type)) == RESULT_OK ? py_move(&self) :
 		NULL
 	);
 }
 
-/*
- * The last thing the constructor does, so what it validates is a struct with
- * every field already written. Frozen means it cannot assign one back --
- * set_field below is the deliberate way through, and the only one, since a
- * frozen class's fields are read-only to every other path.
- */
 static enum result run_post_init(StructType const * const type, PyObject * const self) {
 	if (type->struct_post_init == NULL) {
 		return RESULT_OK;
@@ -146,7 +108,6 @@ static enum result run_post_init(StructType const * const type, PyObject * const
 	return returned != NULL ? RESULT_OK : RESULT_ERROR;
 }
 
-/* Positional arguments are in field order by definition, so this is a copy. */
 static void bind_positional(
 	StructType const * const type,
 	PyObject * const self,
@@ -206,8 +167,6 @@ static enum result bind_keywords(
 	return RESULT_OK;
 }
 
-/* Whatever position and keyword left unwritten: a default if the field has
- * one, otherwise the call is short an argument. */
 static enum result fill_defaults(
 	StructType const * const type,
 	PyObject * const self,
@@ -247,48 +206,13 @@ static enum result fill_defaults(
 	return RESULT_OK;
 }
 
-/*
- * A mutable default belongs to the instance, not to the class: `xs: list = []`
- * reads as an empty list per struct, and handing every instance the same one is
- * a bug people write by accident. The four builtins that spell "container I
- * will mutate" are copied, and only when empty -- a non-empty one is refused at
- * class creation, since copying it could only be shallow.
- *
- * Class creation takes a copy too, so what the class stores is not the object
- * the body named. `shared = []` kept at module level and appended to afterwards
- * would otherwise make the stored default non-empty behind the refusal's back,
- * and every instance would get a shallow copy of it. msgspec severs the same
- * alias by turning the default into a Factory.
- *
- * Everything else is shared, and "everything else" is wider than it sounds.
- * Sharing is right for an int, a string or a tuple of them, and for a frozen
- * struct of them: none can be rebound or mutated. It is wrong for two kinds of
- * default this does not reach -- a shallowly-immutable container of something
- * mutable (`([],)`, a frozen struct holding a list), and a mutable container
- * that simply is not one of the four (`array.array`, `deque`, `defaultdict`, a
- * writable `memoryview`, or a subclass of any of the four). Those are shared
- * outright, and a non-empty one is not refused either, because the refusal
- * whitelists the same four types.
- *
- * Every one of them is unhashable, which is the single test that would replace
- * this list. msgspec shares them as well.
- *
- * dataclasses refuses the shape outright and needs default_factory to express
- * it at all. This copies, so the common spelling means what it looks like it
- * means, and pays for it only on the fields that have one.
- *
- * The type and the constructor that copies it are named together, because no
- * predicate can supply the second. One list, so the refusal and the copy cannot
- * come to different answers about which types those are.
- *
- * A list of statements rather than a static array of {type, constructor}: on
+/* A list of statements rather than a static array of {type, constructor}: on
  * Windows a `PyTypeObject` is imported from python3.dll, and the address of a
  * dllimport symbol is not a compile-time constant, so the array version
  * compiles everywhere except the platform half the wheels are cross-built for.
  */
 typedef PyObject * (*default_copier)(PyObject * declared);
 
-/* PyList_GetSlice takes bounds; the other three constructors take the object. */
 static PyObject * copy_list(PyObject * const declared) {
 	return PyList_GetSlice(declared, 0, PyList_GET_SIZE(declared));
 }
@@ -320,27 +244,9 @@ bool struct_copies_default(PyTypeObject const * const kind) {
 PyObject * struct_default_copy(PyObject * const declared) {
 	default_copier const copy = copies_default(Py_TYPE(declared));
 
-	/* Everything else is the object itself, a subclass of one of the four
-	 * included: copying with a constructor for the wrong type would change the
-	 * value. */
 	return copy != NULL ? copy(declared) : Py_NewRef(declared);
 }
 
-/*
- * The one way to write a struct's field after it is built, and the reason a
- * frozen one can still be computed rather than only passed in.
- *
- * It resolves the name against the field table and writes that slot, which is
- * the path the constructor takes, so it cannot add an attribute -- a name the
- * class did not declare has no slot to write and is an error. That is the whole
- * safety argument: the escape hatch reaches exactly what the class already
- * spells out, and nothing else.
- *
- * Intended for __post_init__, before the instance has escaped. Which value a
- * racing write leaves behind is the caller's problem, as it is for any object
- * whose invariants outlive its constructor -- but only which value: the write
- * itself is as safe as `self.x = v`, and for the same reason.
- */
 PyObject * Struct_set_field(PyObject * const module, PyObject * const arguments) {
 	PyObject * self = NULL;
 	PyObject * name = NULL;
@@ -427,11 +333,6 @@ static enum result write_slot(
 	return PyMember_SetOne((char *) self, &slot, value) == 0 ? RESULT_OK : RESULT_ERROR;
 }
 
-/*
- * Keyword names arrive interned in the overwhelmingly common case, so the
- * identity scan resolves them without touching PyUnicode_Compare; the equality
- * scan is the fallback for names assembled at runtime.
- */
 static struct field_lookup find_field(StructType const * const type, PyObject * const name) {
 	for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
 		if (name == PyTuple_GET_ITEM(type->struct_field_names, i)) {
