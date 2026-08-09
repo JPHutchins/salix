@@ -187,6 +187,29 @@ class EmptyStateEx(Struct):
         return ({}, (), None)
 
 
+class EmptyStateMix(Struct):
+    x: int = 0
+
+    __getnewargs_ex__ = None
+
+    def __getnewargs__(self):
+        return (self.x,)
+
+    def __getstate__(self):
+        return ({}, (), None)
+
+
+class UnderGetNewArgs(Struct):
+    x: int
+    y: int
+
+    def __getnewargs__(self):
+        return (self.x,)
+
+    def __getstate__(self):
+        return ({}, (), None)
+
+
 class WithGNA(Struct):
     x: int
 
@@ -1159,10 +1182,13 @@ def test_a_none_getnewargs_is_not_declared():
         NoneGetNewArgs.__new__(NoneGetNewArgs, 99)
 
     instance = NoneGetNewArgs()
+    set_field(instance, "x", 7)
 
     assert copy.copy(instance) == instance
+    assert copy.copy(instance).x == 7
     assert copy.deepcopy(instance) == instance
     assert pickle.loads(pickle.dumps(instance)) == instance
+    assert pickle.loads(pickle.dumps(instance)).x == 7
 
 
 def test_setstate_refuses_a_non_empty_dict_third_element_without_an_instance_dict():
@@ -1176,3 +1202,48 @@ def test_setstate_refuses_a_non_empty_dict_third_element_without_an_instance_dic
 
     instance.__setstate__(({"x": 8}, (), None))
     assert instance.x == 8
+
+
+def test_a_real_getnewargs_survives_a_none_getnewargs_ex():
+    """A None __getnewargs_ex__ is absence, so a real __getnewargs__ must still
+    contribute its arguments rather than being shadowed away."""
+
+    instance = EmptyStateMix()
+    set_field(instance, "x", 7)
+
+    assert pickle.loads(pickle.dumps(instance)).x == 7
+    assert copy.copy(instance).x == 7
+    assert copy.deepcopy(instance).x == 7
+
+
+def test_a_getnewargs_under_providing_a_required_field_is_refused():
+    with pytest.raises(TypeError, match="missing required argument"):
+        UnderGetNewArgs.__new__(UnderGetNewArgs, 5)
+
+    with pytest.raises(TypeError, match="missing required argument"):
+        pickle.loads(pickle.dumps(UnderGetNewArgs(5, 6)))
+
+
+def test_a_body_init_struct_with_getnewargs_constructs_with_init_arguments():
+    class C(Struct, frozen=False):
+        x: int = 0
+
+        def __init__(self, a, b):
+            self.x = a + b
+
+        def __getnewargs__(self):
+            return (self.x,)
+
+    assert C(1, 2).x == 3
+
+    class B(Struct, frozen=False):
+        x: int = 0
+
+        def __init__(self, v=10):
+            self.x = v
+
+        def __getnewargs__(self):
+            return (self.x,)
+
+    assert B().x == 10
+    assert B(5).x == 5

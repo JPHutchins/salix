@@ -157,33 +157,128 @@ static PyObject * object_reduce_ex(PyObject * const self, PyObject * const args)
 	return PyObject_Call(reduce_ex, call_args, NULL);
 }
 
-static PyObject * reduce_without_newargs(PyObject * const self) {
+static PyObject * reduce_with_newargs(
+	PyObject * const self,
+	PyObject * const newargs,
+	PyObject * const newkwargs
+) {
+	bool const has_kwargs = newkwargs != NULL && PyDict_GET_SIZE(newkwargs) > 0;
 	PY_OWNED(copyreg, PyImport_ImportModule("copyreg"));
-	PY_OWNED(newobj, copyreg != NULL ? PyObject_GetAttrString(copyreg, "__newobj__") : NULL);
-	PY_OWNED(cls, Py_NewRef((PyObject *) Py_TYPE(self)));
-	PY_OWNED(args, PyTuple_Pack(1, cls));
-	PY_OWNED(state, PyObject_CallMethod(self, "__getstate__", NULL));
 
-	if (newobj == NULL || args == NULL || state == NULL) {
+	if (copyreg == NULL) {
+		return NULL;
+	}
+
+	PY_MOVABLE(newobj, NULL);
+	PY_MOVABLE(args, NULL);
+	PY_OWNED(cls, Py_NewRef((PyObject *) Py_TYPE(self)));
+	PY_MOVABLE(state, PyObject_CallMethod(self, "__getstate__", NULL));
+
+	if (state == NULL) {
+		return NULL;
+	}
+
+	if (has_kwargs) {
+		newobj = PyObject_GetAttrString(copyreg, "__newobj_ex__");
+		args = PyTuple_Pack(3, cls, newargs, newkwargs);
+	} else {
+		newobj = PyObject_GetAttrString(copyreg, "__newobj__");
+		Py_ssize_t const count = PyTuple_GET_SIZE(newargs);
+		args = PyTuple_New(count + 1);
+
+		if (args != NULL) {
+			PyTuple_SET_ITEM(args, 0, Py_NewRef(cls));
+
+			for (Py_ssize_t i = 0; i < count; ++i) {
+				PyTuple_SET_ITEM(args, i + 1, Py_NewRef(PyTuple_GET_ITEM(newargs, i)));
+			}
+		}
+	}
+
+	if (newobj == NULL || args == NULL) {
 		return NULL;
 	}
 
 	return PyTuple_Pack(5, newobj, args, state, Py_None, Py_None);
 }
 
+static PyObject * reduce_without_newargs(PyObject * const self) {
+	PY_OWNED(empty, PyTuple_New(0));
+
+	return empty != NULL ? reduce_with_newargs(self, empty, NULL) : NULL;
+}
+
+/* Whether the class's MRO binds its own __reduce__, which object.__reduce_ex__
+ * honors before it touches getnewargs. Walking the class dicts, not getattr, so
+ * a user __getattr__ never runs. */
+static bool has_custom_reduce(PyObject * const self) {
+	PY_OWNED(reduce_name, PyUnicode_InternFromString("__reduce__"));
+	PY_OWNED(object_reduce, PyObject_GetAttrString((PyObject *) &PyBaseObject_Type, "__reduce__"));
+
+	if (reduce_name == NULL || object_reduce == NULL) {
+		PyErr_Clear();
+
+		return false;
+	}
+
+	PyObject * const mro = Py_TYPE(self)->tp_mro;
+
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); ++i) {
+		PyObject * const entry = PyTuple_GET_ITEM(mro, i);
+		PY_OWNED(dict, struct_type_dict((PyTypeObject *) entry));
+
+		if (dict == NULL) {
+			PyErr_Clear();
+			continue;
+		}
+
+		PY_MOVABLE(bound, dict_value_ref(dict, reduce_name));
+
+		if (bound == NULL) {
+			PyErr_Clear();
+			continue;
+		}
+
+		return bound != object_reduce;
+	}
+
+	return false;
+}
+
 /* object.__reduce_ex__ calls whatever __getnewargs__ resolves to, and a class
  * that declares a present-but-None value hits "'NoneType' object is not
  * callable". A struct treats that declaration as absence, so reduction skips
- * the arguments it would have supplied; a real declaration defers so the two
- * agree wherever the value is callable. */
+ * the arguments it would have supplied -- unless a real __getnewargs__ sits
+ * under a None __getnewargs_ex__, in which case the real one must still
+ * contribute its args (object.__reduce_ex__ would call the None ex and raise,
+ * so the reduce is built here). Everything else defers to object.__reduce_ex__,
+ * which honors a custom __reduce__ and the protocol-below-2 refusal. */
 static PyObject * Struct_reduce_ex(PyObject * const self, PyObject * const args) {
 	if (!is_struct(self)) {
 		return object_reduce_ex(self, args);
 	}
 
+	PyObject * const protocol_object = PyTuple_GET_ITEM(args, 0);
+	int const protocol = (int) PyLong_AsLong(protocol_object);
+
+	if (protocol == -1 && PyErr_Occurred()) {
+		return NULL;
+	}
+
+	if (protocol < 2) {
+		return object_reduce_ex(self, args);
+	}
+
+	PY_OWNED(ex_name, PyUnicode_InternFromString("__getnewargs_ex__"));
+	PY_OWNED(plain_name, PyUnicode_InternFromString("__getnewargs__"));
+
+	if (ex_name == NULL || plain_name == NULL) {
+		return NULL;
+	}
+
+	PY_MOVABLE(first_ex, NULL);
+	PY_MOVABLE(first_plain, NULL);
 	PyObject * const mro = Py_TYPE(self)->tp_mro;
-	PyObject * first_ex = NULL;
-	PyObject * first_plain = NULL;
 
 	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); ++i) {
 		PyObject * const entry = PyTuple_GET_ITEM(mro, i);
@@ -195,11 +290,19 @@ static PyObject * Struct_reduce_ex(PyObject * const self, PyObject * const args)
 		}
 
 		if (first_ex == NULL) {
-			first_ex = PyDict_GetItemString(dict, "__getnewargs_ex__");
+			first_ex = dict_value_ref(dict, ex_name);
+
+			if (first_ex == NULL && PyErr_Occurred()) {
+				return NULL;
+			}
 		}
 
 		if (first_plain == NULL) {
-			first_plain = PyDict_GetItemString(dict, "__getnewargs__");
+			first_plain = dict_value_ref(dict, plain_name);
+
+			if (first_plain == NULL && PyErr_Occurred()) {
+				return NULL;
+			}
 		}
 
 		if (first_ex != NULL && first_plain != NULL) {
@@ -207,12 +310,46 @@ static PyObject * Struct_reduce_ex(PyObject * const self, PyObject * const args)
 		}
 	}
 
-	bool const effective_none = (
-		(first_ex != NULL && first_ex == Py_None) ||
-		(first_ex == NULL && first_plain != NULL && first_plain == Py_None)
-	);
+	bool const ex_present_none = first_ex != NULL && first_ex == Py_None;
+	bool const plain_present_none = first_plain != NULL && first_plain == Py_None;
+	bool const plain_real = first_plain != NULL && first_plain != Py_None;
+	bool const object_calls_a_none = (ex_present_none || (first_ex == NULL && plain_present_none));
 
-	return (effective_none ? reduce_without_newargs(self) : object_reduce_ex(self, args));
+	if (!object_calls_a_none) {
+		return object_reduce_ex(self, args);
+	}
+
+	if (has_custom_reduce(self)) {
+		return object_reduce_ex(self, args);
+	}
+
+	if (ex_present_none && plain_real) {
+		PY_OWNED(plain_method, PyObject_GetAttrString(self, "__getnewargs__"));
+
+		if (plain_method == NULL) {
+			return NULL;
+		}
+
+		PY_OWNED(plain_args, PyObject_CallNoArgs(plain_method));
+
+		if (plain_args == NULL) {
+			return NULL;
+		}
+
+		if (!PyTuple_Check(plain_args)) {
+			PyErr_Format(
+				PyExc_TypeError,
+				"__getnewargs__ should return a tuple, not '%.200s'",
+				Py_TYPE(plain_args)->tp_name
+			);
+
+			return NULL;
+		}
+
+		return reduce_with_newargs(self, plain_args, NULL);
+	}
+
+	return reduce_without_newargs(self);
 }
 
 static PyObject * call_reduce_or_error(PyObject * const self) {

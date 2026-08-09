@@ -42,6 +42,7 @@ static enum result fill_defaults(
 	PyObject * self,
 	Py_ssize_t positional_count
 );
+static enum result require_reconstruction_complete(StructType const * type, PyObject * self);
 static struct field_lookup find_field(StructType const * type, PyObject * name);
 static enum result require_field(
 	StructType const * type,
@@ -198,8 +199,11 @@ PyObject * Struct_new(
 		return NULL;
 	}
 
-	if (declares && argument_count > 0) {
-		if (bind_reconstruction(type, self, arguments, keywords) != RESULT_OK) {
+	if (declares && argument_count > 0 && !body_init) {
+		if (
+			bind_reconstruction(type, self, arguments, keywords) != RESULT_OK ||
+			require_reconstruction_complete(type, self) != RESULT_OK
+		) {
 			return NULL;
 		}
 	}
@@ -313,6 +317,28 @@ static enum result fill_defaults(
 		}
 
 		*slot = value;
+	}
+
+	return RESULT_OK;
+}
+
+static enum result require_reconstruction_complete(
+	StructType const * const type,
+	PyObject * const self
+) {
+	Py_ssize_t const required_count = struct_required_count(type);
+
+	for (Py_ssize_t i = 0; i < required_count; ++i) {
+		if (*struct_slot(type, self, i) == NULL) {
+			PyErr_Format(
+				PyExc_TypeError,
+				"%.200s() reconstruction is missing required argument '%U'",
+				struct_type_name(type),
+				PyTuple_GET_ITEM(type->struct_field_names, i)
+			);
+
+			return RESULT_ERROR;
+		}
 	}
 
 	return RESULT_OK;
