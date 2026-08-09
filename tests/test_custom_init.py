@@ -272,7 +272,6 @@ def test_a_mutable_body_init_struct_now_pickles_what_it_holds():
     assert PicklableMutable().x == 7
 
 
-@pytest.mark.xfail(strict=True, reason="#13: a frozen struct has no __setstate__ that can write")
 def test_a_frozen_body_init_struct_should_pickle_too():
     """The frozen half of the same, and the one this cost something.
 

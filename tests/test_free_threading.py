@@ -1,3 +1,4 @@
+import pickle
 import sys
 import sysconfig
 import threading
@@ -17,6 +18,16 @@ ITERATIONS = 20_000
 class Point(Struct):
     x: int
     y: int = 7
+
+
+class Picklable(Struct, frozen=False):
+    """Module level, because pickle looks a class up by qualified name."""
+
+    value: object
+
+
+class SealedPicklable(Struct):
+    value: object
 
 
 def test_importing_does_not_re_enable_the_gil():
@@ -177,6 +188,47 @@ def test_a_shared_struct_is_safe_to_read_while_another_thread_writes_it():
     # THREADS is one role short of a writer instead of one thread short of a
     # role.
     roles = iter(([write, read] * THREADS)[:THREADS])
+    claim = threading.Lock()
+
+    def work():
+        with claim:
+            role = next(roles)
+
+        role()
+
+    run_on_every_thread(work)
+
+
+def test_concurrent_pickling_while_another_thread_writes_it():
+    """__getstate__ reads each slot under the same per-slot critical section
+    repr and == use, and __setstate__ writes through PyMember_SetOne like
+    set_field does; this is the check that pickle composes the two against
+    concurrent writers, which is the crash the reader tests above pinned.
+
+    Survival is the assertion, because a segfault takes pytest with it. The
+    value assertions tolerate any state the struct ever held: the writers only
+    ever store two-element lists and two-tuples, so a restored value of any
+    other length means a reader saw a torn slot.
+    """
+
+    shared = Picklable([0, 0])
+    sealed = SealedPicklable((0, 0))
+    rounds = ITERATIONS * 5
+
+    def write():
+        for i in range(rounds):
+            shared.value = [i, i]
+            set_field(sealed, "value", (i, i))
+
+    def pickle_round_trip():
+        for i in range(rounds):
+            restored = pickle.loads(pickle.dumps(shared if i % 2 else sealed))
+            value = restored.value
+
+            if i % 1000 == 0:
+                assert len(value) == 2
+
+    roles = iter(([write, pickle_round_trip] * THREADS)[:THREADS])
     claim = threading.Lock()
 
     def work():

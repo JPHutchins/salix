@@ -16,6 +16,10 @@
 #	define Py_TPFLAGS_HAVE_VECTORCALL _Py_TPFLAGS_HAVE_VECTORCALL
 #endif
 
+#ifndef _PyCFunction_CAST
+#	define _PyCFunction_CAST(func) ((PyCFunction)(void (*)(void)) (func))
+#endif
+
 struct member_lookup {
 	enum { MEMBER_LOOKUP_FOUND, MEMBER_LOOKUP_MISSING, MEMBER_LOOKUP_ERROR } tag;
 	Py_ssize_t slot_offset;
@@ -132,6 +136,9 @@ static enum result reject_unless_planned(
 );
 static enum result install_post_init(StructType * struct_class);
 static bool defines_own_init(StructType const * struct_class);
+static PyObject * Struct_new_wrapper(PyObject * self, PyObject * arguments, PyObject * keywords);
+static PyMethodDef struct_new_methoddef[];
+static enum result install_new_wrapper(StructType * struct_class);
 static PyObject * StructMeta_call(PyObject * self, PyObject * args, PyObject * keywords);
 static Py_ssize_t * resolve_slot_offsets(
 	StructType * struct_class,
@@ -1109,17 +1116,102 @@ static enum result install_fields(
 	struct_class->struct_options = options;
 	struct_class->struct_resolves_body_eq = resolves_body_eq;
 
-	if (defines_own_init(struct_class)) {
-		struct_class->heap_type.ht_type.tp_new = Struct_new;
-	} else {
+	struct_class->heap_type.ht_type.tp_new = Struct_new;
+
+	if (!defines_own_init(struct_class)) {
 		struct_class->heap_type.ht_type.tp_vectorcall = Struct_vectorcall;
 	}
 
-	return install_post_init(struct_class);
+	return (
+		install_new_wrapper(struct_class) == RESULT_OK ? install_post_init(struct_class) :
+		RESULT_ERROR
+	);
 }
 
 static bool defines_own_init(StructType const * const struct_class) {
 	return struct_class->heap_type.ht_type.tp_init != PyBaseObject_Type.tp_init;
+}
+
+static PyObject * Struct_new_wrapper(
+	PyObject * const self,
+	PyObject * const arguments,
+	PyObject * const keywords
+) {
+	PyObject * arg0 = NULL;
+
+	if (!PyArg_UnpackTuple(arguments, "__new__", 1, 1, &arg0)) {
+		return NULL;
+	}
+
+	if (!PyType_Check(arg0)) {
+		PyErr_Format(
+			PyExc_TypeError,
+			"%s.__new__(X): X is not a type object (%s)",
+			((PyTypeObject *) self)->tp_name,
+			Py_TYPE(arg0)->tp_name
+		);
+
+		return NULL;
+	}
+
+	PyTypeObject * const subtype = (PyTypeObject *) arg0;
+
+	if (!PyType_IsSubtype(subtype, (PyTypeObject *) self)) {
+		PyErr_Format(
+			PyExc_TypeError,
+			"%s.__new__(%s): %s is not a subtype of %s",
+			((PyTypeObject *) self)->tp_name,
+			subtype->tp_name,
+			subtype->tp_name,
+			((PyTypeObject *) self)->tp_name
+		);
+
+		return NULL;
+	}
+
+	PY_OWNED(rest, PyTuple_GetSlice(arguments, 1, PyTuple_GET_SIZE(arguments)));
+
+	if (rest == NULL) {
+		return NULL;
+	}
+
+	return ((PyTypeObject *) self)->tp_new(subtype, rest, keywords);
+}
+
+static PyMethodDef struct_new_methoddef[] = {
+	{
+		.ml_name = "__new__",
+		.ml_meth = _PyCFunction_CAST(Struct_new_wrapper),
+		.ml_flags = METH_VARARGS | METH_KEYWORDS,
+		.ml_doc = PyDoc_STR(
+			"__new__($type, *args, **kwargs)\n--\n\n" "Create and return a new object.  " "See help(type) for accurate signature."
+		),
+	},
+	{.ml_name = NULL},
+};
+
+static enum result install_new_wrapper(StructType * const struct_class) {
+	PY_OWNED(dict, struct_type_dict(&struct_class->heap_type.ht_type));
+
+	if (dict == NULL) {
+		return RESULT_ERROR;
+	}
+
+	if (PyDict_GetItemString(dict, "__new__") != NULL) {
+		return RESULT_OK;
+	}
+
+	if (PyErr_Occurred()) {
+		return RESULT_ERROR;
+	}
+
+	PY_OWNED(wrapper, PyCFunction_NewEx(struct_new_methoddef, (PyObject *) struct_class, NULL));
+
+	if (wrapper == NULL) {
+		return RESULT_ERROR;
+	}
+
+	return PyDict_SetItemString(dict, "__new__", wrapper) == 0 ? RESULT_OK : RESULT_ERROR;
 }
 
 static PyObject * StructMeta_call(
