@@ -4,7 +4,6 @@
 #include "owned.h"
 #include "types.h"
 
-/* The tri-state PyObject_RichCompareBool speaks, named. */
 enum comparison {
 	COMPARISON_ERROR = -1,
 	COMPARISON_UNEQUAL = 0,
@@ -46,16 +45,6 @@ static PyObject * equality_result(PyObject * const self, PyObject * const other,
 	Py_UNREACHABLE();
 }
 
-/*
- * Structural, exactly as equality is: matching field names, then the values
- * decide, lexicographically -- the same order the tuple of those values would
- * compare in. Both classes have to have asked for ordering, because a class
- * that did not is not orderable, and being compared against one that did does
- * not change that.
- *
- * The values are owned rather than borrowed: the equality probe runs arbitrary
- * Python, which can rebind either slot before the unequal branch reads them.
- */
 static PyObject * ordering_result(PyObject * const self, PyObject * const other, int const op) {
 	StructType const * const self_type = struct_type_of(self);
 	StructType const * const other_type = struct_type_of(other);
@@ -91,8 +80,6 @@ static PyObject * ordering_result(PyObject * const self, PyObject * const other,
 	return PyBool_FromLong(op == Py_LE || op == Py_GE);
 }
 
-/* Structural: equal iff the field-name tuples match and every value
- * compares equal.  Nominal type identity is deliberately not required. */
 static enum comparison structs_equal(PyObject * const self, PyObject * const other) {
 	StructType const * const self_type = struct_type_of(self);
 	StructType const * const other_type = struct_type_of(other);
@@ -115,9 +102,6 @@ static enum comparison names_equal(
 	);
 }
 
-/* Owned for the same reason ordering_result's are: the equality probe runs
- * arbitrary Python, which can rebind either slot, and on a free-threaded build
- * can free what a borrowed pointer names. */
 static enum comparison values_equal(
 	StructType const * const self_type,
 	PyObject * const self,

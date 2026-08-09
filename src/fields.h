@@ -5,11 +5,6 @@
 
 #include "types.h"
 
-/*
- * What the metaclass works out from the class body before the type exists:
- * the full field order, the subset this class contributes as new slots, and
- * the trailing run of default values.
- */
 struct field_plan {
 	PyObject * all_names;  /* list[str] */
 	PyObject * new_names;  /* list[str] */
