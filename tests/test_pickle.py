@@ -210,6 +210,59 @@ class UnderGetNewArgs(Struct):
         return ({}, (), None)
 
 
+class Base2(Struct):
+    x: int
+
+    def __getnewargs__(self):
+        return (self.x,)
+
+
+class Child2(Base2):
+    y: int
+
+
+class EmptyTupleGNA(Struct):
+    x: int
+    y: int
+
+    def __getnewargs__(self):
+        return ()
+
+    def __getstate__(self):
+        return ({}, (), None)
+
+
+class EmptyTupleStateCarrying(Struct):
+    x: int
+    y: int
+
+    def __getnewargs__(self):
+        return ()
+
+    def __getstate__(self):
+        return ({"x": self.x, "y": self.y}, (), None)
+
+
+class BodyInitEmptyState(Struct, frozen=False):
+    x: int = 0
+
+    def __init__(self, v=10):
+        self.x = v
+
+    def __getnewargs__(self):
+        return (self.x,)
+
+    def __getstate__(self):
+        return ({}, (), None)
+
+
+class RedundantEx(Struct):
+    x: int
+
+    def __getnewargs_ex__(self):
+        return ((self.x,), {"x": self.x})
+
+
 class WithGNA(Struct):
     x: int
 
@@ -1217,8 +1270,12 @@ def test_a_real_getnewargs_survives_a_none_getnewargs_ex():
 
 
 def test_a_getnewargs_under_providing_a_required_field_is_refused():
+    """The completeness check runs after __setstate__ (the state supplies the
+    fields it carries), so a getnewargs that under-provides a required field is
+    caught on the round-trip, not on the bare __new__ call."""
+
     with pytest.raises(TypeError, match="missing required argument"):
-        UnderGetNewArgs.__new__(UnderGetNewArgs, 5)
+        copy.copy(UnderGetNewArgs(5, 6))
 
     with pytest.raises(TypeError, match="missing required argument"):
         pickle.loads(pickle.dumps(UnderGetNewArgs(5, 6)))
@@ -1247,3 +1304,51 @@ def test_a_body_init_struct_with_getnewargs_constructs_with_init_arguments():
 
     assert B().x == 10
     assert B(5).x == 5
+
+
+def test_a_state_supplying_a_required_field_round_trips_under_a_short_getnewargs():
+    """The completeness check runs after __setstate__, so a getnewargs that
+    supplies only x still round-trips when the state carries the rest."""
+
+    instance = Child2(1, 2)
+
+    assert pickle.loads(pickle.dumps(instance)) == instance
+    assert copy.copy(instance) == instance
+
+
+def test_a_body_init_struct_with_getnewargs_and_empty_state_round_trips():
+    instance = BodyInitEmptyState(7)
+
+    assert pickle.loads(pickle.dumps(instance)).x == 7
+    assert copy.copy(instance).x == 7
+    assert copy.deepcopy(instance).x == 7
+
+
+def test_reduce_ex_with_no_argument_raises_like_stdlib():
+    with pytest.raises(TypeError):
+        Plain(1, 2).__reduce_ex__()
+
+
+def test_an_empty_getnewargs_tuple_with_empty_state_raises_and_with_state_round_trips():
+    with pytest.raises(TypeError, match="missing required argument"):
+        copy.copy(EmptyTupleGNA(5, 6))
+
+    with pytest.raises(TypeError, match="missing required argument"):
+        pickle.loads(pickle.dumps(EmptyTupleGNA(5, 6)))
+
+    instance = EmptyTupleStateCarrying(5, 6)
+
+    assert pickle.loads(pickle.dumps(instance)) == instance
+    assert copy.copy(instance) == instance
+
+
+def test_a_getnewargs_ex_keyword_conflicting_with_a_positional_is_refused():
+    with pytest.raises(TypeError, match="multiple values"):
+        RedundantEx.__new__(RedundantEx, 1, x=2)
+
+
+def test_a_getnewargs_ex_redundant_keyword_is_skipped():
+    instance = RedundantEx(7)
+
+    assert pickle.loads(pickle.dumps(instance, protocol=2)) == instance
+    assert copy.copy(instance) == instance

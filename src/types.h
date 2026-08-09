@@ -87,6 +87,8 @@ static inline PyObject * struct_type_dict(PyTypeObject * const type) {
 }
 #endif
 
+static inline PyObject * dict_value_ref(PyObject * const mapping, PyObject * const key);
+
 /*
  * Whether the class's MRO binds __getnewargs__ or __getnewargs_ex__. Reading
  * the class dicts, not getattr, so a user __getattr__ never runs and a hook
@@ -107,6 +109,17 @@ static inline void struct_probe_getnewargs(
 		return;
 	}
 
+	PyObject * const ex_name = PyUnicode_InternFromString("__getnewargs_ex__");
+	PyObject * const plain_name = PyUnicode_InternFromString("__getnewargs__");
+
+	if (ex_name == NULL || plain_name == NULL) {
+		PyErr_Clear();
+		Py_XDECREF(ex_name);
+		Py_XDECREF(plain_name);
+
+		return;
+	}
+
 	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); ++i) {
 		PyObject * const entry = PyTuple_GET_ITEM(mro, i);
 		PyObject * const dict = struct_type_dict((PyTypeObject *) entry);
@@ -116,25 +129,33 @@ static inline void struct_probe_getnewargs(
 			continue;
 		}
 
-		PyObject * const ex = PyDict_GetItemString(dict, "__getnewargs_ex__");
+		PyObject * const ex = dict_value_ref(dict, ex_name);
+		PyObject * const plain = dict_value_ref(dict, plain_name);
 
-		if (ex != NULL && ex != Py_None) {
+		if (ex == NULL) {
+			PyErr_Clear();
+		} else if (ex != Py_None) {
 			*declares_ex = true;
 			*declares = true;
 		}
 
-		PyObject * const plain = PyDict_GetItemString(dict, "__getnewargs__");
-
-		if (plain != NULL && plain != Py_None) {
+		if (plain == NULL) {
+			PyErr_Clear();
+		} else if (plain != Py_None) {
 			*declares = true;
 		}
 
+		Py_XDECREF(ex);
+		Py_XDECREF(plain);
 		Py_DECREF(dict);
 
 		if (*declares && *declares_ex) {
 			break;
 		}
 	}
+
+	Py_DECREF(ex_name);
+	Py_DECREF(plain_name);
 }
 
 /*

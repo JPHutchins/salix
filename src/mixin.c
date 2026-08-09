@@ -258,6 +258,13 @@ static PyObject * Struct_reduce_ex(PyObject * const self, PyObject * const args)
 		return object_reduce_ex(self, args);
 	}
 
+	if (PyTuple_GET_SIZE(args) != 1) {
+		/* object.__reduce_ex__ takes exactly one protocol argument; defer the
+		 * argument-count validation so a missing or extra argument raises the
+		 * same TypeError stdlib does. */
+		return object_reduce_ex(self, args);
+	}
+
 	PyObject * const protocol_object = PyTuple_GET_ITEM(args, 0);
 	int const protocol = (int) PyLong_AsLong(protocol_object);
 

@@ -42,7 +42,6 @@ static enum result fill_defaults(
 	PyObject * self,
 	Py_ssize_t positional_count
 );
-static enum result require_reconstruction_complete(StructType const * type, PyObject * self);
 static struct field_lookup find_field(StructType const * type, PyObject * name);
 static enum result require_field(
 	StructType const * type,
@@ -66,6 +65,12 @@ static enum result resolve_state(
 	Py_ssize_t * * const values_indices,
 	PyObject * * const value_snapshot,
 	Py_ssize_t * * const unset_indices
+);
+static enum result require_restore_complete(
+	StructType const * type,
+	PyObject * self,
+	Py_ssize_t const * unset_indices,
+	Py_ssize_t unset_count
 );
 
 PyObject * Struct_vectorcall(
@@ -114,11 +119,19 @@ static enum result bind_reconstruction(
 	StructType const * const type,
 	PyObject * const self,
 	PyObject * const arguments,
-	PyObject * const keywords
+	PyObject * const keywords,
+	bool const body_init
 ) {
 	Py_ssize_t const positional_count = PyTuple_GET_SIZE(arguments);
 
 	if (positional_count > type->struct_field_count) {
+		if (body_init) {
+			/* A body-init call with more arguments than fields is a normal
+			 * construction: the arguments belong to __init__, not to the field
+			 * list, so leave them for it. */
+			return RESULT_OK;
+		}
+
 		PyErr_Format(
 			PyExc_TypeError,
 			"%.200s() takes at most %zd positional arguments but %zd were given",
@@ -128,6 +141,28 @@ static enum result bind_reconstruction(
 		);
 
 		return RESULT_ERROR;
+	}
+
+	if (keywords != NULL && body_init) {
+		/* A body-init call's keywords belong to __init__ unless every one names
+		 * a field; an unknown keyword means the whole call is construction, so
+		 * leave it to __init__ rather than binding the fields it did name. */
+		Py_ssize_t position = 0;
+		PyObject * name = NULL;
+		PyObject * value = NULL;
+
+		while (PyDict_Next(keywords, &position, &name, &value)) {
+			struct field_lookup const found = find_field(type, name);
+
+			switch (found.tag) {
+				case FIELD_LOOKUP_ERROR:
+					return RESULT_ERROR;
+				case FIELD_LOOKUP_MISSING:
+					return RESULT_OK;
+				case FIELD_LOOKUP_FOUND:
+					break;
+			}
+		}
 	}
 
 	for (Py_ssize_t i = 0; i < positional_count; ++i) {
@@ -163,9 +198,24 @@ static enum result bind_reconstruction(
 
 		PyObject * * const slot = struct_slot(type, self, found.index);
 
-		if (*slot == NULL) {
-			*slot = Py_NewRef(value);
+		if (*slot != NULL) {
+			if (*slot == value) {
+				/* The redundant half of a __getnewargs_ex__ that returns the
+				 * same field both ways; skip it rather than refusing. */
+				continue;
+			}
+
+			PyErr_Format(
+				PyExc_TypeError,
+				"%.200s() got multiple values for argument '%U'",
+				struct_type_name(type),
+				name
+			);
+
+			return RESULT_ERROR;
 		}
+
+		*slot = Py_NewRef(value);
 	}
 
 	return RESULT_OK;
@@ -199,11 +249,8 @@ PyObject * Struct_new(
 		return NULL;
 	}
 
-	if (declares && argument_count > 0 && !body_init) {
-		if (
-			bind_reconstruction(type, self, arguments, keywords) != RESULT_OK ||
-			require_reconstruction_complete(type, self) != RESULT_OK
-		) {
+	if (declares && argument_count > 0) {
+		if (bind_reconstruction(type, self, arguments, keywords, body_init) != RESULT_OK) {
 			return NULL;
 		}
 	}
@@ -317,28 +364,6 @@ static enum result fill_defaults(
 		}
 
 		*slot = value;
-	}
-
-	return RESULT_OK;
-}
-
-static enum result require_reconstruction_complete(
-	StructType const * const type,
-	PyObject * const self
-) {
-	Py_ssize_t const required_count = struct_required_count(type);
-
-	for (Py_ssize_t i = 0; i < required_count; ++i) {
-		if (*struct_slot(type, self, i) == NULL) {
-			PyErr_Format(
-				PyExc_TypeError,
-				"%.200s() reconstruction is missing required argument '%U'",
-				struct_type_name(type),
-				PyTuple_GET_ITEM(type->struct_field_names, i)
-			);
-
-			return RESULT_ERROR;
-		}
 	}
 
 	return RESULT_OK;
@@ -781,6 +806,45 @@ error:
 	return RESULT_ERROR;
 }
 
+static enum result require_restore_complete(
+	StructType const * const type,
+	PyObject * const self,
+	Py_ssize_t const * const unset_indices,
+	Py_ssize_t const unset_count
+) {
+	Py_ssize_t const required_count = struct_required_count(type);
+
+	for (Py_ssize_t i = 0; i < required_count; ++i) {
+		if (*struct_slot(type, self, i) != NULL) {
+			continue;
+		}
+
+		bool explicitly_unset = false;
+
+		for (Py_ssize_t u = 0; u < unset_count; ++u) {
+			if (unset_indices[u] == i) {
+				explicitly_unset = true;
+				break;
+			}
+		}
+
+		if (explicitly_unset) {
+			continue;
+		}
+
+		PyErr_Format(
+			PyExc_TypeError,
+			"%.200s() missing required argument '%U'",
+			struct_type_name(type),
+			PyTuple_GET_ITEM(type->struct_field_names, i)
+		);
+
+		return RESULT_ERROR;
+	}
+
+	return RESULT_OK;
+}
+
 PyObject * Struct_set_state(PyObject * const self, PyObject * const state) {
 	if (!is_struct(self)) {
 		PyErr_Format(
@@ -880,6 +944,10 @@ PyObject * Struct_set_state(PyObject * const self, PyObject * const state) {
 				break;
 			}
 		}
+	}
+
+	if (outcome == RESULT_OK) {
+		outcome = require_restore_complete(type, self, unset_indices, unset_count);
 	}
 
 	PyMem_Free(values_indices);
