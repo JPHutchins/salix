@@ -307,13 +307,6 @@ def test_a_write_and_a_delete_agree_about_whether_the_class_is_frozen():
     other is frozen against an assignment and not against a `del`.
     """
 
-    def writes(cls: type) -> bool:
-        try:
-            setattr(instance(cls), cls.__struct_fields__[0], 99)
-            return True
-        except TypeError:
-            return False
-
     def deletes(cls: type) -> bool:
         try:
             delattr(instance(cls), cls.__struct_fields__[0])
@@ -321,7 +314,11 @@ def test_a_write_and_a_delete_agree_about_whether_the_class_is_frozen():
         except (TypeError, AttributeError):
             return False
 
-    violations = [named(bases) for bases, cls in ALL if writes(cls) != deletes(cls)]
+    violations = [
+        named(bases)
+        for bases, cls in ALL
+        if observe(cls).frozen != (not deletes(cls))
+    ]
 
     assert violations == []
 
@@ -589,6 +586,20 @@ def test_hashability_follows_equality_when_a_later_base_answers_it():
     assert hashability_disagrees_with_equality(CONTESTED_EQ) == []
 
 
+def test_every_contested_hashability_combination_really_is_broken():
+    """The bound for the xfail above, and the one the bucket cannot anchor:
+    the hashability predicate is narrower than the contested-equality bucket
+    it runs over, so only the 24 mutable-first combinations, made unhashable
+    from the record while the MRO answers identity, violate, and the pin is
+    that count rather than the bucket's 272.
+
+    Delete this with the xfail above when #76 lands; they describe the same
+    defect from opposite sides.
+    """
+
+    assert len(hashability_disagrees_with_equality(CONTESTED_EQ)) == 24
+
+
 def test_the_repr_is_the_first_struct_bases():
     assert behaviour_differs_from_the_first_base_alone(SOUND_REPR, "repr") == []
 
@@ -783,6 +794,7 @@ def test_every_class_carrying_an_inherited_slot_really_does_ignore_the_request()
     assert len(weakref_requests_ignored(WITH_A_SLOT)) == len(WITH_A_SLOT)
 
 
+@pytest.mark.xfail(strict=True, reason="#78: weakref is recorded from one base and slotted from another")
 def test_a_single_base_asking_to_drop_an_inherited_weakref_slot_is_the_same_bug():
     """#78's smallest form, stated on its own so that it is covered whether or
     not the sweep above still reaches it. The slot is inherited and cannot be
@@ -792,5 +804,9 @@ def test_a_single_base_asking_to_drop_an_inherited_weakref_slot_is_the_same_bug(
 
     without = build((Weak,), field="fresh", weakref=False)
 
-    assert is_a_class(without)
-    assert observe(without).weakref is True
+    assert not isinstance(without, Impossible)
+
+    if isinstance(without, Refused):
+        assert "weakref" in without.message
+    else:
+        assert observe(without).weakref is False
