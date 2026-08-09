@@ -678,9 +678,13 @@ PyObject * Struct_set_state(PyObject * const self, PyObject * const state) {
 		}
 
 		if (instance_dict != Py_None && instance_dict != dict) {
-			PyDict_Clear(dict);
+			PY_MOVABLE(fresh, PyDict_New());
 
-			if (PyDict_Update(dict, instance_dict) < 0) {
+			if (fresh == NULL || PyDict_Update(fresh, instance_dict) < 0) {
+				return NULL;
+			}
+
+			if (PyObject_GenericSetDict(self, fresh, NULL) < 0) {
 				return NULL;
 			}
 		}

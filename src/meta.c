@@ -1189,12 +1189,10 @@ static PyObject * Struct_new_wrapper(
 ) {
 	StructType * const type = (StructType *) self;
 
-	if (keywords != NULL && PyDict_GET_SIZE(keywords) > 0) {
-		if (type->struct_body_new == NULL && !type->struct_declares_getnewargs) {
-			PyErr_SetString(PyExc_TypeError, "__new__() takes no keyword arguments");
+	if (keywords != NULL && PyDict_GET_SIZE(keywords) > 0 && type->struct_body_new == NULL) {
+		PyErr_SetString(PyExc_TypeError, "__new__() takes no keyword arguments");
 
-			return NULL;
-		}
+		return NULL;
 	}
 
 	if (PyTuple_GET_SIZE(arguments) < 1) {
@@ -1233,11 +1231,8 @@ static PyObject * Struct_new_wrapper(
 
 	Py_ssize_t const extra = PyTuple_GET_SIZE(arguments) - 1;
 
-	if (extra > 0 && type->struct_body_new == NULL && !type->struct_declares_getnewargs) {
-		PyErr_SetString(
-			PyExc_TypeError,
-			"__new__() takes exactly one argument (the type to instantiate)"
-		);
+	if (extra > 0 && type->struct_body_new == NULL) {
+		PyErr_SetString(PyExc_TypeError, "__new__() takes no positional arguments");
 
 		return NULL;
 	}
@@ -1271,7 +1266,12 @@ static PyObject * Struct_new_wrapper(
 			return NULL;
 		}
 
-		if (PyTuple_GET_SIZE(rest) == 0 && (keywords == NULL || PyDict_GET_SIZE(keywords) == 0)) {
+		bool const has_reconstruction_args = (
+			extra > 0 ||
+			(keywords != NULL && PyDict_GET_SIZE(keywords) > 0)
+		);
+
+		if (has_reconstruction_args && type->struct_declares_getnewargs) {
 			PyErr_Clear();
 
 			return Struct_new(subtype, rest, keywords);

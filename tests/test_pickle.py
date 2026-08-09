@@ -104,6 +104,9 @@ class ArgNew(Struct):
         set_field(obj, "x", both)
         return obj
 
+    def __getnewargs__(self):
+        return (self.x,)
+
 
 class SingletonNew(Struct):
     x: int = 1
@@ -115,6 +118,30 @@ class SingletonNew(Struct):
             set_field(obj, "x", 42)
             cls._instance = obj
         return cls._instance
+
+
+class RejectingNew(Struct):
+    x: int = 0
+    reject = False
+
+    def __new__(cls):
+        if cls.reject:
+            raise TypeError("genuine rejection")
+        return super().__new__(cls)
+
+
+class DeclinesForReconstruction(Struct):
+    x: int = 5
+
+    def __new__(cls, v=None):
+        if v is not None:
+            raise TypeError("declined for reconstruction")
+        obj = super().__new__(cls)
+        set_field(obj, "x", 5)
+        return obj
+
+    def __getnewargs__(self):
+        return (self.x,)
 
 
 class WithGetNewArgs(Struct):
@@ -536,7 +563,7 @@ def test_a_recording_body_new_is_honored_by_construction_copy_and_pickle():
     assert restored.x == 7
 
 
-def test_a_body_new_requiring_an_arg_does_not_crash_copy():
+def test_a_body_new_requiring_an_arg_receives_it_through_getnewargs():
     instance = ArgNew(7)
 
     assert body_new_calls == [("arg_new", 7)]
@@ -546,7 +573,7 @@ def test_a_body_new_requiring_an_arg_does_not_crash_copy():
 
     assert copied == instance
     assert restored == instance
-    assert body_new_calls == [("arg_new", 7)]
+    assert body_new_calls == [("arg_new", 7), ("arg_new", 7), ("arg_new", 7)]
 
 
 def test_a_singleton_body_new_returns_the_same_instance_across_all_three():
@@ -558,11 +585,37 @@ def test_a_singleton_body_new_returns_the_same_instance_across_all_three():
     assert restored is first
 
 
+def test_a_body_new_raising_typeerror_genuinely_propagates():
+    instance = RejectingNew()
+    RejectingNew.reject = True
+
+    with pytest.raises(TypeError, match="genuine rejection"):
+        RejectingNew()
+    with pytest.raises(TypeError, match="genuine rejection"):
+        copy.copy(instance)
+    with pytest.raises(TypeError, match="genuine rejection"):
+        pickle.loads(pickle.dumps(instance))
+
+    RejectingNew.reject = False
+
+
+def test_a_body_new_declining_only_for_reconstruction_reconstructs_via_struct_new():
+    instance = DeclinesForReconstruction()
+
+    assert instance.x == 5
+
+    assert copy.copy(instance) == instance
+    assert pickle.loads(pickle.dumps(instance)) == instance
+
+
 def test_a_class_declaring_getnewargs_round_trips_copy_and_pickle():
     instance = WithGetNewArgs(5)
 
     assert copy.copy(instance) == instance
     assert pickle.loads(pickle.dumps(instance)) == instance
+
+    with pytest.raises(TypeError, match="takes no positional arguments"):
+        WithGetNewArgs.__new__(WithGetNewArgs, 5)
 
 
 def test_a_bodyless_struct_keeps_the_plain_new_path():
@@ -583,6 +636,39 @@ def test_setstate_with_the_own_dict_as_third_element_is_a_no_op():
 
     assert instance.x == 9
     assert instance.__dict__ == {"extra": "world"}
+
+
+def test_setstate_dict_restore_is_atomic_on_a_failed_merge():
+    class Evil:
+        n = 0
+
+        def __init__(self, name):
+            self.name = name
+
+        def __hash__(self):
+            return 42 if self.name != "tmp" else 7
+
+        def __eq__(self, other):
+            Evil.n += 1
+            if Evil.n > 1:
+                raise RuntimeError(f"eq failed on call {Evil.n}")
+            return self is other
+
+    e1 = Evil("a")
+    e2 = Evil("b")
+    tmp = Evil("tmp")
+    state_dict = {e1: 1, e2: 2, tmp: 3}
+    del state_dict[tmp]
+
+    instance = WithDict(1)
+    instance.extra = "old"
+    instance.__dict__["keep"] = "this"
+
+    with pytest.raises(RuntimeError, match="eq failed"):
+        instance.__setstate__(({"x": 2}, (), state_dict))
+
+    assert instance.__dict__ == {"extra": "old", "keep": "this"}
+    assert instance.x == 2
 
 
 @pytest.mark.parametrize("protocol", [0, 1])
