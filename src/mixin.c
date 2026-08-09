@@ -16,6 +16,7 @@ static PyObject * Struct_get_fields_as_msgspec(PyObject * self, void * closure);
 static PyObject * Struct_get_defaults_as_msgspec(PyObject * self, void * closure);
 static PyObject * metadata_of(PyObject * self, enum struct_metadata which, char const * name);
 static PyObject * Struct_deepcopy(PyObject * self, PyObject * memo);
+static PyObject * Struct_reduce_ex(PyObject * self, PyObject * args);
 static PyGetSetDef Struct_getset[];
 static PyMethodDef Struct_methods[];
 
@@ -71,6 +72,11 @@ static PyMethodDef Struct_methods[] = {
 		.ml_name = "__deepcopy__",
 		.ml_meth = Struct_deepcopy,
 		.ml_flags = METH_O,
+	},
+	{
+		.ml_name = "__reduce_ex__",
+		.ml_meth = Struct_reduce_ex,
+		.ml_flags = METH_VARARGS,
 	},
 	{.ml_name = NULL},
 };
@@ -129,6 +135,119 @@ static PyObject * Struct_get_defaults_as_msgspec(PyObject * const self, void * c
 	return metadata_of(self, STRUCT_DEFAULTS, "__struct_defaults__");
 }
 
+static PyObject * object_reduce_ex(PyObject * const self, PyObject * const args) {
+	PY_OWNED(reduce_ex, PyObject_GetAttrString((PyObject *) &PyBaseObject_Type, "__reduce_ex__"));
+
+	if (reduce_ex == NULL) {
+		return NULL;
+	}
+
+	PY_OWNED(call_args, PyTuple_New(PyTuple_GET_SIZE(args) + 1));
+
+	if (call_args == NULL) {
+		return NULL;
+	}
+
+	PyTuple_SET_ITEM(call_args, 0, Py_NewRef(self));
+
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(args); ++i) {
+		PyTuple_SET_ITEM(call_args, i + 1, Py_NewRef(PyTuple_GET_ITEM(args, i)));
+	}
+
+	return PyObject_Call(reduce_ex, call_args, NULL);
+}
+
+static PyObject * reduce_without_newargs(PyObject * const self) {
+	PY_OWNED(copyreg, PyImport_ImportModule("copyreg"));
+	PY_OWNED(newobj, copyreg != NULL ? PyObject_GetAttrString(copyreg, "__newobj__") : NULL);
+	PY_OWNED(cls, Py_NewRef((PyObject *) Py_TYPE(self)));
+	PY_OWNED(args, PyTuple_Pack(1, cls));
+	PY_OWNED(state, PyObject_CallMethod(self, "__getstate__", NULL));
+
+	if (newobj == NULL || args == NULL || state == NULL) {
+		return NULL;
+	}
+
+	return PyTuple_Pack(5, newobj, args, state, Py_None, Py_None);
+}
+
+/* object.__reduce_ex__ calls whatever __getnewargs__ resolves to, and a class
+ * that declares a present-but-None value hits "'NoneType' object is not
+ * callable". A struct treats that declaration as absence, so reduction skips
+ * the arguments it would have supplied; a real declaration defers so the two
+ * agree wherever the value is callable. */
+static PyObject * Struct_reduce_ex(PyObject * const self, PyObject * const args) {
+	if (!is_struct(self)) {
+		return object_reduce_ex(self, args);
+	}
+
+	PyObject * const mro = Py_TYPE(self)->tp_mro;
+	PyObject * first_ex = NULL;
+	PyObject * first_plain = NULL;
+
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); ++i) {
+		PyObject * const entry = PyTuple_GET_ITEM(mro, i);
+		PY_OWNED(dict, struct_type_dict((PyTypeObject *) entry));
+
+		if (dict == NULL) {
+			PyErr_Clear();
+			continue;
+		}
+
+		if (first_ex == NULL) {
+			first_ex = PyDict_GetItemString(dict, "__getnewargs_ex__");
+		}
+
+		if (first_plain == NULL) {
+			first_plain = PyDict_GetItemString(dict, "__getnewargs__");
+		}
+
+		if (first_ex != NULL && first_plain != NULL) {
+			break;
+		}
+	}
+
+	bool const effective_none = (
+		(first_ex != NULL && first_ex == Py_None) ||
+		(first_ex == NULL && first_plain != NULL && first_plain == Py_None)
+	);
+
+	return (effective_none ? reduce_without_newargs(self) : object_reduce_ex(self, args));
+}
+
+static PyObject * call_reduce_or_error(PyObject * const self) {
+	PY_MOVABLE(reduce, PyObject_GetAttrString(self, "__reduce__"));
+
+	if (reduce == NULL) {
+		if (PyErr_ExceptionMatches(PyExc_AttributeError)) {
+			PyErr_Clear();
+		} else {
+			return NULL;
+		}
+	} else if (reduce == Py_None) {
+		Py_DECREF(reduce);
+		reduce = NULL;
+	} else {
+		return PyObject_CallNoArgs(reduce);
+	}
+
+	PY_OWNED(copy_module, PyImport_ImportModule("copy"));
+
+	if (copy_module == NULL) {
+		return NULL;
+	}
+
+	PY_OWNED(copy_error, PyObject_GetAttrString(copy_module, "Error"));
+
+	if (copy_error == NULL) {
+		return NULL;
+	}
+
+	PyErr_Format(copy_error, "un(deep)copyable object of type %R", (PyObject *) Py_TYPE(self));
+
+	return NULL;
+}
+
 static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) {
 	if (!is_struct(self)) {
 		PyErr_Format(
@@ -181,13 +300,13 @@ static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) 
 		if (reduce_ex == NULL) {
 			if (PyErr_ExceptionMatches(PyExc_AttributeError)) {
 				PyErr_Clear();
-				rv = PyObject_CallMethod(self, "__reduce__", NULL);
+				rv = call_reduce_or_error(self);
 			} else {
 				return NULL;
 			}
 		} else if (reduce_ex == Py_None) {
 			Py_DECREF(reduce_ex);
-			rv = PyObject_CallMethod(self, "__reduce__", NULL);
+			rv = call_reduce_or_error(self);
 		} else {
 			rv = PyObject_CallFunction(reduce_ex, "i", 4);
 			Py_DECREF(reduce_ex);

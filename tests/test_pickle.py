@@ -167,6 +167,39 @@ class WithGetNewArgsExKeywordOnly(Struct):
         return ((), {"x": self.x})
 
 
+class EmptyStateGNA(Struct):
+    x: int = 0
+
+    def __getnewargs__(self):
+        return (self.x,)
+
+    def __getstate__(self):
+        return ({}, (), None)
+
+
+class EmptyStateEx(Struct):
+    x: int = 0
+
+    def __getnewargs_ex__(self):
+        return ((), {"x": self.x})
+
+    def __getstate__(self):
+        return ({}, (), None)
+
+
+class WithGNA(Struct):
+    x: int
+
+    def __getnewargs__(self):
+        return (self.x,)
+
+
+class NoneGetNewArgs(Struct):
+    x: int = 0
+
+    __getnewargs__ = None
+
+
 class CoBaseNew:
     def __new__(cls, v: int = 0):
         body_new_calls.append("co_base_new")
@@ -695,16 +728,18 @@ def test_a_singleton_body_new_returns_the_same_instance_across_all_three():
 
 def test_a_body_new_raising_typeerror_genuinely_propagates():
     instance = RejectingNew()
-    RejectingNew.reject = True
 
-    with pytest.raises(TypeError, match="genuine rejection"):
-        RejectingNew()
-    with pytest.raises(TypeError, match="genuine rejection"):
-        copy.copy(instance)
-    with pytest.raises(TypeError, match="genuine rejection"):
-        pickle.loads(pickle.dumps(instance))
+    try:
+        RejectingNew.reject = True
 
-    RejectingNew.reject = False
+        with pytest.raises(TypeError, match="genuine rejection"):
+            RejectingNew()
+        with pytest.raises(TypeError, match="genuine rejection"):
+            copy.copy(instance)
+        with pytest.raises(TypeError, match="genuine rejection"):
+            pickle.loads(pickle.dumps(instance))
+    finally:
+        RejectingNew.reject = False
 
 
 def test_a_body_new_raising_typeerror_on_reconstruction_propagates():
@@ -1065,3 +1100,79 @@ def test_deepcopy_falls_back_to_reduce_when_reduce_ex_is_none():
 
     assert copy.deepcopy(instance) == instance
     assert copy.copy(instance) == instance
+
+
+def test_a_getnewargs_reconstruction_binds_the_arguments():
+    """The reconstruction contract is that the getnewargs arguments rebuild the
+    instance, so a bodyless struct whose __getstate__ does not repeat them must
+    still round-trip, and a direct __new__ with the arguments must bind them."""
+
+    assert pickle.loads(pickle.dumps(EmptyStateGNA(7))).x == 7
+    assert WithGNA.__new__(WithGNA, 42).x == 42
+
+
+def test_a_getnewargs_ex_keyword_reconstruction_binds_the_argument():
+    assert pickle.loads(pickle.dumps(EmptyStateEx(7))).x == 7
+
+
+def test_setstate_is_immune_to_a_values_del_mutating_the_state_dict():
+    class Evil:
+        def __init__(self, name):
+            self.name = name
+
+        def __del__(self):
+            if self.name == "trigger":
+                state_dict.pop("z", None)
+
+    class Triple(Struct, frozen=False):
+        x: int
+        y: int
+        z: int
+
+    state_dict = {"x": 10, "y": 20, "z": 30}
+    instance = Triple(1, 2, 3)
+    instance.y = Evil("trigger")
+    instance.__setstate__((state_dict, (), None))
+
+    assert instance.x == 10
+    assert instance.y == 20
+    assert instance.z == 30
+
+
+def test_deepcopy_matches_copy_when_reduce_and_reduce_ex_are_none():
+    class ReduceBothNone(Struct):
+        x: int = 0
+
+        __reduce_ex__ = None
+        __reduce__ = None
+
+    instance = ReduceBothNone(5)
+
+    with pytest.raises(copy.Error):
+        copy.copy(instance)
+    with pytest.raises(copy.Error):
+        copy.deepcopy(instance)
+
+
+def test_a_none_getnewargs_is_not_declared():
+    with pytest.raises(TypeError):
+        NoneGetNewArgs.__new__(NoneGetNewArgs, 99)
+
+    instance = NoneGetNewArgs()
+
+    assert copy.copy(instance) == instance
+    assert copy.deepcopy(instance) == instance
+    assert pickle.loads(pickle.dumps(instance)) == instance
+
+
+def test_setstate_refuses_a_non_empty_dict_third_element_without_an_instance_dict():
+    instance = Plain(1, 2)
+
+    with pytest.raises(TypeError, match="cannot set an instance dict"):
+        instance.__setstate__(({"x": 9}, (), {"not_a_field": 3}))
+
+    instance.__setstate__(({"x": 9}, (), {}))
+    assert instance.x == 9
+
+    instance.__setstate__(({"x": 8}, (), None))
+    assert instance.x == 8

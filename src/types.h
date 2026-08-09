@@ -116,12 +116,16 @@ static inline void struct_probe_getnewargs(
 			continue;
 		}
 
-		if (PyDict_GetItemString(dict, "__getnewargs_ex__") != NULL) {
+		PyObject * const ex = PyDict_GetItemString(dict, "__getnewargs_ex__");
+
+		if (ex != NULL && ex != Py_None) {
 			*declares_ex = true;
 			*declares = true;
 		}
 
-		if (PyDict_GetItemString(dict, "__getnewargs__") != NULL) {
+		PyObject * const plain = PyDict_GetItemString(dict, "__getnewargs__");
+
+		if (plain != NULL && plain != Py_None) {
 			*declares = true;
 		}
 
