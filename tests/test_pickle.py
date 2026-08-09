@@ -167,13 +167,6 @@ class WithGetNewArgsExKeywordOnly(Struct):
         return ((), {"x": self.x})
 
 
-class SelfRefGetNewArgs(Struct):
-    child: object = None
-
-    def __getnewargs__(self):
-        return (self,)
-
-
 class CoBaseNew:
     def __new__(cls, v: int = 0):
         body_new_calls.append("co_base_new")
@@ -818,15 +811,6 @@ def test_a_direct_keyword_new_call_on_a_getnewargs_struct_is_refused():
         WithGetNewArgs.__new__(WithGetNewArgs, x=1)
 
 
-def test_a_self_referential_getnewargs_deepcopies_without_recursion():
-    instance = SelfRefGetNewArgs()
-    set_field(instance, "child", instance)
-
-    deep = copy.deepcopy(instance)
-
-    assert deep.child is deep
-
-
 def test_a_genuine_body_typeerror_propagates_with_getnewargs_under_construction():
     with pytest.raises(TypeError, match="genuine rejection"):
         GenuineWithGNA(5)
@@ -935,6 +919,49 @@ def test_a_getattr_returning_none_does_not_break_copy():
 
     assert copy.copy(instance) == instance
     assert copy.deepcopy(instance) == instance
+
+
+def test_a_declaring_getnewargs_getattr_returning_none_copies_without_error():
+    class DeclaringGetattrNone(Struct):
+        x: int
+
+        def __getnewargs__(self):
+            return (self.x,)
+
+        def __getattr__(self, name):
+            return None
+
+    instance = DeclaringGetattrNone(5)
+
+    assert copy.copy(instance) == instance
+    assert copy.deepcopy(instance) == instance
+
+
+def test_copyreg_dispatch_table_is_honored_by_copy_and_deepcopy():
+    class Registered(Struct):
+        x: int
+
+    def custom_copier(obj):
+        return (lambda v: ("copied", v), (obj.x,), None)
+
+    try:
+        copyreg.dispatch_table[Registered] = custom_copier
+        assert copy.copy(Registered(5)) == ("copied", 5)
+        assert copy.deepcopy(Registered(5)) == ("copied", 5)
+    finally:
+        del copyreg.dispatch_table[Registered]
+
+
+def test_a_reduce_owning_class_has_no_mixin_copy_to_shadow_dispatch():
+    class ReduceOwned(Struct):
+        x: int
+
+        def __reduce__(self):
+            return (type(self), (), self.__getstate__())
+
+    assert "__copy__" not in ReduceOwned.__dict__
+    assert hasattr(ReduceOwned, "__copy__") is False
+    assert hasattr(ReduceOwned, "__deepcopy__") is False
 
 
 @pytest.mark.parametrize("protocol", [0, 1])

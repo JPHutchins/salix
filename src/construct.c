@@ -104,8 +104,12 @@ PyObject * Struct_new(
 		PyTuple_GET_SIZE(arguments) +
 		(keywords != NULL ? PyDict_GET_SIZE(keywords) : 0)
 	);
+	bool declares = false;
+	bool declares_ex = false;
 
-	if (argument_count > 0 && !body_init && !type->struct_declares_getnewargs) {
+	struct_probe_getnewargs(struct_class, &declares, &declares_ex);
+
+	if (argument_count > 0 && !body_init && !declares) {
 		PyErr_Format(PyExc_TypeError, "%.200s() takes no arguments", struct_class->tp_name);
 
 		return NULL;

@@ -33,8 +33,6 @@ typedef struct {
 	struct options struct_options;
 
 	bool struct_resolves_body_eq;
-	bool struct_declares_getnewargs;
-	bool struct_declares_getnewargs_ex;
 } StructType;
 
 /*
@@ -88,6 +86,52 @@ static inline PyObject * struct_type_dict(PyTypeObject * const type) {
 	return PyType_GetDict(type);
 }
 #endif
+
+/*
+ * Whether the class's MRO binds __getnewargs__ or __getnewargs_ex__. Reading
+ * the class dicts, not getattr, so a user __getattr__ never runs and a hook
+ * added after creation is seen. Reports the two declarations separately
+ * because the reconstruction shape accepts keywords only for
+ * __getnewargs_ex__, while positional args are accepted for either.
+ */
+static inline void struct_probe_getnewargs(
+	PyTypeObject const * const cls,
+	bool * const declares,
+	bool * const declares_ex
+) {
+	*declares = false;
+	*declares_ex = false;
+	PyObject * const mro = cls->tp_mro;
+
+	if (mro == NULL) {
+		return;
+	}
+
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); ++i) {
+		PyObject * const entry = PyTuple_GET_ITEM(mro, i);
+		PyObject * const dict = struct_type_dict((PyTypeObject *) entry);
+
+		if (dict == NULL) {
+			PyErr_Clear();
+			continue;
+		}
+
+		if (PyDict_GetItemString(dict, "__getnewargs_ex__") != NULL) {
+			*declares_ex = true;
+			*declares = true;
+		}
+
+		if (PyDict_GetItemString(dict, "__getnewargs__") != NULL) {
+			*declares = true;
+		}
+
+		Py_DECREF(dict);
+
+		if (*declares && *declares_ex) {
+			break;
+		}
+	}
+}
 
 /*
  * A strong reference to the value, or NULL if the key is gone.

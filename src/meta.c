@@ -156,7 +156,6 @@ static PyObject * Struct_new_thunk(
 static bool is_struct_new_wrapper(PyObject * wrapper);
 static PyMethodDef struct_new_methoddef[];
 static enum result install_new_wrapper(StructType * struct_class);
-static enum result install_copy_guards(StructType * struct_class);
 static PyObject * StructMeta_call(PyObject * self, PyObject * args, PyObject * keywords);
 static Py_ssize_t * resolve_slot_offsets(
 	StructType * struct_class,
@@ -1152,10 +1151,6 @@ static enum result install_fields(
 		return RESULT_ERROR;
 	}
 
-	if (install_copy_guards(struct_class) != RESULT_OK) {
-		return RESULT_ERROR;
-	}
-
 	PyTypeObject * const python_class = &struct_class->heap_type.ht_type;
 
 	if (struct_class->struct_body_new != NULL) {
@@ -1178,11 +1173,12 @@ static bool is_reconstruction_shape(
 ) {
 	Py_ssize_t const extra = PyTuple_GET_SIZE(rest);
 	bool const has_keywords = keywords != NULL && PyDict_GET_SIZE(keywords) > 0;
+	bool declares = false;
+	bool declares_ex = false;
 
-	return (
-		(extra > 0 && !has_keywords && struct_class->struct_declares_getnewargs) ||
-		(has_keywords && struct_class->struct_declares_getnewargs_ex)
-	);
+	struct_probe_getnewargs(&struct_class->heap_type.ht_type, &declares, &declares_ex);
+
+	return ((extra > 0 && !has_keywords && declares) || (has_keywords && declares_ex));
 }
 
 static PyObject * dispatch_new(
@@ -1380,31 +1376,6 @@ static enum result install_new_wrapper(StructType * const struct_class) {
 		struct_class->struct_body_new = py_move(&mro_new);
 	}
 
-	PY_OWNED(getnewargs, PyUnicode_InternFromString("__getnewargs__"));
-	PY_OWNED(getnewargs_ex, PyUnicode_InternFromString("__getnewargs_ex__"));
-
-	if (getnewargs == NULL || getnewargs_ex == NULL) {
-		return RESULT_ERROR;
-	}
-
-	struct definition const declared_args = base_defines((PyObject *) struct_class, getnewargs);
-
-	if (declared_args.tag == DEFINITION_UNREADABLE) {
-		return RESULT_ERROR;
-	}
-
-	struct definition const declared_args_ex = base_defines(
-		(PyObject *) struct_class,
-		getnewargs_ex
-	);
-
-	if (declared_args_ex.tag == DEFINITION_UNREADABLE) {
-		return RESULT_ERROR;
-	}
-
-	struct_class->struct_declares_getnewargs = (declared_args.found || declared_args_ex.found);
-	struct_class->struct_declares_getnewargs_ex = declared_args_ex.found;
-
 	PY_OWNED(wrapper, PyCFunction_NewEx(struct_new_methoddef, (PyObject *) struct_class, NULL));
 
 	if (wrapper == NULL) {
@@ -1412,85 +1383,6 @@ static enum result install_new_wrapper(StructType * const struct_class) {
 	}
 
 	return PyDict_SetItemString(dict, "__new__", wrapper) == 0 ? RESULT_OK : RESULT_ERROR;
-}
-
-static enum result install_copy_guards(StructType * const struct_class) {
-	PY_OWNED(dict, struct_type_dict(&struct_class->heap_type.ht_type));
-
-	if (dict == NULL) {
-		return RESULT_ERROR;
-	}
-
-	/* A user-written __copy__ or __deepcopy__ anywhere in the MRO is the user's
-	 * own choice and is inherited as-is. Only when the class has no copy method
-	 * of its own but does write a reduce does the mixin's copy path need to
-	 * stand aside, so copy and deepcopy honor the reduce instead of the
-	 * getstate/setstate path. */
-	PY_OWNED(copy_name, PyUnicode_InternFromString("__copy__"));
-	PY_OWNED(deepcopy_name, PyUnicode_InternFromString("__deepcopy__"));
-	PY_OWNED(reduce, PyUnicode_InternFromString("__reduce__"));
-	PY_OWNED(reduce_ex, PyUnicode_InternFromString("__reduce_ex__"));
-
-	if (copy_name == NULL || deepcopy_name == NULL || reduce == NULL || reduce_ex == NULL) {
-		return RESULT_ERROR;
-	}
-
-	struct definition const has_copy = base_defines_value(
-		(PyObject *) struct_class,
-		copy_name,
-		NULL
-	);
-
-	if (has_copy.tag == DEFINITION_UNREADABLE) {
-		return RESULT_ERROR;
-	}
-
-	struct definition const has_deepcopy = base_defines_value(
-		(PyObject *) struct_class,
-		deepcopy_name,
-		NULL
-	);
-
-	if (has_deepcopy.tag == DEFINITION_UNREADABLE) {
-		return RESULT_ERROR;
-	}
-
-	if (has_copy.found || has_deepcopy.found) {
-		return RESULT_OK;
-	}
-
-	struct definition const has_reduce = base_defines_value(
-		(PyObject *) struct_class,
-		reduce,
-		NULL
-	);
-
-	if (has_reduce.tag == DEFINITION_UNREADABLE) {
-		return RESULT_ERROR;
-	}
-
-	struct definition const has_reduce_ex = base_defines_value(
-		(PyObject *) struct_class,
-		reduce_ex,
-		NULL
-	);
-
-	if (has_reduce_ex.tag == DEFINITION_UNREADABLE) {
-		return RESULT_ERROR;
-	}
-
-	if (!has_reduce.found && !has_reduce_ex.found) {
-		return RESULT_OK;
-	}
-
-	if (
-		PyDict_SetItemString(dict, "__copy__", Py_None) < 0 ||
-		PyDict_SetItemString(dict, "__deepcopy__", Py_None) < 0
-	) {
-		return RESULT_ERROR;
-	}
-
-	return RESULT_OK;
 }
 
 static PyObject * StructMeta_call(
