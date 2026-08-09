@@ -1,5 +1,3 @@
-"""The release gate, exercised the way the release runs it."""
-
 import subprocess
 import sys
 from pathlib import Path

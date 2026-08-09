@@ -1,5 +1,3 @@
-"""Property-based checks over arbitrary field values and shapes."""
-
 from hypothesis import given
 from hypothesis import strategies as st
 from values import HASHABLE, Coordinate, Frozen, Inner

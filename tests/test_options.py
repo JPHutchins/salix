@@ -1,11 +1,3 @@
-"""The class keywords other than `frozen`, which has tests of its own.
-
-Every option is inherited and every option may be overridden, so each one is
-tested in both directions: turning it off, and turning it back on underneath a
-base that turned it off. The second direction is the one that does not come
-free -- a subclass inherits its base's bindings, not the mixin's.
-"""
-
 import weakref
 
 import pytest

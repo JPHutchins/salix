@@ -6,8 +6,6 @@
 #	include "owned.h"
 #	include "testing.h"
 
-/* owned.h has no translation unit of its own, so its tests live with the
- * harness rather than at the bottom of a file that merely uses it. */
 static void test_a_moved_reference_leaves_nothing_behind(void) {
 	PyObject * const value = PyList_New(0);
 	Py_ssize_t const before = Py_REFCNT(value);
@@ -54,7 +52,6 @@ static void test_a_scope_releases_nothing_after_a_move(void) {
 }
 
 void owned_tests(void) {
-	/* Unity takes its file from UNITY_BEGIN, which is the runner's. */
 	Unity.TestFile = __FILE__;
 
 	RUN_TEST(test_a_moved_reference_leaves_nothing_behind);

@@ -1,5 +1,3 @@
-"""camas task definitions for salix — the single source of truth for local and CI."""
-
 from pathlib import Path
 
 from camas import Claude, Config, Parallel, Project, Sequential, Task, by_suffix
@@ -44,7 +42,6 @@ pytest = Task(PYTEST, env=ENVIRONMENT_PER_INTERPRETER)
 # --no-sync: analyze reaches this from ci, and CI never installs the project.
 compile_flags = Task("uv run --no-sync python tools/compile_flags.py", mutates=True)
 
-# Everything untracked, less the environment, camas's timings and local settings.
 clean = Task("git clean -xdf -e .venv -e .camas -e .claude", mutates=True)
 update_python_targets = Task("uv run python tools/update_python_targets.py", mutates=True)
 
@@ -158,10 +155,6 @@ check = Parallel(test, free_threaded, format_check, lint, analyze, c_test, type_
 # source tree and compiles it instead of taking the wheel. Naming the two
 # dependencies is the cost -- uv run takes neither a pyproject.toml for
 # --with-requirements nor a member whose sources it is told to ignore.
-#
-# cwd, because the repo root is sys.path[0] and an in-place build leaves a
-# salix.<abi>.so sitting there that shadows anything installed. That is what
-# SALIX_REQUIRE_INSTALLED makes the suite assert rather than assume.
 #
 # --no-cache, because the version is permanently 0.0.0: uv keys its cache on
 # name and version, so a rebuilt wheel is indistinguishable from one built

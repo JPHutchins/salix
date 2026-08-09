@@ -1,8 +1,5 @@
 name: Release
 
-# A tag is the trigger and pyproject.toml is the version; check_tag.py refuses
-# the pair if they disagree. Nothing here runs on a branch, so a release is
-# always something someone tagged on purpose.
 on:
   push:
     tags: ["v*"]
@@ -18,15 +15,10 @@ concurrency:
 jobs:
   release:
     runs-on: ubuntu-latest
-    # 50 cross builds is not fast; six hours is still not the number.
     timeout-minutes: 120
     environment: pypi
     permissions:
       contents: read
-      # Trusted Publishing: PyPI takes a short-lived OIDC token from this
-      # workflow, so there is no API token to hold, rotate or leak. It is also
-      # why every action below is pinned to a commit: a tag can be moved and a
-      # branch always is, and this is the job that can publish as salix.
       id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -36,22 +28,14 @@ jobs:
           primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix', 'nix/**') }}
           restore-prefixes-first-match: nix-${{ runner.os }}-
           gc-max-store-size-linux: 5G
-          # Restore-only. Saving is a REST call needing actions: write, which
-          # this job deliberately does not have; CI owns the cache.
           save: false
 
-      # --only-group ci: check_tag.py is stdlib-only and camas ci brings its own
-      # tools, so the dev group's camas[mcp] would only be a local agent's
-      # dependency tree standing between a tag and a release.
       - run: nix develop --command uv sync --no-install-workspace --only-group ci
 
-      # Through env: so the tag reaches the shell as a value, never as text.
       - env:
           TAG: ${{ github.ref_name }}
         run: nix develop --command uv run --no-sync python tools/check_tag.py "$TAG"
 
-      # Invoked, not restated -- restating it is how the old step went stale.
-      # A tag can point at a commit CI never saw, so this cannot be skipped.
       - run: nix develop --command uv run --no-sync camas ci
 
       - run: nix build .#release --out-link result-release

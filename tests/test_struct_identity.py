@@ -1,16 +1,3 @@
-"""What the struct machinery does when handed something that is not a struct.
-
-Neither the mixin nor the metaclass is exported, and both are one attribute
-lookup from `Struct`, so both are reachable without `Struct` anywhere in the
-bases. Most of what is asserted here used to be a segfault or a class that
-reported its fields and behaved like `object`;
-`TestTheUninstalledClassCannotBeBuilt` is the exception, pinning a CPython
-guard that salix relies on and never crashed without.
-
-The crashes cannot be asserted directly -- a segfault takes pytest with it -- so
-each one is pinned by the guarded outcome it now produces.
-"""
-
 import collections.abc
 
 import pytest
@@ -107,8 +94,7 @@ class TestAMixinSubclass:
     def test_the_co_base_setter_is_overridden_rather_than_deferred_to(self):
         """Setattr falls back to object's, which for a co-base that defines its
         own `__setattr__` means overriding it rather than falling back: the
-        write lands and the co-base never sees it. Same trade as repr, stated
-        here because the comment in mixin.c is the only other place it exists.
+        write lands and the co-base never sees it. Same trade as repr.
         """
 
         seen = []

@@ -1,10 +1,3 @@
-"""Behaviour specific to a free-threaded interpreter.
-
-The GIL test is the one that matters: a module that fails to declare
-Py_mod_gil still imports and still passes every other test here, just with the
-GIL switched back on, so nothing else would notice.
-"""
-
 import sys
 import sysconfig
 import threading

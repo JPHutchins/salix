@@ -1,18 +1,3 @@
-"""Methods on a struct, in the shapes people actually write them.
-
-A struct's body is an ordinary class body, and the methods it defines are kept
--- except a name that collides with a field, which is refused outright rather
-than dropped for the descriptor that reads the field. These are the codec-shaped
-methods that motivate reaching for a struct in the first place -- `to_bytes`,
-`to_string`, a `from_bytes` classmethod -- plus the descriptors that sit
-alongside them, and the dunders that salix would otherwise generate.
-
-Methods are the subject. `__slots__` is salix's whatever the body says, and
-`__match_args__` is unless the class opts out -- which means salix writes none
-rather than that the class has none, since `Struct`'s own empty tuple is still
-in the MRO. `TestBindingsSalixOwns` pins all of that.
-"""
-
 import dataclasses
 import functools
 import struct as struct_module

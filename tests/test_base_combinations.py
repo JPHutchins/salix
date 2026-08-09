@@ -1,30 +1,3 @@
-"""Every buildable combination of two and three struct bases, and what has to
-be true of all of them.
-
-The tests beside this one in test_multiple_bases.py pin shapes: this base in
-front of that one answers so. Nine of those shapes arrived one review round at
-a time while #9 was being fixed, each the same mechanism wearing a different
-hat, because a handful of examples samples the space rather than covering it.
-
-So these say what must hold of *any* combination, and sweep the whole space
-looking for somewhere it does not. A shape nobody thought of is covered the day
-it becomes buildable.
-
-The rule the differential tests state is salix's own: options are inherited
-from the **first** struct base, whose branch of the MRO is searched first, and
-only `frozen` and `weakref` are facts about every base rather than preferences
-of that one. So a class with several struct bases must behave like the same
-class built on its first struct base alone.
-
-Where that fails today it fails for one reason, filed as #76: a struct base
-binds a dunder only where its own creation transitioned an option, so a later
-base can bind a name the first one left to the MRO, and then the record and the
-behaviour are two different answers. Those combinations are split off by asking
-`vars()` which bases bind the name -- a structural question, not a list of
-known-bad examples -- and the tests over them are strict xfails, so #76 turns
-them red the day it lands.
-"""
-
 import itertools
 import operator
 import weakref

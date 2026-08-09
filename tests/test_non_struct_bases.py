@@ -1,15 +1,3 @@
-"""A base that is not a struct, ahead of one that is.
-
-salix decides whether to answer for `__hash__` by asking whether the `__eq__`
-the class resolves is one it bound. That question used to be put to the struct
-base alone, and a non-struct base earlier in the MRO can supply the `__eq__`
-the class actually gets -- so two instances compared equal by a class body and
-hashed by salix's fields, which is the same contract break as a dict key whose
-hash moves, reached through a base salix never looked at.
-
-The question is now put to every base, in the order C3 searches them.
-"""
-
 import pytest
 
 from salix import Struct

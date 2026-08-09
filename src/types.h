@@ -19,34 +19,18 @@ enum { SLOT_MEMBER_TYPE = T_OBJECT_EX };
 enum { SLOT_MEMBER_TYPE = Py_T_OBJECT_EX };
 #endif
 
-/* An instance of StructMeta *is* a struct class.  We extend the heap-type
- * object with the per-type field metadata needed for fast construction and
- * the dunder methods. */
 typedef struct {
 	PyHeapTypeObject heap_type;
 
-	/* tuple[str]: every field name, in order */
 	PyObject * struct_field_names;
-
-	/* tuple: defaults for the trailing fields */
 	PyObject * struct_defaults;
-
-	/* malloc'd array[field_count] of slot offsets */
 	Py_ssize_t * struct_slot_offsets;
-
-	/* Resolved __post_init__, or NULL for a class that declares none */
 	PyObject * struct_post_init;
 
 	Py_ssize_t struct_field_count;
 	Py_ssize_t struct_default_count;
-
-	/* What the class body asked for, and what a subclass inherits */
 	struct options struct_options;
 
-	/* Whether this class resolves an __eq__ that came from a class body rather
-	 * than from salix. Answered once, here, because a subclass needs it and
-	 * cannot re-derive it: `__hash__ is None` on the base does not say which
-	 * rule put it there. */
 	bool struct_resolves_body_eq;
 } StructType;
 
@@ -73,11 +57,6 @@ static inline char const * struct_type_name(StructType const * const type) {
 	return type->heap_type.ht_type.tp_name;
 }
 
-/*
- * Where field `index` lives inside an instance. Fields are plain slots, so a
- * struct is just its values laid end to end, and every read or write of one
- * goes through here.
- */
 static inline PyObject * * struct_slot(
 	StructType const * const type,
 	PyObject * const self,
@@ -141,8 +120,6 @@ static inline PyObject * dict_value_ref(PyObject * const mapping, PyObject * con
 #	define STRUCT_END_CRITICAL_SECTION2() Py_END_CRITICAL_SECTION2()
 #endif
 
-/* One field from each of two instances, for the readers that walk them in
- * pairs. */
 struct slot_pair {
 	PyObject * mine;
 	PyObject * theirs;
@@ -245,20 +222,14 @@ static inline void struct_slots_ref_or_none_into(
 	STRUCT_END_CRITICAL_SECTION();
 }
 
-/* Fields below this index have no default and must be supplied by the caller. */
 static inline Py_ssize_t struct_required_count(StructType const * const type) {
 	return type->struct_field_count - type->struct_default_count;
 }
 
-/* Both tuples are NULL on the mixin itself, which has no fields; an empty
- * tuple is the honest answer rather than None. */
 static inline PyObject * struct_tuple_or_empty(PyObject * const tuple) {
 	return tuple != NULL ? Py_NewRef(tuple) : PyTuple_New(0);
 }
 
-/* Which of the two metadata tuples is being asked for. The class answers
- * through the metaclass and the instance through the mixin, so without this the
- * same read is written out four times. */
 enum struct_metadata : int {
 	STRUCT_FIELD_NAMES,
 	STRUCT_DEFAULTS,

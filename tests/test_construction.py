@@ -1,5 +1,3 @@
-"""Argument binding: what reaches a slot, and what is rejected."""
-
 import pytest
 from values import COPIED_WHEN_EMPTY, NON_EMPTY
 

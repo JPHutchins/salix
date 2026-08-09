@@ -1,14 +1,3 @@
-"""Build the `salix` C extension.
-
-Run via camas (`uv run camas build`), or directly:
-
-    python setup.py build_ext --inplace
-
-This produces `salix/__init__.*.so`, importable as `salix`. The
-extension is the package's __init__ so that py.typed and the stub have a
-package directory to live in; there is no Python module in the import path.
-"""
-
 import os
 import sys
 from pathlib import Path

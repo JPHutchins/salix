@@ -7,10 +7,6 @@
 static PyObject * fields_repr(StructType const * type, PyObject * self);
 static PyObject * field_repr(StructType const * type, PyObject * self, Py_ssize_t index);
 
-/*
- * Py_ReprEnter/Py_ReprLeave bracket exactly one call each here, so a struct
- * that contains itself renders as `...` instead of recursing forever.
- */
 PyObject * Struct_repr(PyObject * const self) {
 	if (!is_struct(self)) {
 		return PyBaseObject_Type.tp_repr(self);
@@ -32,7 +28,6 @@ PyObject * Struct_repr(PyObject * const self) {
 	return PyUnicode_FromFormat("%s(%U)", Py_TYPE(self)->tp_name, inner);
 }
 
-/* The `x=1.0, y=2.0` interior, without the class name or the parentheses. */
 static PyObject * fields_repr(StructType const * const type, PyObject * const self) {
 	PY_OWNED(pieces, PyList_New(type->struct_field_count));
 
@@ -55,7 +50,6 @@ static PyObject * fields_repr(StructType const * const type, PyObject * const se
 	return separator != NULL ? PyUnicode_Join(separator, pieces) : NULL;
 }
 
-/* `name=value`, or `name=<unset>` for a slot nothing has written yet. */
 static PyObject * field_repr(
 	StructType const * const type,
 	PyObject * const self,
@@ -80,12 +74,6 @@ static PyObject * field_repr(
 
 #	include "testing.h"
 
-/*
- * `del instance.field` reaches this branch on a mutable struct, and
- * tests/test_mutability.py covers that. A frozen one cannot: its slot is NULL
- * only part way through a constructor, and a half-built struct is never handed
- * out. So the frozen case is reachable only by writing the NULL here.
- */
 static void test_an_unwritten_slot_renders_as_unset(void) {
 	PyObject * const instance =
 		testing_evaluate("class P(Struct):\n    x: int\n    y: int\nresult = P(1, 2)\n");
@@ -119,7 +107,6 @@ static void test_a_written_slot_renders_its_repr(void) {
 }
 
 void repr_tests(void) {
-	/* Unity takes its file from UNITY_BEGIN, which is the runner's. */
 	Unity.TestFile = __FILE__;
 
 	RUN_TEST(test_an_unwritten_slot_renders_as_unset);

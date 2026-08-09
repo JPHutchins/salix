@@ -1,11 +1,3 @@
-"""Reference-count invariants.
-
-Nothing else here would notice a leak or an over-release: a leaked reference
-just grows memory, and an over-release corrupts something far from the cause.
-Skipped on a free-threaded build, where deferred and biased reference counting
-make getrefcount an unreliable probe.
-"""
-
 import gc
 import sys
 import sysconfig

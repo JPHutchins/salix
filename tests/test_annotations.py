@@ -1,10 +1,3 @@
-"""Forward references, which salix reads without resolving.
-
-A field is a name and a position; the annotation beside it is never a type as
-far as salix is concerned. PEP 649 is what makes that distinction reachable,
-and every test in the class below is a case where resolving would have failed.
-"""
-
 import functools
 import sys
 

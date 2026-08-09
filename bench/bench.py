@@ -1,20 +1,3 @@
-"""Benchmark `salix` against the real alternatives.
-
-Methodology mirrors JP Hutchins' python-struct-profiling / importtime_sweep.py
-so the numbers are directly comparable to the interstellar-inclination article:
-
-  * dependency import (ms, cumulative): `python -X importtime -c "import LIB"`,
-    median of N fresh interpreters, warm (.pyc cached).
-  * per-type creation (us/type, warm): write a module of K identical 3-field
-    classes, import it under `-X importtime` in a fresh interpreter, take the
-    module's *self* time / K, median of N. Each construct gets a unique module
-    name (never a real library name) so it can't shadow the dependency.
-  * instantiation (ns/op): timeit, min of N repeats, 3-field construct.
-
-Run with `uv run camas benchmark` (which builds first), or directly after a build:
-    python bench/bench.py
-"""
-
 from __future__ import annotations
 
 import os
@@ -44,10 +27,10 @@ _ENV = {**os.environ, "PYTHONPATH": os.pathsep.join(
 
 
 class Construct(NamedTuple):
-    key: str          # unique module name (must differ from any real library)
+    key: str  # unique module name (must differ from any real library)
     label: str
-    short: str        # the closing summary's column, which has no room for label
-    dep: str | None   # the dependency library to import (None = no dependency)
+    short: str  # the closing summary's column, which has no room for label
+    dep: str | None
     header: str
     body: Callable[[int], str]
     ctor: Callable[[], Callable[[int, int, int], object]]
@@ -150,7 +133,6 @@ CONSTRUCTS = (
               "from records import record", _record_type, _record_type_ctor),
 )
 
-# Which rows the closing summary compares, when they survived the filter.
 HEADLINE = ("gen_salix", "gen_namedtuple", "gen_msgspec")
 
 _LINE = re.compile(r"import time:\s+(\d+)\s+\|\s+(\d+)\s+\|\s+(.*)")

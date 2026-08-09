@@ -1,11 +1,3 @@
-"""The legs that exist to test a built artifact must actually be testing one.
-
-The repo root is sys.path[0] for a bare `python -m pytest`, and an in-place
-build leaves salix.<abi>.so sitting there, so an installed distribution gets
-shadowed by the working tree without anything failing. Only the legs that set
-SALIX_REQUIRE_INSTALLED make the claim, so only they are held to it.
-"""
-
 import importlib.metadata
 import os
 import pathlib
