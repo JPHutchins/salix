@@ -234,8 +234,7 @@ def test_concurrent_pickling_while_another_thread_writes_it():
             restored = pickle.loads(pickle.dumps(shared if i % 2 else sealed))
             value = restored.value
 
-            if i % 1000 == 0:
-                assert len(value) == 2
+            assert len(value) == 2
 
     roles = iter(([write, pickle_round_trip] * THREADS)[:THREADS])
     claim = threading.Lock()
@@ -261,6 +260,9 @@ def test_concurrent_getstate_while_another_thread_writes_the_instance_dict():
     """
 
     shared = DictCarrying(0)
+    # Seed an entry before the threads race, so a reader that runs before the
+    # writer's first store still observes a non-empty dict and sets the flag.
+    shared.extra = 0
     rounds = ITERATIONS * 5
     saw_dict_entry = [False]
 

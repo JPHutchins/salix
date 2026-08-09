@@ -5,6 +5,20 @@
 #include "result.h"
 #include "types.h"
 
+/* Py_TPFLAGS_INLINE_VALUES and Py_TPFLAGS_MANAGED_DICT joined the public
+ * object.h in 3.13 and 3.11 respectively; the flag values have been stable, so
+ * they are spelled here rather than gated on the public header. */
+enum {
+	STRUCT_TPFLAGS_INLINE_VALUES = 1 << 2,
+	STRUCT_TPFLAGS_MANAGED_DICT = 1 << 4,
+};
+
+/* A heap type's instance dict lives just before the object header on a
+ * managed-dict build (3.11+). Reading it directly, rather than through
+ * _PyObject_GetDictPtr, avoids materializing an inline-values dict: that
+ * helper creates and stores one for a null slot, which would make __getstate__
+ * mutate the instance. The offset is CPython's MANAGED_DICT_OFFSET. */
+
 struct field_lookup {
 	enum { FIELD_LOOKUP_FOUND, FIELD_LOOKUP_MISSING, FIELD_LOOKUP_ERROR } tag;
 	Py_ssize_t index;
@@ -43,6 +57,7 @@ static enum result write_slot(
 );
 static enum result run_post_init(StructType const * type, PyObject * self);
 static PyObject * instance_dict_owned(PyObject * self);
+static PyObject * instance_dict_ref(PyObject * self);
 static enum result resolve_state(
 	StructType const * type,
 	PyObject * values,
@@ -423,6 +438,59 @@ static PyObject * instance_dict_owned(PyObject * const self) {
 	return py_move(&dict);
 }
 
+/* The existing instance dict, or NULL when the slot is empty. Unlike
+ * instance_dict_owned this never creates and stores one, so __getstate__
+ * stays observationally read-only: a struct with a null dict slot reports
+ * None for the third state element and the slot stays null. On a managed-dict
+ * build the pointer is read directly rather than through _PyObject_GetDictPtr,
+ * which would materialize and store an empty dict for an inline-values type. */
+static PyObject * instance_dict_ref(PyObject * const self) {
+	PY_MOVABLE(dict, NULL);
+
+	STRUCT_BEGIN_CRITICAL_SECTION(self);
+#if PY_VERSION_HEX >= 0x030B0000
+	if (Py_TYPE(self)->tp_flags & STRUCT_TPFLAGS_MANAGED_DICT) {
+#	ifdef Py_GIL_DISABLED
+		Py_ssize_t const offset = -((Py_ssize_t) sizeof(PyObject *));
+#	else
+		Py_ssize_t const offset = -3 * ((Py_ssize_t) sizeof(PyObject *));
+#	endif
+
+		dict = Py_XNewRef(*(PyObject * *) ((char *) self + offset));
+	} else
+#endif
+	{
+		PyObject * * const dict_slot = _PyObject_GetDictPtr(self);
+		dict = Py_XNewRef(dict_slot != NULL ? *dict_slot : NULL);
+	}
+	STRUCT_END_CRITICAL_SECTION();
+
+	if (dict != NULL) {
+		return py_move(&dict);
+	}
+
+	/* A managed-dict type with inline values can hold instance attributes even
+	 * with a null dict pointer. Materialize to read them; if that yields an
+	 * empty dict, restore the null slot so getstate stays read-only. */
+#if PY_VERSION_HEX >= 0x030B0000
+	if (Py_TYPE(self)->tp_flags & STRUCT_TPFLAGS_INLINE_VALUES) {
+		PyObject * * const slot = _PyObject_GetDictPtr(self);
+		PyObject * const materialized = slot != NULL ? *slot : NULL;
+
+		if (materialized != NULL && PyDict_GET_SIZE(materialized) == 0) {
+			STRUCT_BEGIN_CRITICAL_SECTION(self);
+			*slot = NULL;
+			STRUCT_END_CRITICAL_SECTION();
+			Py_DECREF(materialized);
+		} else if (materialized != NULL) {
+			return Py_NewRef(materialized);
+		}
+	}
+#endif
+
+	return NULL;
+}
+
 PyObject * Struct_get_state(PyObject * const self, PyObject * const noargs) {
 	if (!is_struct(self)) {
 		PyErr_Format(
@@ -444,11 +512,9 @@ PyObject * Struct_get_state(PyObject * const self, PyObject * const noargs) {
 
 	enum result collected = RESULT_OK;
 
-	STRUCT_BEGIN_CRITICAL_SECTION(self);
-
 	for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
 		PyObject * const name = PyTuple_GET_ITEM(type->struct_field_names, i);
-		PyObject * const value = *struct_slot(type, self, i);
+		PY_MOVABLE(value, struct_slot_ref(type, self, i));
 
 		if (value == NULL) {
 			if (PyList_Append(unset_names, name) < 0) {
@@ -461,8 +527,6 @@ PyObject * Struct_get_state(PyObject * const self, PyObject * const noargs) {
 		}
 	}
 
-	STRUCT_END_CRITICAL_SECTION();
-
 	if (collected != RESULT_OK) {
 		return NULL;
 	}
@@ -470,16 +534,14 @@ PyObject * Struct_get_state(PyObject * const self, PyObject * const noargs) {
 	PY_MOVABLE(instance_dict, NULL);
 
 	if (Py_TYPE(self)->tp_dictoffset != 0) {
-		PY_MOVABLE(dict, instance_dict_owned(self));
+		PY_MOVABLE(dict, instance_dict_ref(self));
 
-		if (dict == NULL) {
-			return NULL;
-		}
+		if (dict != NULL) {
+			instance_dict = PyDict_Copy(dict);
 
-		instance_dict = PyDict_Copy(dict);
-
-		if (instance_dict == NULL) {
-			return NULL;
+			if (instance_dict == NULL) {
+				return NULL;
+			}
 		}
 	}
 
@@ -557,22 +619,47 @@ static enum result resolve_state(
 		set_flags[resolved_values[v]] = true;
 	}
 
+	bool * const unset_flags = PyMem_Calloc(
+		type->struct_field_count > 0 ? type->struct_field_count : 1,
+		sizeof(bool)
+	);
+
+	if (unset_flags == NULL) {
+		PyErr_NoMemory();
+		PyMem_Free(set_flags);
+		goto error;
+	}
+
 	for (Py_ssize_t u = 0; u < unset_count; ++u) {
 		PyObject * const unset_name = PyTuple_GET_ITEM(unset_names, u);
 
 		if (require_field(type, unset_name, "__setstate__()", &resolved_unset[u]) != RESULT_OK) {
 			PyMem_Free(set_flags);
+			PyMem_Free(unset_flags);
 			goto error;
 		}
 
-		if (set_flags[resolved_unset[u]]) {
+		Py_ssize_t const index = resolved_unset[u];
+
+		if (set_flags[index]) {
 			PyErr_Format(PyExc_TypeError, "field '%U' listed as both set and unset", unset_name);
 			PyMem_Free(set_flags);
+			PyMem_Free(unset_flags);
 			goto error;
 		}
+
+		if (unset_flags[index]) {
+			PyErr_Format(PyExc_TypeError, "field '%U' listed more than once as unset", unset_name);
+			PyMem_Free(set_flags);
+			PyMem_Free(unset_flags);
+			goto error;
+		}
+
+		unset_flags[index] = true;
 	}
 
 	PyMem_Free(set_flags);
+	PyMem_Free(unset_flags);
 	*values_indices = resolved_values;
 	*unset_indices = resolved_unset;
 
@@ -583,6 +670,30 @@ error:
 	PyMem_Free(resolved_unset);
 
 	return RESULT_ERROR;
+}
+
+static bool dict_key_is_safe(PyObject * const key) {
+	return (
+		PyUnicode_CheckExact(key) ||
+		PyLong_CheckExact(key) ||
+		PyFloat_CheckExact(key) ||
+		PyBool_Check(key) ||
+		key == Py_None
+	);
+}
+
+static bool dict_merge_is_safe(PyObject * const mapping) {
+	Py_ssize_t position = 0;
+	PyObject * key = NULL;
+	PyObject * value = NULL;
+
+	while (PyDict_Next(mapping, &position, &key, &value)) {
+		if (!dict_key_is_safe(key)) {
+			return false;
+		}
+	}
+
+	return true;
 }
 
 PyObject * Struct_set_state(PyObject * const self, PyObject * const state) {
@@ -684,20 +795,27 @@ PyObject * Struct_set_state(PyObject * const self, PyObject * const state) {
 		if (instance_dict == Py_None) {
 			PyDict_Clear(dict);
 		} else if (instance_dict != dict) {
-			/* Build the replacement dict up front, then swap it in only on
-			 * success, so a failing merge leaves the instance's dict object
-			 * untouched. The slots were already written above, so setstate is
-			 * atomic with respect to validation and the dict merge, not to a
-			 * mid-restore allocation failure in the slot loop. The dict object
-			 * is replaced, so external references to the previous dict go
-			 * stale; that is the accepted cost of the atomicity. */
+			/* Build the replacement up front, so a failure leaves the existing
+			 * dict untouched either way. When every key is an exact builtin
+			 * whose hash and equality cannot call Python, clear and refill the
+			 * existing dict in place so external references to it keep working;
+			 * otherwise swap in the fresh dict, which replaces the object and
+			 * strands those references. The None branch above always clears in
+			 * place, so the two branches agree on the aliasing contract for the
+			 * safe case. */
 			PY_MOVABLE(fresh, PyDict_New());
 
 			if (fresh == NULL || PyDict_Update(fresh, instance_dict) < 0) {
 				return NULL;
 			}
 
-			if (PyObject_GenericSetDict(self, fresh, NULL) < 0) {
+			if (dict_merge_is_safe(instance_dict)) {
+				PyDict_Clear(dict);
+
+				if (PyDict_Update(dict, fresh) < 0) {
+					return NULL;
+				}
+			} else if (PyObject_GenericSetDict(self, fresh, NULL) < 0) {
 				return NULL;
 			}
 		}

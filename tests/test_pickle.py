@@ -552,9 +552,11 @@ def test_setstate_restores_the_instance_dict_from_the_third_element():
 def test_a_null_instance_dict_slot_round_trips():
     instance = WithDict(1)
 
+    assert instance.__getstate__()[2] is None
+
     pickle.dumps(instance)
 
-    assert instance.__dict__ == {}
+    assert instance.__getstate__()[2] is None
 
     restored = pickle.loads(pickle.dumps(instance))
     assert restored == instance
@@ -859,16 +861,16 @@ def test_a_custom_reduce_controls_copy_and_deepcopy():
     assert deep == instance
 
 
-def test_setstate_replaces_the_instance_dict_for_atomicity():
+def test_setstate_refills_the_instance_dict_in_place_when_the_merge_is_safe():
     instance = WithDict(1)
     instance.extra = "world"
     reference = instance.__dict__
 
     instance.__setstate__(({"x": 2}, (), {"new": "val"}))
 
-    assert instance.__dict__ is not reference
+    assert instance.__dict__ is reference
     assert instance.__dict__ == {"new": "val"}
-    assert reference == {"extra": "world"}
+    assert reference == {"new": "val"}
 
 
 def test_setstate_with_none_third_element_clears_the_instance_dict():
@@ -952,17 +954,65 @@ def test_copyreg_dispatch_table_is_honored_by_copy_and_deepcopy():
         del copyreg.dispatch_table[Registered]
 
 
-def test_a_reduce_owning_class_has_no_mixin_copy_to_shadow_dispatch():
+def test_a_reduce_owning_class_keeps_copy_through_the_reduce():
     class ReduceOwned(Struct):
-        x: int
+        x: int = 0
 
         def __reduce__(self):
             return (type(self), (), self.__getstate__())
 
     assert "__copy__" not in ReduceOwned.__dict__
     assert hasattr(ReduceOwned, "__copy__") is False
-    assert hasattr(ReduceOwned, "__deepcopy__") is False
 
+    assert copy.copy(ReduceOwned(5)) == ReduceOwned(5)
+
+
+def test_a_getattr_returning_a_value_is_never_called_by_deepcopy():
+    calls = []
+
+    class GetattrValue(Struct):
+        x: int
+
+        def __getattr__(self, name):
+            calls.append(name)
+            return 123
+
+    instance = GetattrValue(5)
+
+    deep = copy.deepcopy(instance)
+
+    assert deep == instance
+    assert calls == []
+
+
+def test_setstate_refuses_a_duplicate_unset_name():
+    class P(Struct):
+        alpha: int
+        beta: int
+
+    instance = P(1, 2)
+
+    with pytest.raises(TypeError, match="listed more than once as unset"):
+        instance.__setstate__(({"alpha": 5}, ("beta", "beta"), None))
+
+    assert instance.alpha == 1
+    assert instance.beta == 2
+
+
+def test_setstate_none_and_safe_dict_branches_agree_on_aliasing():
+    instance = WithDict(1)
+    instance.extra = "world"
+    reference = instance.__dict__
+
+    instance.__setstate__(({"x": 2}, (), {"new": "val"}))
+
+    assert instance.__dict__ is reference
+    assert reference == {"new": "val"}
+
+    instance.__setstate__(({}, (), None))
+
+    assert instance.__dict__ is reference
+    assert reference == {}
 
 @pytest.mark.parametrize("protocol", [0, 1])
 def test_protocols_0_and_1_are_deliberately_refused(protocol):
