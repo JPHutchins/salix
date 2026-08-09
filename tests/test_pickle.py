@@ -378,6 +378,36 @@ def test_setstate_restores_non_field_names_into_the_instance_dict():
     assert instance.__dict__[1] == "entry"
 
 
+def test_a_dict_key_naming_a_field_stays_out_of_the_state():
+    instance = WithDict(1)
+    instance.extra = "world"
+    instance.__dict__["x"] = "shadow"
+
+    assert instance.__getstate__() == ({"x": 1, "extra": "world"}, ())
+
+    restored = pickle.loads(pickle.dumps(instance))
+    assert restored.x == 1
+    assert restored.extra == "world"
+    assert "x" not in restored.__dict__
+    assert copy.copy(instance).x == 1
+    assert copy.deepcopy(instance).x == 1
+
+
+def test_a_shadowing_dict_key_does_not_make_an_unset_field_refuse_the_state():
+    instance = WithDict.__new__(WithDict)
+    instance.__dict__["x"] = "shadow"
+    instance.__dict__["extra"] = "world"
+
+    assert instance.__getstate__() == ({"extra": "world"}, ("x",))
+
+    restored = pickle.loads(pickle.dumps(instance))
+
+    with pytest.raises(AttributeError):
+        _ = restored.x
+
+    assert restored.extra == "world"
+
+
 def test_a_body_new_on_a_base_struct_survives_on_its_subclass():
     instance = ChildOfBodyNew.__new__(ChildOfBodyNew)
 
