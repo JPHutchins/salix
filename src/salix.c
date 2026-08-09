@@ -35,6 +35,18 @@ static PyMethodDef struct_functions[] = {
 		.ml_flags = METH_VARARGS,
 		.ml_doc = "set_field(instance, name, value) -- assign a field the class declared.",
 	},
+	{
+		.ml_name = "__reduce_newobj__",
+		.ml_meth = Struct_reduce_newobj,
+		.ml_flags = METH_VARARGS,
+		.ml_doc = "__reduce_newobj__(cls, *args) -- copyreg's reconstruction, marker-raised.",
+	},
+	{
+		.ml_name = "__reduce_newobj_ex__",
+		.ml_meth = Struct_reduce_newobj_ex,
+		.ml_flags = METH_VARARGS,
+		.ml_doc = "__reduce_newobj_ex__(cls, args, kwargs) -- copyreg's reconstruction, marker-raised.",
+	},
 	{.ml_name = NULL},
 };
 

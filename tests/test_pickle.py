@@ -14,6 +14,7 @@ init_calls: list[int] = []
 post_init_calls: list[int] = []
 body_new_calls: list[str] = []
 reduce_calls: list[str] = []
+custom_setstate_calls: list[str] = []
 
 
 class Plain(Struct):
@@ -282,6 +283,34 @@ class PartialState(Struct):
         return ({"x": self.x}, (), None)
 
 
+class NoneStateCustomSetState(Struct, frozen=False):
+    x: int = 5
+
+    def __getnewargs__(self):
+        return (self.x,)
+
+    def __getstate__(self):
+        return None
+
+    def __setstate__(self, state):
+        custom_setstate_calls.append("called")
+        Struct.__setstate__(self, state)
+
+
+class BadLenEx(Struct):
+    x: int
+
+    def __getnewargs_ex__(self):
+        return (1, 2, 3)
+
+
+class RaisingReduce(Struct):
+    x: int = 0
+
+    def __reduce__(self):
+        raise RuntimeError("genuine reduce failure")
+
+
 class RedundantListEx(Struct):
     xs: list = None
 
@@ -409,6 +438,7 @@ def _reset_call_records() -> None:
     post_init_calls.clear()
     body_new_calls.clear()
     reduce_calls.clear()
+    custom_setstate_calls.clear()
 
 
 @pytest.mark.parametrize("protocol", [2, 5])
@@ -1344,16 +1374,16 @@ def test_a_state_supplying_a_required_field_round_trips_under_a_short_getnewargs
     assert copy.copy(instance) == instance
 
 
-def test_a_body_init_struct_with_getnewargs_and_empty_state_round_trips_to_defaults():
-    """A body-init struct's reconstruction is __setstate__'s job; an explicit
-    empty __getstate__ means the user chose to drop the data, so the field
-    comes back at its default, not the pre-pickle value."""
+def test_a_body_init_struct_with_getnewargs_and_empty_state_round_trips_via_the_args():
+    """A body-init struct's reconstruction binds the __getnewargs__ arguments
+    into the fields (the reduce routes through a marker-raised newobj), so the
+    empty __getstate__ is not the carrier -- the arguments are."""
 
     instance = BodyInitEmptyState(7)
 
-    assert pickle.loads(pickle.dumps(instance)).x == 0
-    assert copy.copy(instance).x == 0
-    assert copy.deepcopy(instance).x == 0
+    assert pickle.loads(pickle.dumps(instance)).x == 7
+    assert copy.copy(instance).x == 7
+    assert copy.deepcopy(instance).x == 7
 
 
 def test_reduce_ex_with_no_argument_raises_like_stdlib():
@@ -1374,15 +1404,64 @@ def test_an_empty_getnewargs_tuple_with_empty_state_raises_and_with_state_round_
     assert copy.copy(instance) == instance
 
 
-def test_an_empty_getnewargs_tuple_with_none_state_raises():
-    """A None __getstate__ means no state to restore, so a getnewargs returning
-    () has no carrier for the required fields; the reconstruction raises."""
+def test_a_none_state_skips_setstate_and_leaves_the_arguments_to_carry_the_fields():
+    """Stdlib's contract for a None __getstate__ is that __setstate__ is skipped
+    and the reconstruction stands on the getnewargs arguments; the empty-tuple
+    getnewargs here carries nothing, so the required fields come back unset."""
+
+    instance = EmptyTupleNoneState(5, 6)
+    restored = pickle.loads(pickle.dumps(instance))
+
+    with pytest.raises(AttributeError):
+        _ = restored.x
+
+    with pytest.raises(AttributeError):
+        _ = restored.y
+
+
+def test_a_none_state_skips_a_custom_setstate():
+    """A getnewargs struct whose __getstate__ returns None and which overrides
+    __setstate__ must not have the override called: stdlib's contract for a None
+    state is that the reconstruction skips __setstate__ entirely."""
+
+    custom_setstate_calls.clear()
+    instance = NoneStateCustomSetState(9)
+
+    restored = pickle.loads(pickle.dumps(instance))
+
+    assert restored.x == 9
+    assert custom_setstate_calls == []
+
+    copied = copy.copy(instance)
+
+    assert copied.x == 9
+    assert custom_setstate_calls == []
+
+
+def test_a_bare_new_with_short_args_on_a_getnewargs_struct_is_refused():
+    """A getnewargs struct's bare __new__ with args that leave a required field
+    unset is refused immediately: no __setstate__ follows a direct new, so the
+    half-built struct would otherwise persist. A reduce reconstruction raises
+    the marker and is exempt, because its state completes the fields."""
 
     with pytest.raises(TypeError, match="missing required argument"):
-        copy.copy(EmptyTupleNoneState(5, 6))
+        UnderGetNewArgs.__new__(UnderGetNewArgs, 5)
 
     with pytest.raises(TypeError, match="missing required argument"):
-        pickle.loads(pickle.dumps(EmptyTupleNoneState(5, 6)))
+        UnderGetNewArgs.__new__(UnderGetNewArgs)
+
+
+def test_getnewargs_ex_wrong_length_reports_the_actual_length():
+    with pytest.raises(TypeError, match="should return a tuple of length 2, not 3"):
+        copy.copy(BadLenEx(1))
+
+
+def test_a_raising_custom_reduce_propagates():
+    """A custom __reduce__ that raises must propagate, not be swallowed into a
+    silent reconstruction."""
+
+    with pytest.raises(RuntimeError, match="genuine reduce failure"):
+        pickle.dumps(RaisingReduce(1))
 
 
 def test_a_getnewargs_ex_keyword_conflicting_with_a_positional_is_skipped():

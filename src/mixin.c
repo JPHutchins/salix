@@ -157,15 +157,63 @@ static PyObject * object_reduce_ex(PyObject * const self, PyObject * const args)
 	return PyObject_Call(reduce_ex, call_args, NULL);
 }
 
+/* copyreg's __newobj__ equivalents, raised around the __new__ call so
+ * Struct_new can tell a reconstruction from a normal construction (the depth is
+ * visible to it during the call). The reduce names these instead of copyreg's,
+ * so pickle and copy both route a getnewargs reconstruction through them. */
+PyObject * Struct_reduce_newobj(PyObject * const module, PyObject * const args) {
+	PyObject * const cls = PyTuple_GET_ITEM(args, 0);
+	PY_MOVABLE(new_method, PyObject_GetAttrString(cls, "__new__"));
+
+	if (new_method == NULL) {
+		return NULL;
+	}
+
+	++struct_reconstruction_depth;
+	PY_MOVABLE(result, PyObject_Call(new_method, args, NULL));
+	--struct_reconstruction_depth;
+
+	return py_move(&result);
+}
+
+PyObject * Struct_reduce_newobj_ex(PyObject * const module, PyObject * const args) {
+	PyObject * const cls = PyTuple_GET_ITEM(args, 0);
+	PyObject * const newargs = PyTuple_GET_ITEM(args, 1);
+	PyObject * const kwargs = PyTuple_GET_ITEM(args, 2);
+	PY_MOVABLE(prefixed, PyTuple_New(PyTuple_GET_SIZE(newargs) + 1));
+
+	if (prefixed == NULL) {
+		return NULL;
+	}
+
+	PyTuple_SET_ITEM(prefixed, 0, Py_NewRef(cls));
+
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(newargs); ++i) {
+		PyTuple_SET_ITEM(prefixed, i + 1, Py_NewRef(PyTuple_GET_ITEM(newargs, i)));
+	}
+
+	PY_MOVABLE(new_method, PyObject_GetAttrString(cls, "__new__"));
+
+	if (new_method == NULL) {
+		return NULL;
+	}
+
+	++struct_reconstruction_depth;
+	PY_MOVABLE(result, PyObject_Call(new_method, prefixed, kwargs));
+	--struct_reconstruction_depth;
+
+	return py_move(&result);
+}
+
 static PyObject * reduce_with_newargs(
 	PyObject * const self,
 	PyObject * const newargs,
 	PyObject * const newkwargs
 ) {
 	bool const has_kwargs = newkwargs != NULL && PyDict_GET_SIZE(newkwargs) > 0;
-	PY_OWNED(copyreg, PyImport_ImportModule("copyreg"));
+	PY_OWNED(salix, PyImport_ImportModule("salix"));
 
-	if (copyreg == NULL) {
+	if (salix == NULL) {
 		return NULL;
 	}
 
@@ -178,30 +226,11 @@ static PyObject * reduce_with_newargs(
 		return NULL;
 	}
 
-	if (state == Py_None) {
-		/* A None state makes copy/pickle skip __setstate__, so a getnewargs
-		 * reconstruction's completeness could never be verified. Normalize to
-		 * the struct's empty state so the restore, and its check, always runs. */
-		PY_MOVABLE(empty_values, PyDict_New());
-		PY_MOVABLE(empty_unset, PyTuple_New(0));
-		PY_OWNED(empty_state, (
-			empty_values != NULL && empty_unset != NULL ?
-			PyTuple_Pack(3, empty_values, empty_unset, Py_None) :
-			NULL
-		));
-
-		if (empty_state == NULL) {
-			return NULL;
-		}
-
-		Py_SETREF(state, Py_NewRef(empty_state));
-	}
-
 	if (has_kwargs) {
-		newobj = PyObject_GetAttrString(copyreg, "__newobj_ex__");
+		newobj = PyObject_GetAttrString(salix, "__reduce_newobj_ex__");
 		args = PyTuple_Pack(3, cls, newargs, newkwargs);
 	} else {
-		newobj = PyObject_GetAttrString(copyreg, "__newobj__");
+		newobj = PyObject_GetAttrString(salix, "__reduce_newobj__");
 		Py_ssize_t const count = PyTuple_GET_SIZE(newargs);
 		args = PyTuple_New(count + 1);
 
@@ -229,15 +258,14 @@ static PyObject * reduce_without_newargs(PyObject * const self) {
 
 /* Whether the class's MRO binds its own __reduce__, which object.__reduce_ex__
  * honors before it touches getnewargs. Walking the class dicts, not getattr, so
- * a user __getattr__ never runs. */
-static bool has_custom_reduce(PyObject * const self) {
+ * a user __getattr__ never runs. Returns -1 with an exception set when a dict
+ * cannot be read, so a real error is never swallowed into "no custom reduce". */
+static int has_custom_reduce(PyObject * const self) {
 	PY_OWNED(reduce_name, PyUnicode_InternFromString("__reduce__"));
 	PY_OWNED(object_reduce, PyObject_GetAttrString((PyObject *) &PyBaseObject_Type, "__reduce__"));
 
 	if (reduce_name == NULL || object_reduce == NULL) {
-		PyErr_Clear();
-
-		return false;
+		return -1;
 	}
 
 	PyObject * const mro = Py_TYPE(self)->tp_mro;
@@ -247,21 +275,23 @@ static bool has_custom_reduce(PyObject * const self) {
 		PY_OWNED(dict, struct_type_dict((PyTypeObject *) entry));
 
 		if (dict == NULL) {
-			PyErr_Clear();
-			continue;
+			return -1;
 		}
 
 		PY_MOVABLE(bound, dict_value_ref(dict, reduce_name));
 
 		if (bound == NULL) {
-			PyErr_Clear();
+			if (PyErr_Occurred()) {
+				return -1;
+			}
+
 			continue;
 		}
 
 		return bound != object_reduce;
 	}
 
-	return false;
+	return 0;
 }
 
 static PyObject * getnewargs_plain(PyObject * const self) {
@@ -303,11 +333,21 @@ static PyObject * getnewargs_ex(PyObject * const self, PyObject * * const kwargs
 		return NULL;
 	}
 
-	if (!PyTuple_Check(result) || PyTuple_GET_SIZE(result) != 2) {
+	if (!PyTuple_Check(result)) {
 		PyErr_Format(
 			PyExc_TypeError,
-			"__getnewargs_ex__ should return a tuple of length 2, not %.200s",
+			"__getnewargs_ex__ should return a tuple, not '%.200s'",
 			Py_TYPE(result)->tp_name
+		);
+
+		return NULL;
+	}
+
+	if (PyTuple_GET_SIZE(result) != 2) {
+		PyErr_Format(
+			PyExc_TypeError,
+			"__getnewargs_ex__ should return a tuple of length 2, not %zd",
+			PyTuple_GET_SIZE(result)
 		);
 
 		return NULL;
@@ -345,8 +385,9 @@ static PyObject * getnewargs_ex(PyObject * const self, PyObject * * const kwargs
  * that declares a present-but-None value hits "'NoneType' object is not
  * callable". A struct treats that declaration as absence and builds the reduce
  * itself for every getnewargs-declaring class, so a None __getnewargs__ is
- * never called and the reconstruction always carries a restorable state (a None
- * __getstate__ is normalized to the empty state so completeness is verified).
+ * never called and the reconstruction always carries a restorable state. A
+ * None __getstate__ is passed through: stdlib's contract is that it skips
+ * __setstate__, and the reconstruction stands on the getnewargs arguments.
  * A class with no declaration, or one with a custom __reduce__, defers to
  * object.__reduce_ex__, which honors the protocol-below-2 refusal. */
 static PyObject * Struct_reduce_ex(PyObject * const self, PyObject * const args) {
@@ -372,7 +413,13 @@ static PyObject * Struct_reduce_ex(PyObject * const self, PyObject * const args)
 		return object_reduce_ex(self, args);
 	}
 
-	if (has_custom_reduce(self)) {
+	int const custom_reduce = has_custom_reduce(self);
+
+	if (custom_reduce < 0) {
+		return NULL;
+	}
+
+	if (custom_reduce > 0) {
 		return object_reduce_ex(self, args);
 	}
 

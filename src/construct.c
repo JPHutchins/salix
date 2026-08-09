@@ -19,6 +19,8 @@ enum {
  * helper creates and stores one for a null slot, which would make __getstate__
  * mutate the instance. The offset is CPython's MANAGED_DICT_OFFSET. */
 
+_Thread_local int struct_reconstruction_depth = 0;
+
 struct field_lookup {
 	enum { FIELD_LOOKUP_FOUND, FIELD_LOOKUP_MISSING, FIELD_LOOKUP_ERROR } tag;
 	Py_ssize_t index;
@@ -69,8 +71,6 @@ static enum result resolve_state(
 static enum result require_restore_complete(
 	StructType const * type,
 	PyObject * self,
-	Py_ssize_t const * unset_indices,
-	Py_ssize_t unset_count,
 	bool declares_getnewargs
 );
 
@@ -211,9 +211,32 @@ PyObject * Struct_new(
 		return NULL;
 	}
 
-	if (declares && argument_count > 0 && !body_init) {
+	if (declares && argument_count > 0 && (struct_in_reconstruction() || !body_init)) {
 		if (bind_reconstruction(type, self, arguments, keywords) != RESULT_OK) {
 			return NULL;
+		}
+	}
+
+	/* A bare __new__ call on a getnewargs-declaring struct must not silently
+	 * build a half-built struct: the arguments are all it will ever get, since
+	 * no __setstate__ follows a direct new. A reduce reconstruction raises the
+	 * marker and is exempt -- its state completes the fields -- and so is a body
+	 * __new__, whose super().__new__(cls) is called empty and which fills the
+	 * fields itself. */
+	if (declares && !body_init && !struct_in_reconstruction() && type->struct_body_new == NULL) {
+		Py_ssize_t const required_count = struct_required_count(type);
+
+		for (Py_ssize_t i = 0; i < required_count; ++i) {
+			if (*struct_slot(type, self, i) == NULL) {
+				PyErr_Format(
+					PyExc_TypeError,
+					"%.200s() missing required argument '%U'",
+					struct_class->tp_name,
+					PyTuple_GET_ITEM(type->struct_field_names, i)
+				);
+
+				return NULL;
+			}
 		}
 	}
 
@@ -771,33 +794,20 @@ error:
 static enum result require_restore_complete(
 	StructType const * const type,
 	PyObject * const self,
-	Py_ssize_t const * const unset_indices,
-	Py_ssize_t const unset_count,
 	bool const declares_getnewargs
 ) {
 	Py_ssize_t const required_count = struct_required_count(type);
 
+	/* A getnewargs reconstruction is complete only when every required field is
+	 * covered by its args and state together; a field that stays unset -- even
+	 * one the state names as unset -- is a half-built struct, the shape a bare
+	 * __new__ call with short args produces, and it must not round-trip. A
+	 * struct that does not declare getnewargs keeps its partial states. */
 	for (Py_ssize_t i = 0; i < required_count; ++i) {
 		if (*struct_slot(type, self, i) != NULL) {
 			continue;
 		}
 
-		bool explicitly_unset = false;
-
-		for (Py_ssize_t u = 0; u < unset_count; ++u) {
-			if (unset_indices[u] == i) {
-				explicitly_unset = true;
-				break;
-			}
-		}
-
-		if (explicitly_unset) {
-			continue;
-		}
-
-		/* A custom partial __getstate__ that omits a required field is a
-		 * legitimate state; completeness is only enforced for a getnewargs
-		 * reconstruction, whose args and state together must cover the field. */
 		if (!declares_getnewargs) {
 			continue;
 		}
@@ -923,7 +933,7 @@ PyObject * Struct_set_state(PyObject * const self, PyObject * const state) {
 		if (struct_probe_getnewargs((PyTypeObject *) type, &declares, &declares_ex) < 0) {
 			outcome = RESULT_ERROR;
 		} else {
-			outcome = require_restore_complete(type, self, unset_indices, unset_count, declares);
+			outcome = require_restore_complete(type, self, declares);
 		}
 	}
 

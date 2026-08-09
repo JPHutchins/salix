@@ -19,6 +19,16 @@ enum { SLOT_MEMBER_TYPE = T_OBJECT_EX };
 enum { SLOT_MEMBER_TYPE = Py_T_OBJECT_EX };
 #endif
 
+/* Raised around a reduce reconstruction's __new__ call so Struct_new can tell a
+ * body-init reconstruction (whose arguments come from __getnewargs__ and must
+ * bind into the fields) from a normal construction (whose arguments belong to
+ * __init__ and must not leak into the fields). Defined in construct.c. */
+extern _Thread_local int struct_reconstruction_depth;
+
+static inline bool struct_in_reconstruction(void) {
+	return struct_reconstruction_depth > 0;
+}
+
 typedef struct {
 	PyHeapTypeObject heap_type;
 
