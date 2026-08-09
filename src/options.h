@@ -29,7 +29,7 @@ struct options_request {
 };
 
 static inline struct options options_initial(void) {
-	return (struct options){
+	return (struct options) {
 		.frozen = true,
 		.eq = true,
 		.order = false,

@@ -324,7 +324,7 @@ static struct special_form form_named_by(
 		return INIT_VAR_FORM;
 	}
 
-	return (struct special_form){0};
+	return (struct special_form) {0};
 }
 
 static struct special_form special_form_of(
@@ -336,7 +336,7 @@ static struct special_form special_form_of(
 	}
 
 	if (probes->class_var == NULL && probes->init_var == NULL) {
-		return (struct special_form){0};
+		return (struct special_form) {0};
 	}
 
 	return form_within(annotation, probes);
@@ -371,7 +371,7 @@ static struct special_form form_within(
 		PY_OWNED(arguments, PyErr_Occurred() ? NULL : optional_attribute(current, "__args__"));
 
 		if (PyErr_Occurred()) {
-			return (struct special_form){0};
+			return (struct special_form) {0};
 		}
 
 		for (
@@ -389,7 +389,7 @@ static struct special_form form_within(
 		PY_OWNED(aliased, optional_attribute(current, "__value__"));
 
 		if (PyErr_Occurred()) {
-			return (struct special_form){0};
+			return (struct special_form) {0};
 		}
 
 		if (aliased != NULL) {
@@ -397,7 +397,7 @@ static struct special_form form_within(
 		}
 	}
 
-	return (struct special_form){0};
+	return (struct special_form) {0};
 }
 
 static struct special_form named_special_form(
@@ -414,7 +414,7 @@ static struct special_form named_special_form(
 	 * caller reads the exception before it reads the verdict, so leaving it set
 	 * is what reports the failure. */
 	if (PyErr_Occurred()) {
-		return (struct special_form){0};
+		return (struct special_form) {0};
 	}
 
 	return names_form(text, probes->init_var_name) ? INIT_VAR_FORM : (struct special_form){0};

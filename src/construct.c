@@ -29,6 +29,12 @@ static enum result fill_defaults(
 	Py_ssize_t positional_count
 );
 static struct field_lookup find_field(StructType const * type, PyObject * name);
+static enum result require_field(
+	StructType const * type,
+	PyObject * name,
+	char const * operation,
+	Py_ssize_t * index
+);
 static enum result write_slot(
 	StructType const * type,
 	PyObject * self,
@@ -84,6 +90,22 @@ PyObject * Struct_new(
 	PyObject * const arguments,
 	PyObject * const keywords
 ) {
+	if (!defines_own_init((StructType *) struct_class)) {
+		Py_ssize_t const argument_count = (
+			PyTuple_GET_SIZE(arguments) + (keywords != NULL ? PyDict_GET_SIZE(keywords) : 0)
+		);
+
+		if (argument_count > 0) {
+			PyErr_Format(
+				PyExc_TypeError,
+				"%.200s() takes no arguments",
+				struct_class->tp_name
+			);
+
+			return NULL;
+		}
+	}
+
 	PY_MOVABLE(self, struct_class->tp_alloc(struct_class, 0));
 
 	if (self == NULL) {
@@ -266,35 +288,15 @@ PyObject * Struct_set_field(PyObject * const module, PyObject * const arguments)
 		return NULL;
 	}
 
-	if (!PyUnicode_Check(name)) {
-		PyErr_Format(
-			PyExc_TypeError,
-			"set_field() field name must be str, not %.200s",
-			Py_TYPE(name)->tp_name
-		);
+	StructType * const type = struct_type_of(self);
+	Py_ssize_t index;
 
+	if (require_field(type, name, "set_field()", &index) != RESULT_OK) {
 		return NULL;
 	}
 
-	StructType * const type = struct_type_of(self);
-	struct field_lookup const found = find_field(type, name);
-
-	switch (found.tag) {
-		case FIELD_LOOKUP_ERROR:
-			return NULL;
-		case FIELD_LOOKUP_MISSING:
-			PyErr_Format(
-				PyExc_AttributeError,
-				"%.200s has no field '%U'",
-				struct_type_name(type),
-				name
-			);
-
-			return NULL;
-		case FIELD_LOOKUP_FOUND:
-			if (write_slot(type, self, found.index, value) != RESULT_OK) {
-				return NULL;
-			}
+	if (write_slot(type, self, index, value) != RESULT_OK) {
+		return NULL;
 	}
 
 	Py_RETURN_NONE;
@@ -336,7 +338,7 @@ static enum result write_slot(
 static struct field_lookup find_field(StructType const * const type, PyObject * const name) {
 	for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
 		if (name == PyTuple_GET_ITEM(type->struct_field_names, i)) {
-			return (struct field_lookup){.tag = FIELD_LOOKUP_FOUND, .index = i};
+			return (struct field_lookup) {.tag = FIELD_LOOKUP_FOUND, .index = i};
 		}
 	}
 
@@ -344,15 +346,54 @@ static struct field_lookup find_field(StructType const * const type, PyObject * 
 		int const compared = PyUnicode_Compare(name, PyTuple_GET_ITEM(type->struct_field_names, i));
 
 		if (compared == 0) {
-			return (struct field_lookup){.tag = FIELD_LOOKUP_FOUND, .index = i};
+			return (struct field_lookup) {.tag = FIELD_LOOKUP_FOUND, .index = i};
 		}
 
 		if (compared == -1 && PyErr_Occurred()) {
-			return (struct field_lookup){.tag = FIELD_LOOKUP_ERROR};
+			return (struct field_lookup) {.tag = FIELD_LOOKUP_ERROR};
 		}
 	}
 
-	return (struct field_lookup){.tag = FIELD_LOOKUP_MISSING};
+	return (struct field_lookup) {.tag = FIELD_LOOKUP_MISSING};
+}
+
+static enum result require_field(
+	StructType const * const type,
+	PyObject * const name,
+	char const * const operation,
+	Py_ssize_t * const index
+) {
+	if (!PyUnicode_Check(name)) {
+		PyErr_Format(
+			PyExc_TypeError,
+			"%s field name must be str, not %.200s",
+			operation,
+			Py_TYPE(name)->tp_name
+		);
+
+		return RESULT_ERROR;
+	}
+
+	struct field_lookup const found = find_field(type, name);
+
+	switch (found.tag) {
+		case FIELD_LOOKUP_ERROR:
+			return RESULT_ERROR;
+		case FIELD_LOOKUP_MISSING:
+			PyErr_Format(
+				PyExc_AttributeError,
+				"%.200s has no field '%U'",
+				struct_type_name(type),
+				name
+			);
+
+			return RESULT_ERROR;
+		case FIELD_LOOKUP_FOUND:
+			*index = found.index;
+			return RESULT_OK;
+	}
+
+	Py_UNREACHABLE();
 }
 
 PyObject * Struct_get_state(PyObject * const self, PyObject * const noargs) {
@@ -374,22 +415,32 @@ PyObject * Struct_get_state(PyObject * const self, PyObject * const noargs) {
 		return NULL;
 	}
 
+	enum result collected = RESULT_OK;
+
+	STRUCT_BEGIN_CRITICAL_SECTION(self);
+
 	for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
 		PyObject * const name = PyTuple_GET_ITEM(type->struct_field_names, i);
-		PY_OWNED(value, struct_slot_ref(type, self, i));
+		PyObject * const value = *struct_slot(type, self, i);
 
 		if (value == NULL) {
 			if (PyList_Append(unset_names, name) < 0) {
-				return NULL;
+				collected = RESULT_ERROR;
+				break;
 			}
-
-			continue;
-		}
-
-		if (PyDict_SetItem(values, name, value) < 0) {
-			return NULL;
+		} else if (PyDict_SetItem(values, name, value) < 0) {
+			collected = RESULT_ERROR;
+			break;
 		}
 	}
+
+	STRUCT_END_CRITICAL_SECTION();
+
+	if (collected != RESULT_OK) {
+		return NULL;
+	}
+
+	PY_MOVABLE(instance_dict, NULL);
 
 	if (Py_TYPE(self)->tp_dictoffset != 0) {
 		PyObject * * const dict_slot = _PyObject_GetDictPtr(self);
@@ -403,6 +454,7 @@ PyObject * Struct_get_state(PyObject * const self, PyObject * const noargs) {
 
 			if (dict != NULL) {
 				*dict_slot = dict;
+				dict = Py_NewRef(dict);
 			}
 		}
 		STRUCT_END_CRITICAL_SECTION();
@@ -411,33 +463,10 @@ PyObject * Struct_get_state(PyObject * const self, PyObject * const noargs) {
 			return NULL;
 		}
 
-		PY_OWNED(snapshot, PyDict_Copy(dict));
+		instance_dict = PyDict_Copy(dict);
 
-		if (snapshot == NULL) {
+		if (instance_dict == NULL) {
 			return NULL;
-		}
-
-		Py_ssize_t position = 0;
-		PyObject * name = NULL;
-		PyObject * entry = NULL;
-
-		while (PyDict_Next(snapshot, &position, &name, &entry)) {
-			if (PyUnicode_Check(name)) {
-				struct field_lookup const found = find_field(type, name);
-
-				switch (found.tag) {
-					case FIELD_LOOKUP_ERROR:
-						return NULL;
-					case FIELD_LOOKUP_FOUND:
-						continue;
-					case FIELD_LOOKUP_MISSING:
-						break;
-				}
-			}
-
-			if (PyDict_SetItem(values, name, entry) < 0) {
-				return NULL;
-			}
 		}
 	}
 
@@ -447,7 +476,7 @@ PyObject * Struct_get_state(PyObject * const self, PyObject * const noargs) {
 		return NULL;
 	}
 
-	return PyTuple_Pack(2, values, unset);
+	return PyTuple_Pack(3, values, unset, instance_dict != NULL ? instance_dict : Py_None);
 }
 
 static enum result restore_unset(
@@ -471,121 +500,41 @@ static enum result restore_unset(
 static enum result validate_state(
 	StructType const * const type,
 	PyObject * const values,
-	PyObject * const unset_names,
-	bool const has_dict
+	PyObject * const unset_names
 ) {
 	Py_ssize_t position = 0;
 	PyObject * name = NULL;
 	PyObject * value = NULL;
 
 	while (PyDict_Next(values, &position, &name, &value)) {
-		if (!PyUnicode_Check(name)) {
-			if (!has_dict) {
-				PyErr_Format(
-					PyExc_TypeError,
-					"__setstate__() field name must be str, not %.200s",
-					Py_TYPE(name)->tp_name
-				);
+		Py_ssize_t index;
 
-				return RESULT_ERROR;
-			}
-
-			continue;
+		if (require_field(type, name, "__setstate__()", &index) != RESULT_OK) {
+			return RESULT_ERROR;
 		}
 
-		struct field_lookup const found = find_field(type, name);
+		int const also_unset = PySequence_Contains(unset_names, name);
 
-		switch (found.tag) {
-			case FIELD_LOOKUP_ERROR:
-				return RESULT_ERROR;
-			case FIELD_LOOKUP_MISSING:
-				if (!has_dict) {
-					PyErr_Format(
-						PyExc_AttributeError,
-						"%.200s has no field '%U'",
-						struct_type_name(type),
-						name
-					);
+		if (also_unset < 0) {
+			return RESULT_ERROR;
+		}
 
-					return RESULT_ERROR;
-				}
+		if (also_unset == 1) {
+			PyErr_Format(PyExc_TypeError, "field '%U' listed as both set and unset", name);
 
-				break;
-			case FIELD_LOOKUP_FOUND:
-				int const also_unset = PySequence_Contains(unset_names, name);
-
-				if (also_unset < 0) {
-					return RESULT_ERROR;
-				}
-
-				if (also_unset == 1) {
-					PyErr_Format(PyExc_TypeError, "field '%U' listed as both set and unset", name);
-
-					return RESULT_ERROR;
-				}
+			return RESULT_ERROR;
 		}
 	}
 
 	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(unset_names); ++i) {
-		PyObject * const unset_name = PyTuple_GET_ITEM(unset_names, i);
+		Py_ssize_t index;
 
-		if (!PyUnicode_Check(unset_name)) {
-			PyErr_Format(
-				PyExc_TypeError,
-				"__setstate__() field name must be str, not %.200s",
-				Py_TYPE(unset_name)->tp_name
-			);
-
+		if (require_field(type, PyTuple_GET_ITEM(unset_names, i), "__setstate__()", &index) != RESULT_OK) {
 			return RESULT_ERROR;
-		}
-
-		struct field_lookup const found = find_field(type, unset_name);
-
-		switch (found.tag) {
-			case FIELD_LOOKUP_ERROR:
-				return RESULT_ERROR;
-			case FIELD_LOOKUP_MISSING:
-				PyErr_Format(
-					PyExc_AttributeError,
-					"%.200s has no field '%U'",
-					struct_type_name(type),
-					unset_name
-				);
-
-				return RESULT_ERROR;
-			case FIELD_LOOKUP_FOUND:
-				break;
 		}
 	}
 
 	return RESULT_OK;
-}
-
-static enum result restore_dict_entry(
-	PyObject * const self,
-	PyObject * const name,
-	PyObject * const value
-) {
-	PyObject * * const dict_slot = _PyObject_GetDictPtr(self);
-	PyObject * dict = NULL;
-
-	STRUCT_BEGIN_CRITICAL_SECTION(self);
-	dict = *dict_slot;
-
-	if (dict == NULL) {
-		dict = PyDict_New();
-
-		if (dict != NULL) {
-			*dict_slot = dict;
-		}
-	}
-	STRUCT_END_CRITICAL_SECTION();
-
-	if (dict == NULL) {
-		return RESULT_ERROR;
-	}
-
-	return PyObject_SetItem(dict, name, value) == 0 ? RESULT_OK : RESULT_ERROR;
 }
 
 PyObject * Struct_set_state(PyObject * const self, PyObject * const state) {
@@ -611,24 +560,35 @@ PyObject * Struct_set_state(PyObject * const self, PyObject * const state) {
 
 	PyObject * values = NULL;
 	PyObject * unset_names = NULL;
+	PyObject * instance_dict = NULL;
 
 	if (
 		!PyArg_ParseTuple(
 			state,
-			"O!O!:__setstate__",
+			"O!O!O:__setstate__",
 			&PyDict_Type,
 			&values,
 			&PyTuple_Type,
-			&unset_names
+			&unset_names,
+			&instance_dict
 		)
 	) {
 		return NULL;
 	}
 
-	StructType const * const type = struct_type_of(self);
-	bool const has_dict = Py_TYPE(self)->tp_dictoffset != 0;
+	if (instance_dict != Py_None && !PyDict_Check(instance_dict)) {
+		PyErr_Format(
+			PyExc_TypeError,
+			"__setstate__() argument 3 must be a dict or None, not %.200s",
+			Py_TYPE(instance_dict)->tp_name
+		);
 
-	if (validate_state(type, values, unset_names, has_dict) != RESULT_OK) {
+		return NULL;
+	}
+
+	StructType const * const type = struct_type_of(self);
+
+	if (validate_state(type, values, unset_names) != RESULT_OK) {
 		return NULL;
 	}
 
@@ -637,56 +597,54 @@ PyObject * Struct_set_state(PyObject * const self, PyObject * const state) {
 	PyObject * value = NULL;
 
 	while (PyDict_Next(values, &position, &name, &value)) {
-		struct field_lookup const found = (
-			PyUnicode_Check(name) ? find_field(type, name) :
-			(struct field_lookup){.tag = FIELD_LOOKUP_MISSING}
-		);
+		Py_ssize_t index;
 
-		switch (found.tag) {
-			case FIELD_LOOKUP_ERROR:
-				return NULL;
-			case FIELD_LOOKUP_MISSING:
-				break;
-			case FIELD_LOOKUP_FOUND:
-				if (write_slot(type, self, found.index, value) != RESULT_OK) {
-					return NULL;
-				}
+		if (require_field(type, name, "__setstate__()", &index) != RESULT_OK) {
+			return NULL;
+		}
+
+		if (write_slot(type, self, index, value) != RESULT_OK) {
+			return NULL;
 		}
 	}
 
 	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(unset_names); ++i) {
-		struct field_lookup const found = find_field(type, PyTuple_GET_ITEM(unset_names, i));
+		Py_ssize_t index;
 
-		switch (found.tag) {
-			case FIELD_LOOKUP_ERROR:
-				return NULL;
-			case FIELD_LOOKUP_MISSING:
-				Py_UNREACHABLE();
-			case FIELD_LOOKUP_FOUND:
-				if (restore_unset(type, self, found.index) != RESULT_OK) {
-					return NULL;
-				}
+		if (require_field(type, PyTuple_GET_ITEM(unset_names, i), "__setstate__()", &index) != RESULT_OK) {
+			return NULL;
+		}
+
+		if (restore_unset(type, self, index) != RESULT_OK) {
+			return NULL;
 		}
 	}
 
-	position = 0;
+	if (Py_TYPE(self)->tp_dictoffset != 0) {
+		PyObject * * const dict_slot = _PyObject_GetDictPtr(self);
+		PY_MOVABLE(dict, NULL);
 
-	while (PyDict_Next(values, &position, &name, &value)) {
-		struct field_lookup const found = (
-			PyUnicode_Check(name) ? find_field(type, name) :
-			(struct field_lookup){.tag = FIELD_LOOKUP_MISSING}
-		);
+		STRUCT_BEGIN_CRITICAL_SECTION(self);
+		dict = Py_XNewRef(*dict_slot);
 
-		switch (found.tag) {
-			case FIELD_LOOKUP_ERROR:
-				return NULL;
-			case FIELD_LOOKUP_MISSING:
-				if (restore_dict_entry(self, name, value) != RESULT_OK) {
-					return NULL;
-				}
-				break;
-			case FIELD_LOOKUP_FOUND:
-				break;
+		if (dict == NULL) {
+			dict = PyDict_New();
+
+			if (dict != NULL) {
+				*dict_slot = dict;
+				dict = Py_NewRef(dict);
+			}
+		}
+		STRUCT_END_CRITICAL_SECTION();
+
+		if (dict == NULL) {
+			return NULL;
+		}
+
+		PyDict_Clear(dict);
+
+		if (instance_dict != Py_None && PyDict_Update(dict, instance_dict) < 0) {
+			return NULL;
 		}
 	}
 

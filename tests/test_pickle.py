@@ -211,7 +211,7 @@ def test_an_unset_field_round_trips_as_unset():
 def test_an_unwritten_required_field_round_trips_as_unset():
     instance = FrozenWithInit()
 
-    assert instance.__getstate__() == ({"x": 1}, ("y",))
+    assert instance.__getstate__() == ({"x": 1}, ("y",), None)
 
     restored = pickle.loads(pickle.dumps(instance))
 
@@ -249,21 +249,21 @@ def test_zero_field_and_root_instances_round_trip_copy_and_deepcopy():
         assert copy.deepcopy(instance) is not instance
 
 
-def test_the_state_is_the_values_and_the_unset_names():
-    assert Plain(1, 2).__getstate__() == ({"x": 1, "y": 2}, ())
+def test_the_state_is_the_values_the_unset_names_and_the_dict():
+    assert Plain(1, 2).__getstate__() == ({"x": 1, "y": 2}, (), None)
 
     instance = Mutable(1, 2)
     del instance.y
 
-    assert instance.__getstate__() == ({"x": 1}, ("y",))
+    assert instance.__getstate__() == ({"x": 1}, ("y",), None)
 
 
 def test_an_unknown_name_in_the_state_is_refused():
     with pytest.raises(AttributeError, match="has no field"):
-        Plain(1, 2).__setstate__(({"x": 1, "z": 2}, ()))
+        Plain(1, 2).__setstate__(({"x": 1, "z": 2}, (), None))
 
     with pytest.raises(AttributeError, match="has no field"):
-        Plain(1, 2).__setstate__(({}, ("z",)))
+        Plain(1, 2).__setstate__(({}, ("z",), None))
 
 
 def test_a_non_tuple_state_is_refused():
@@ -332,13 +332,13 @@ def test_a_bad_state_is_refused_atomically():
     instance = Plain(10, 20)
 
     with pytest.raises(AttributeError, match="has no field"):
-        instance.__setstate__(({"x": 1, "z": 2}, ()))
+        instance.__setstate__(({"x": 1, "z": 2}, (), None))
 
     assert instance.x == 10
     assert instance.y == 20
 
     with pytest.raises(AttributeError, match="has no field"):
-        instance.__setstate__(({}, ("y", "z")))
+        instance.__setstate__(({}, ("y", "z"), None))
 
     assert instance.x == 10
     assert instance.y == 20
@@ -346,22 +346,22 @@ def test_a_bad_state_is_refused_atomically():
 
 def test_a_field_listed_as_both_set_and_unset_is_refused():
     with pytest.raises(TypeError, match="both set and unset"):
-        Plain(1, 2).__setstate__(({"x": 1}, ("x",)))
+        Plain(1, 2).__setstate__(({"x": 1}, ("x",), None))
 
 
 def test_a_non_str_field_name_in_the_state_is_refused():
     with pytest.raises(TypeError, match="must be str"):
-        Plain(1, 2).__setstate__(({1: "bad"}, ()))
+        Plain(1, 2).__setstate__(({1: "bad"}, (), None))
 
     with pytest.raises(TypeError, match="must be str"):
-        Plain(1, 2).__setstate__(({}, (1,)))
+        Plain(1, 2).__setstate__(({}, (1,), None))
 
 
 def test_the_instance_dict_round_trips_through_pickle_and_copy():
     instance = WithDict(1)
     instance.extra = "world"
 
-    assert instance.__getstate__() == ({"x": 1, "extra": "world"}, ())
+    assert instance.__getstate__() == ({"x": 1}, (), {"extra": "world"})
 
     restored = pickle.loads(pickle.dumps(instance))
     assert restored.extra == "world"
@@ -369,26 +369,39 @@ def test_the_instance_dict_round_trips_through_pickle_and_copy():
     assert copy.deepcopy(instance).extra == "world"
 
 
-def test_setstate_restores_non_field_names_into_the_instance_dict():
+def test_setstate_restores_the_instance_dict_from_the_third_element():
     instance = WithDict(1)
-    instance.__setstate__(({"x": 9, "extra": "world", 1: "entry"}, ()))
+    instance.__setstate__(({"x": 9}, (), {"extra": "world", 1: "entry"}))
 
     assert instance.x == 9
-    assert instance.extra == "world"
-    assert instance.__dict__[1] == "entry"
+    assert instance.__dict__ == {"extra": "world", 1: "entry"}
 
 
-def test_a_dict_key_naming_a_field_stays_out_of_the_state():
+def test_a_null_instance_dict_slot_round_trips():
+    instance = WithDict(1)
+
+    pickle.dumps(instance)
+
+    assert instance.__dict__ == {}
+
+    restored = pickle.loads(pickle.dumps(instance))
+    assert restored == instance
+    assert restored.__dict__ == {}
+
+    instance.__setstate__(({}, (), None))
+    assert instance.__dict__ == {}
+
+
+def test_a_dict_key_naming_a_field_is_preserved_in_the_instance_dict():
     instance = WithDict(1)
     instance.extra = "world"
     instance.__dict__["x"] = "shadow"
 
-    assert instance.__getstate__() == ({"x": 1, "extra": "world"}, ())
+    assert instance.__getstate__() == ({"x": 1}, (), {"x": "shadow", "extra": "world"})
 
     restored = pickle.loads(pickle.dumps(instance))
     assert restored.x == 1
-    assert restored.extra == "world"
-    assert "x" not in restored.__dict__
+    assert restored.__dict__ == {"x": "shadow", "extra": "world"}
     assert copy.copy(instance).x == 1
     assert copy.deepcopy(instance).x == 1
 
@@ -398,14 +411,60 @@ def test_a_shadowing_dict_key_does_not_make_an_unset_field_refuse_the_state():
     instance.__dict__["x"] = "shadow"
     instance.__dict__["extra"] = "world"
 
-    assert instance.__getstate__() == ({"extra": "world"}, ("x",))
+    assert instance.__getstate__() == ({}, ("x",), {"x": "shadow", "extra": "world"})
 
     restored = pickle.loads(pickle.dumps(instance))
 
     with pytest.raises(AttributeError):
         _ = restored.x
 
-    assert restored.extra == "world"
+    assert restored.__dict__ == {"x": "shadow", "extra": "world"}
+
+
+def test_setstate_replaces_the_instance_dict():
+    instance = WithDict(1)
+    instance.extra = "world"
+
+    instance.__setstate__(instance.__getstate__())
+
+    assert instance.__dict__ == {"extra": "world"}
+
+    instance.__dict__["stale"] = 1
+    instance.__setstate__(({"x": 5}, (), {"extra": "fresh"}))
+
+    assert instance.x == 5
+    assert instance.__dict__ == {"extra": "fresh"}
+
+
+def test_type_call_arguments_on_a_bodyless_struct_are_refused():
+    class TypeCallingMeta(type(Struct)):
+        def __call__(cls, *args, **kwargs):
+            return type.__call__(cls, *args, **kwargs)
+
+    class Bodyless(Struct, metaclass=TypeCallingMeta):
+        x: int
+        y: int = 0
+
+    assert Bodyless().y == 0
+
+    with pytest.raises(TypeError, match="takes no arguments"):
+        Bodyless(1, 2)
+
+
+def test_type_call_arguments_are_still_passed_to_a_body_init():
+    class TypeCallingMeta(type(Struct)):
+        def __call__(cls, *args, **kwargs):
+            return type.__call__(cls, *args, **kwargs)
+
+    class WithBodyInit(Struct, metaclass=TypeCallingMeta, frozen=False):
+        x: int
+
+        def __init__(self, both: int) -> None:
+            self.x = both
+
+    instance = WithBodyInit(7)
+
+    assert instance.x == 7
 
 
 def test_a_body_new_on_a_base_struct_survives_on_its_subclass():

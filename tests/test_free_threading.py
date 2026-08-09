@@ -251,10 +251,10 @@ def test_concurrent_pickling_while_another_thread_writes_it():
 
 def test_concurrent_getstate_while_another_thread_writes_the_instance_dict():
     """The dict half of __getstate__, which the racers above cannot reach:
-    none of them carries a __dict__. The merge reads the dict slot under the
-    instance's critical section and copies the dict under its own lock, and
-    this is the check that the result composes with concurrent attr-assigns
-    into that dict.
+    none of them carries a __dict__. The dict slot is read under the
+    instance's critical section and copied under the dict's own lock into the
+    state's third element, and this is the check that the result composes
+    with concurrent attr-assigns into that dict.
 
     saw_dict_entry pins that the branch actually ran, and restored.value
     stays 0 because the writer never touches the slot.
@@ -272,7 +272,7 @@ def test_concurrent_getstate_while_another_thread_writes_the_instance_dict():
         for i in range(rounds):
             state = shared.__getstate__()
 
-            if "extra" in state[0]:
+            if "extra" in state[2]:
                 saw_dict_entry[0] = True
 
             if i % 1000 == 0:

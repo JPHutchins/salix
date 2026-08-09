@@ -196,7 +196,7 @@ static inline struct slot_pair struct_slot_pair_ref(
 	theirs = Py_NewRef(theirs != NULL ? theirs : Py_None);
 	STRUCT_END_CRITICAL_SECTION2();
 
-	return (struct slot_pair){.mine = mine, .theirs = theirs};
+	return (struct slot_pair) {.mine = mine, .theirs = theirs};
 }
 
 /*
@@ -224,6 +224,10 @@ static inline void struct_slots_ref_or_none_into(
 
 static inline Py_ssize_t struct_required_count(StructType const * const type) {
 	return type->struct_field_count - type->struct_default_count;
+}
+
+static inline bool defines_own_init(StructType const * const struct_class) {
+	return struct_class->heap_type.ht_type.tp_init != PyBaseObject_Type.tp_init;
 }
 
 static inline PyObject * struct_tuple_or_empty(PyObject * const tuple) {
