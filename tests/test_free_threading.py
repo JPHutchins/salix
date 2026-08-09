@@ -30,6 +30,14 @@ class SealedPicklable(Struct):
     value: object
 
 
+class Dicted:
+    pass
+
+
+class DictCarrying(Struct, Dicted, frozen=False):
+    value: object
+
+
 def test_importing_does_not_re_enable_the_gil():
     assert not sys._is_gil_enabled()
 
@@ -201,9 +209,10 @@ def test_a_shared_struct_is_safe_to_read_while_another_thread_writes_it():
 
 def test_concurrent_pickling_while_another_thread_writes_it():
     """__getstate__ reads each slot under the same per-slot critical section
-    repr and == use, and __setstate__ writes through PyMember_SetOne like
-    set_field does; this is the check that pickle composes the two against
-    concurrent writers, which is the crash the reader tests above pinned.
+    repr and == use; this is the check that pickle composes that read against
+    concurrent writers on the same instance, which is the crash the reader
+    tests above pinned. Only the get half is under fire: loads creates a
+    fresh instance, so a restore never runs on a shared one.
 
     Survival is the assertion, because a segfault takes pytest with it. The
     value assertions tolerate any state the struct ever held: the writers only
@@ -238,6 +247,50 @@ def test_concurrent_pickling_while_another_thread_writes_it():
         role()
 
     run_on_every_thread(work)
+
+
+def test_concurrent_getstate_while_another_thread_writes_the_instance_dict():
+    """The dict half of __getstate__, which the racers above cannot reach:
+    none of them carries a __dict__. The merge reads the dict slot under the
+    instance's critical section and copies the dict under its own lock, and
+    this is the check that the result composes with concurrent attr-assigns
+    into that dict.
+
+    saw_dict_entry pins that the branch actually ran, and restored.value
+    stays 0 because the writer never touches the slot.
+    """
+
+    shared = DictCarrying(0)
+    rounds = ITERATIONS * 5
+    saw_dict_entry = [False]
+
+    def write():
+        for i in range(rounds):
+            shared.extra = i
+
+    def read_state_and_round_trip():
+        for i in range(rounds):
+            state = shared.__getstate__()
+
+            if "extra" in state[0]:
+                saw_dict_entry[0] = True
+
+            if i % 1000 == 0:
+                restored = pickle.loads(pickle.dumps(shared))
+                assert restored.value == 0
+
+    roles = iter(([write, read_state_and_round_trip] * THREADS)[:THREADS])
+    claim = threading.Lock()
+
+    def work():
+        with claim:
+            role = next(roles)
+
+        role()
+
+    run_on_every_thread(work)
+
+    assert saw_dict_entry[0]
 
 
 def test_a_shared_ordered_struct_is_safe_to_compare_while_another_thread_writes_it():

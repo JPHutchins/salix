@@ -393,17 +393,50 @@ PyObject * Struct_get_state(PyObject * const self, PyObject * const noargs) {
 
 	if (Py_TYPE(self)->tp_dictoffset != 0) {
 		PyObject * * const dict_slot = _PyObject_GetDictPtr(self);
-		PyObject * const dict = *dict_slot;
+		PY_MOVABLE(dict, NULL);
 
-		if (dict != NULL) {
-			Py_ssize_t position = 0;
-			PyObject * name = NULL;
-			PyObject * entry = NULL;
+		STRUCT_BEGIN_CRITICAL_SECTION(self);
+		dict = Py_XNewRef(*dict_slot);
 
-			while (PyDict_Next(dict, &position, &name, &entry)) {
-				if (PyDict_SetItem(values, name, entry) < 0) {
-					return NULL;
+		if (dict == NULL) {
+			dict = PyDict_New();
+
+			if (dict != NULL) {
+				*dict_slot = dict;
+			}
+		}
+		STRUCT_END_CRITICAL_SECTION();
+
+		if (dict == NULL) {
+			return NULL;
+		}
+
+		PY_OWNED(snapshot, PyDict_Copy(dict));
+
+		if (snapshot == NULL) {
+			return NULL;
+		}
+
+		Py_ssize_t position = 0;
+		PyObject * name = NULL;
+		PyObject * entry = NULL;
+
+		while (PyDict_Next(snapshot, &position, &name, &entry)) {
+			if (PyUnicode_Check(name)) {
+				struct field_lookup const found = find_field(type, name);
+
+				switch (found.tag) {
+					case FIELD_LOOKUP_ERROR:
+						return NULL;
+					case FIELD_LOOKUP_FOUND:
+						continue;
+					case FIELD_LOOKUP_MISSING:
+						break;
 				}
+			}
+
+			if (PyDict_SetItem(values, name, entry) < 0) {
+				return NULL;
 			}
 		}
 	}
