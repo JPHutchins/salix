@@ -910,6 +910,33 @@ def test_a_subclass_inherits_a_user_copy_instead_of_being_shadowed():
     assert copy.copy(instance) == "user_copy"
 
 
+def test_a_bodyless_struct_gaining_getnewargs_after_creation_still_copies():
+    instance = Plain(1, 2)
+
+    assert copy.copy(instance) == instance
+
+    try:
+        Plain.__getnewargs__ = lambda self: (self.x, self.y)
+
+        assert copy.copy(instance) == instance
+        assert copy.deepcopy(instance) == instance
+    finally:
+        del Plain.__getnewargs__
+
+
+def test_a_getattr_returning_none_does_not_break_copy():
+    class GetattrNone(Struct):
+        x: int
+
+        def __getattr__(self, name):
+            return None
+
+    instance = GetattrNone(5)
+
+    assert copy.copy(instance) == instance
+    assert copy.deepcopy(instance) == instance
+
+
 @pytest.mark.parametrize("protocol", [0, 1])
 def test_protocols_0_and_1_are_deliberately_refused(protocol):
     """The old protocols restore through copyreg._reconstructor, whose

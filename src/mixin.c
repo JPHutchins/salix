@@ -181,6 +181,12 @@ static PyObject * deepcopy_object(PyObject * const object, PyObject * const memo
 
 static PyObject * reconstruction_args_of(PyObject * const self, PyObject * * const keywords) {
 	*keywords = NULL;
+	StructType const * const type = struct_type_of(self);
+
+	if (!type->struct_declares_getnewargs) {
+		return PyTuple_New(0);
+	}
+
 	PY_OWNED(ex, optional_attribute(self, "__getnewargs_ex__"));
 
 	if (ex != NULL) {
