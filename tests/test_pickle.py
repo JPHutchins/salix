@@ -12,6 +12,7 @@ from salix import Struct, set_field
 init_calls: list[int] = []
 post_init_calls: list[int] = []
 body_new_calls: list[str] = []
+reduce_calls: list[str] = []
 
 
 class Plain(Struct):
@@ -151,6 +152,38 @@ class WithGetNewArgs(Struct):
         return (self.x,)
 
 
+class WithGetNewArgsEx(Struct):
+    x: int
+
+    def __getnewargs_ex__(self):
+        return ((self.x,), {"x": self.x})
+
+
+class SelfRefGetNewArgs(Struct):
+    child: object = None
+
+    def __getnewargs__(self):
+        return (self,)
+
+
+class GenuineWithGNA(Struct):
+    x: int = 0
+
+    def __new__(cls, v: int = 0):
+        raise TypeError("genuine rejection")
+
+    def __getnewargs__(self):
+        return (self.x,)
+
+
+class WithReduce(Struct):
+    x: int = 0
+
+    def __reduce__(self):
+        reduce_calls.append("custom")
+        return (type(self), (), self.__getstate__())
+
+
 FACTORIES: dict[str, Callable[[], Struct]] = {
     "plain": lambda: Plain(1, 2),
     "mutable": lambda: Mutable(1, 2),
@@ -168,6 +201,7 @@ def _reset_call_records() -> None:
     init_calls.clear()
     post_init_calls.clear()
     body_new_calls.clear()
+    reduce_calls.clear()
 
 
 @pytest.mark.parametrize("protocol", [2, 5])
@@ -669,6 +703,68 @@ def test_setstate_dict_restore_is_atomic_on_a_failed_merge():
 
     assert instance.__dict__ == {"extra": "old", "keep": "this"}
     assert instance.x == 2
+
+
+@pytest.mark.parametrize("protocol", [2, 3])
+def test_protocols_2_and_3_round_trip_a_getnewargs_ex_struct(protocol):
+    instance = WithGetNewArgsEx(5)
+    restored = pickle.loads(pickle.dumps(instance, protocol=protocol))
+
+    assert restored == instance
+    assert restored.x == 5
+
+
+def test_a_direct_keyword_new_call_on_a_bodyless_struct_is_refused():
+    with pytest.raises(TypeError, match="takes no keyword arguments"):
+        WithGetNewArgsEx.__new__(WithGetNewArgsEx, x=1)
+
+
+def test_a_self_referential_getnewargs_deepcopies_without_recursion():
+    instance = SelfRefGetNewArgs()
+    set_field(instance, "child", instance)
+
+    deep = copy.deepcopy(instance)
+
+    assert deep.child is deep
+
+
+def test_a_genuine_body_typeerror_propagates_with_getnewargs_under_construction():
+    with pytest.raises(TypeError, match="genuine rejection"):
+        GenuineWithGNA(5)
+
+    with pytest.raises(TypeError, match="genuine rejection"):
+        GenuineWithGNA.__new__(GenuineWithGNA, 5)
+
+
+def test_a_custom_reduce_controls_copy_and_deepcopy():
+    instance = WithReduce()
+
+    copied = copy.copy(instance)
+    deep = copy.deepcopy(instance)
+
+    assert reduce_calls == ["custom", "custom"]
+    assert copied == instance
+    assert deep == instance
+
+
+def test_setstate_refills_the_existing_dict_in_place_when_safe():
+    instance = WithDict(1)
+    instance.extra = "world"
+    reference = instance.__dict__
+
+    instance.__setstate__(({"x": 2}, (), {"new": "val"}))
+
+    assert instance.__dict__ is reference
+    assert reference == {"new": "val"}
+
+
+def test_setstate_with_none_third_element_clears_the_instance_dict():
+    instance = WithDict(1)
+    instance.extra = "world"
+
+    instance.__setstate__(({}, (), None))
+
+    assert instance.__dict__ == {}
 
 
 @pytest.mark.parametrize("protocol", [0, 1])

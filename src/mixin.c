@@ -319,14 +319,10 @@ static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) 
 		return NULL;
 	}
 
-	PY_OWNED(deep_args, deepcopy_object(args, memo));
-	PY_OWNED(deep_keywords, keywords != NULL ? deepcopy_object(keywords, memo) : NULL);
-
-	if (deep_args == NULL || (keywords != NULL && deep_keywords == NULL)) {
-		return NULL;
-	}
-
-	PY_MOVABLE(created, cls->tp_new(cls, deep_args, deep_keywords));
+	/* Create the shell with the raw reconstruction arguments, then register it
+	 * in the memo before deep-copying the state, so a __getnewargs__ output that
+	 * references self resolves to the copy instead of re-entering deepcopy. */
+	PY_MOVABLE(created, cls->tp_new(cls, args, keywords));
 
 	if (created == NULL) {
 		return NULL;
