@@ -34,6 +34,7 @@ typedef struct {
 
 	bool struct_resolves_body_eq;
 	bool struct_declares_getnewargs;
+	bool struct_declares_getnewargs_ex;
 } StructType;
 
 /*

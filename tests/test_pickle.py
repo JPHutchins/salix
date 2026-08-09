@@ -159,11 +159,50 @@ class WithGetNewArgsEx(Struct):
         return ((self.x,), {"x": self.x})
 
 
+class WithGetNewArgsExKeywordOnly(Struct):
+    x: int
+
+    def __getnewargs_ex__(self):
+        return ((), {"x": self.x})
+
+
 class SelfRefGetNewArgs(Struct):
     child: object = None
 
     def __getnewargs__(self):
         return (self,)
+
+
+class CoBaseNew:
+    def __new__(cls, v: int = 0):
+        body_new_calls.append("co_base_new")
+        return super().__new__(cls)
+
+
+class BodyBaseNew(Struct):
+    x: int = 0
+
+    def __new__(cls, v: int = 0):
+        body_new_calls.append("body_base_new")
+        return super().__new__(cls)
+
+
+class SubWithCoBaseNew(CoBaseNew, BodyBaseNew):
+    y: int = 1
+
+
+class ReduceCopyBase(Struct):
+    x: int = 0
+
+    def __copy__(self):
+        return "user_copy"
+
+    def __reduce__(self):
+        return (type(self), (), self.__getstate__())
+
+
+class SubOfReduceCopyBase(ReduceCopyBase):
+    y: int = 1
 
 
 class GenuineWithGNA(Struct):
@@ -648,8 +687,14 @@ def test_a_class_declaring_getnewargs_round_trips_copy_and_pickle():
     assert copy.copy(instance) == instance
     assert pickle.loads(pickle.dumps(instance)) == instance
 
-    with pytest.raises(TypeError, match="takes no positional arguments"):
-        WithGetNewArgs.__new__(WithGetNewArgs, 5)
+    with pytest.raises(TypeError, match="takes no keyword arguments"):
+        WithGetNewArgs.__new__(WithGetNewArgs, 5, x=5)
+
+
+def test_a_direct_posonly_new_call_on_a_getnewargs_struct_is_reconstruction_capable():
+    instance = WithGetNewArgs(5)
+
+    assert copy.copy(instance) == instance
 
 
 def test_a_bodyless_struct_keeps_the_plain_new_path():
@@ -714,9 +759,23 @@ def test_protocols_2_and_3_round_trip_a_getnewargs_ex_struct(protocol):
     assert restored.x == 5
 
 
+@pytest.mark.parametrize("protocol", [2, 3])
+def test_protocols_2_and_3_round_trip_a_keyword_only_getnewargs_ex_struct(protocol):
+    instance = WithGetNewArgsExKeywordOnly(5)
+    restored = pickle.loads(pickle.dumps(instance, protocol=protocol))
+
+    assert restored == instance
+    assert restored.x == 5
+
+
 def test_a_direct_keyword_new_call_on_a_bodyless_struct_is_refused():
     with pytest.raises(TypeError, match="takes no keyword arguments"):
-        WithGetNewArgsEx.__new__(WithGetNewArgsEx, x=1)
+        Plain.__new__(Plain, x=1)
+
+
+def test_a_direct_keyword_new_call_on_a_getnewargs_struct_is_refused():
+    with pytest.raises(TypeError, match="takes no keyword arguments"):
+        WithGetNewArgs.__new__(WithGetNewArgs, x=1)
 
 
 def test_a_self_referential_getnewargs_deepcopies_without_recursion():
@@ -765,6 +824,20 @@ def test_setstate_with_none_third_element_clears_the_instance_dict():
     instance.__setstate__(({}, (), None))
 
     assert instance.__dict__ == {}
+
+
+def test_a_co_base_earlier_in_the_mro_supplies_the_body_new():
+    body_new_calls.clear()
+    instance = SubWithCoBaseNew.__new__(SubWithCoBaseNew)
+
+    assert body_new_calls == ["co_base_new", "body_base_new"]
+    assert instance.y == 1
+
+
+def test_a_subclass_inherits_a_user_copy_instead_of_being_shadowed():
+    instance = SubOfReduceCopyBase()
+
+    assert copy.copy(instance) == "user_copy"
 
 
 @pytest.mark.parametrize("protocol", [0, 1])

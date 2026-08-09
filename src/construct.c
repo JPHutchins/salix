@@ -707,10 +707,18 @@ PyObject * Struct_set_state(PyObject * const self, PyObject * const state) {
 			if (dict_merge_is_safe(instance_dict)) {
 				/* Every key has a C-level hash and equality, so the merge cannot
 				 * call into Python and fail mid-way; refill the existing dict in
-				 * place and keep external references to it alive. */
+				 * place and keep external references to it alive. Copy the
+				 * incoming entries up front, so a failure leaves the existing
+				 * dict untouched. */
+				PY_MOVABLE(fresh, PyDict_New());
+
+				if (fresh == NULL || PyDict_Update(fresh, instance_dict) < 0) {
+					return NULL;
+				}
+
 				PyDict_Clear(dict);
 
-				if (PyDict_Update(dict, instance_dict) < 0) {
+				if (PyDict_Update(dict, fresh) < 0) {
 					return NULL;
 				}
 			} else {
