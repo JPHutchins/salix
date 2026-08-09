@@ -160,7 +160,7 @@ def observe(cls: type) -> Behaviour:
     try:
         setattr(instance(cls), cls.__struct_fields__[0], 99)
         frozen = False
-    except (TypeError, IndexError):
+    except TypeError:
         frozen = True
 
     return Behaviour(
@@ -804,4 +804,7 @@ def test_a_single_base_asking_to_drop_an_inherited_weakref_slot_is_the_same_bug(
 
     without = build((Weak,), field="fresh", weakref=False)
 
-    assert not is_a_class(without) or observe(without).weakref is False
+    if isinstance(without, Refused):
+        assert "weakref=False is refused" in without.message
+    else:
+        assert observe(without).weakref is False
