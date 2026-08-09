@@ -137,6 +137,7 @@ static enum result reject_unless_planned(
 static enum result install_post_init(StructType * struct_class);
 static bool defines_own_init(StructType const * struct_class);
 static PyObject * Struct_new_wrapper(PyObject * self, PyObject * arguments, PyObject * keywords);
+static bool is_struct_new_wrapper(PyObject * wrapper);
 static PyMethodDef struct_new_methoddef[];
 static enum result install_new_wrapper(StructType * struct_class);
 static PyObject * StructMeta_call(PyObject * self, PyObject * args, PyObject * keywords);
@@ -1137,6 +1138,12 @@ static PyObject * Struct_new_wrapper(
 	PyObject * const arguments,
 	PyObject * const keywords
 ) {
+	if (keywords != NULL && PyDict_GET_SIZE(keywords) > 0) {
+		PyErr_SetString(PyExc_TypeError, "__new__() takes no keyword arguments");
+
+		return NULL;
+	}
+
 	PyObject * arg0 = NULL;
 
 	if (!PyArg_UnpackTuple(arguments, "__new__", 1, 1, &arg0)) {
@@ -1190,18 +1197,52 @@ static PyMethodDef struct_new_methoddef[] = {
 	{.ml_name = NULL},
 };
 
+static bool is_struct_new_wrapper(PyObject * const wrapper) {
+	return (
+		PyCFunction_Check(wrapper) &&
+		PyCFunction_GET_FUNCTION(wrapper) == _PyCFunction_CAST(Struct_new_wrapper)
+	);
+}
+
 static enum result install_new_wrapper(StructType * const struct_class) {
+	PyObject * const mro = struct_class->heap_type.ht_type.tp_mro;
+
+	if (mro != NULL) {
+		for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); ++i) {
+			PyObject * const entry = PyTuple_GET_ITEM(mro, i);
+
+			if (
+				entry == (PyObject *) &PyBaseObject_Type ||
+				entry == (PyObject *) &StructMixin_Type
+			) {
+				continue;
+			}
+
+			PY_OWNED(dict, struct_type_dict((PyTypeObject *) entry));
+
+			if (dict == NULL) {
+				return RESULT_ERROR;
+			}
+
+			PyObject * const declared = PyDict_GetItemString(dict, "__new__");
+
+			if (declared == NULL) {
+				if (PyErr_Occurred()) {
+					return RESULT_ERROR;
+				}
+
+				continue;
+			}
+
+			if (!is_struct_new_wrapper(declared)) {
+				return RESULT_OK;
+			}
+		}
+	}
+
 	PY_OWNED(dict, struct_type_dict(&struct_class->heap_type.ht_type));
 
 	if (dict == NULL) {
-		return RESULT_ERROR;
-	}
-
-	if (PyDict_GetItemString(dict, "__new__") != NULL) {
-		return RESULT_OK;
-	}
-
-	if (PyErr_Occurred()) {
 		return RESULT_ERROR;
 	}
 

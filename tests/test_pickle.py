@@ -1,5 +1,6 @@
 import copy
 import pickle
+from collections.abc import Callable
 
 import pytest
 
@@ -10,6 +11,7 @@ from salix import Struct, set_field
 
 init_calls: list[int] = []
 post_init_calls: list[int] = []
+body_new_calls: list[str] = []
 
 
 class Plain(Struct):
@@ -63,7 +65,27 @@ class MutableDefault(Struct, frozen=False):
     xs: list = []  # noqa: RUF012 -- the copy is the feature under test
 
 
-FACTORIES = {
+class Dicted:
+    pass
+
+
+class WithDict(Struct, Dicted, frozen=False):
+    x: int
+
+
+class WithBodyNew(Struct):
+    x: int
+
+    def __new__(cls):
+        body_new_calls.append("with_body_new")
+        return super().__new__(cls)
+
+
+class ChildOfBodyNew(WithBodyNew):
+    y: int = 9
+
+
+FACTORIES: dict[str, Callable[[], Struct]] = {
     "plain": lambda: Plain(1, 2),
     "mutable": lambda: Mutable(1, 2),
     "with_init": lambda: WithInit(7),
@@ -73,6 +95,13 @@ FACTORIES = {
     "with_post_init": lambda: WithPostInit(1),
     "mutable_default": MutableDefault,
 }
+
+
+@pytest.fixture(autouse=True)
+def _reset_call_records() -> None:
+    init_calls.clear()
+    post_init_calls.clear()
+    body_new_calls.clear()
 
 
 @pytest.mark.parametrize("protocol", [2, 5])
@@ -287,6 +316,77 @@ def test_new_refuses_a_non_subtype():
 def test_new_refuses_extra_arguments():
     with pytest.raises(TypeError):
         Plain.__new__(Plain, 1)
+
+
+def test_new_refuses_keyword_arguments():
+    with pytest.raises(TypeError, match="takes no keyword arguments"):
+        Plain.__new__(Plain, x=5)
+
+
+def test_object_new_of_a_struct_class_is_refused():
+    with pytest.raises(TypeError, match="is not safe"):
+        object.__new__(Plain)
+
+
+def test_a_bad_state_is_refused_atomically():
+    instance = Plain(10, 20)
+
+    with pytest.raises(AttributeError, match="has no field"):
+        instance.__setstate__(({"x": 1, "z": 2}, ()))
+
+    assert instance.x == 10
+    assert instance.y == 20
+
+    with pytest.raises(AttributeError, match="has no field"):
+        instance.__setstate__(({}, ("y", "z")))
+
+    assert instance.x == 10
+    assert instance.y == 20
+
+
+def test_a_field_listed_as_both_set_and_unset_is_refused():
+    with pytest.raises(TypeError, match="both set and unset"):
+        Plain(1, 2).__setstate__(({"x": 1}, ("x",)))
+
+
+def test_a_non_str_field_name_in_the_state_is_refused():
+    with pytest.raises(TypeError, match="must be str"):
+        Plain(1, 2).__setstate__(({1: "bad"}, ()))
+
+    with pytest.raises(TypeError, match="must be str"):
+        Plain(1, 2).__setstate__(({}, (1,)))
+
+
+def test_the_instance_dict_round_trips_through_pickle_and_copy():
+    instance = WithDict(1)
+    instance.extra = "world"
+
+    assert instance.__getstate__() == ({"x": 1, "extra": "world"}, ())
+
+    restored = pickle.loads(pickle.dumps(instance))
+    assert restored.extra == "world"
+    assert copy.copy(instance).extra == "world"
+    assert copy.deepcopy(instance).extra == "world"
+
+
+def test_setstate_restores_non_field_names_into_the_instance_dict():
+    instance = WithDict(1)
+    instance.__setstate__(({"x": 9, "extra": "world", 1: "entry"}, ()))
+
+    assert instance.x == 9
+    assert instance.extra == "world"
+    assert instance.__dict__[1] == "entry"
+
+
+def test_a_body_new_on_a_base_struct_survives_on_its_subclass():
+    instance = ChildOfBodyNew.__new__(ChildOfBodyNew)
+
+    assert body_new_calls == ["with_body_new"]
+
+    restored = pickle.loads(pickle.dumps(instance))
+
+    assert body_new_calls == ["with_body_new"]
+    assert restored == instance
 
 
 @pytest.mark.parametrize("protocol", [0, 1])
