@@ -861,16 +861,13 @@ def test_a_custom_reduce_controls_copy_and_deepcopy():
     assert deep == instance
 
 
-def test_setstate_refills_the_instance_dict_in_place_when_the_merge_is_safe():
+def test_setstate_swaps_the_instance_dict_for_atomicity():
     instance = WithDict(1)
     instance.extra = "world"
-    reference = instance.__dict__
 
     instance.__setstate__(({"x": 2}, (), {"new": "val"}))
 
-    assert instance.__dict__ is reference
     assert instance.__dict__ == {"new": "val"}
-    assert reference == {"new": "val"}
 
 
 def test_setstate_with_none_third_element_clears_the_instance_dict():
@@ -999,20 +996,26 @@ def test_setstate_refuses_a_duplicate_unset_name():
     assert instance.beta == 2
 
 
-def test_setstate_none_and_safe_dict_branches_agree_on_aliasing():
+def test_setstate_replaces_the_instance_dict_for_atomicity():
+    """The dict-restore builds the replacement up front and swaps it in only on
+    success, so a failing merge leaves the instance untouched. The swap replaces
+    the dict object; an external reference to the previous dict goes stale,
+    which is the accepted cost of atomicity. The None branch clears the existing
+    dict in place.
+    """
+
     instance = WithDict(1)
     instance.extra = "world"
     reference = instance.__dict__
 
     instance.__setstate__(({"x": 2}, (), {"new": "val"}))
 
-    assert instance.__dict__ is reference
-    assert reference == {"new": "val"}
+    assert instance.__dict__ == {"new": "val"}
+    assert reference == {"extra": "world"}
 
     instance.__setstate__(({}, (), None))
 
-    assert instance.__dict__ is reference
-    assert reference == {}
+    assert instance.__dict__ == {}
 
 @pytest.mark.parametrize("protocol", [0, 1])
 def test_protocols_0_and_1_are_deliberately_refused(protocol):
@@ -1022,3 +1025,22 @@ def test_protocols_0_and_1_are_deliberately_refused(protocol):
 
     with pytest.raises(TypeError):
         pickle.dumps(Plain(1, 2), protocol=protocol)
+
+
+def test_deepcopy_of_a_string_reduce_returns_the_object_unchanged():
+    """stdlib copy.deepcopy handles a string reduce result by returning the
+    object itself; Struct_deepcopy must match, so deepcopy and copy agree.
+    """
+
+    class StrReduce(Struct):
+        x: int
+
+        def __reduce__(self):
+            return "salix.StrReduce"
+
+    instance = StrReduce(1)
+
+    import copy
+
+    assert copy.deepcopy(instance) is instance
+    assert copy.copy(instance) is instance

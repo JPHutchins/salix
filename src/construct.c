@@ -471,18 +471,25 @@ static PyObject * instance_dict_ref(PyObject * const self) {
 
 	/* A managed-dict type with inline values can hold instance attributes even
 	 * with a null dict pointer. Materialize to read them; if that yields an
-	 * empty dict, restore the null slot so getstate stays read-only. */
+	 * empty dict, restore the null slot so getstate stays read-only. The whole
+	 * materialize-and-restore runs under one acquisition so a concurrent writer
+	 * cannot store between the size check and the null restore. */
 #if PY_VERSION_HEX >= 0x030B0000
 	if (Py_TYPE(self)->tp_flags & STRUCT_TPFLAGS_INLINE_VALUES) {
 		PyObject * * const slot = _PyObject_GetDictPtr(self);
-		PyObject * const materialized = slot != NULL ? *slot : NULL;
+		PyObject * materialized = NULL;
+
+		STRUCT_BEGIN_CRITICAL_SECTION(self);
+		materialized = slot != NULL ? *slot : NULL;
 
 		if (materialized != NULL && PyDict_GET_SIZE(materialized) == 0) {
-			STRUCT_BEGIN_CRITICAL_SECTION(self);
 			*slot = NULL;
-			STRUCT_END_CRITICAL_SECTION();
 			Py_DECREF(materialized);
-		} else if (materialized != NULL) {
+			materialized = NULL;
+		}
+		STRUCT_END_CRITICAL_SECTION();
+
+		if (materialized != NULL) {
 			return Py_NewRef(materialized);
 		}
 	}
@@ -672,30 +679,6 @@ error:
 	return RESULT_ERROR;
 }
 
-static bool dict_key_is_safe(PyObject * const key) {
-	return (
-		PyUnicode_CheckExact(key) ||
-		PyLong_CheckExact(key) ||
-		PyFloat_CheckExact(key) ||
-		PyBool_Check(key) ||
-		key == Py_None
-	);
-}
-
-static bool dict_merge_is_safe(PyObject * const mapping) {
-	Py_ssize_t position = 0;
-	PyObject * key = NULL;
-	PyObject * value = NULL;
-
-	while (PyDict_Next(mapping, &position, &key, &value)) {
-		if (!dict_key_is_safe(key)) {
-			return false;
-		}
-	}
-
-	return true;
-}
-
 PyObject * Struct_set_state(PyObject * const self, PyObject * const state) {
 	if (!is_struct(self)) {
 		PyErr_Format(
@@ -795,27 +778,22 @@ PyObject * Struct_set_state(PyObject * const self, PyObject * const state) {
 		if (instance_dict == Py_None) {
 			PyDict_Clear(dict);
 		} else if (instance_dict != dict) {
-			/* Build the replacement up front, so a failure leaves the existing
-			 * dict untouched either way. When every key is an exact builtin
-			 * whose hash and equality cannot call Python, clear and refill the
-			 * existing dict in place so external references to it keep working;
-			 * otherwise swap in the fresh dict, which replaces the object and
-			 * strands those references. The None branch above always clears in
-			 * place, so the two branches agree on the aliasing contract for the
-			 * safe case. */
+			/* Build the replacement up front and swap it in only on full
+			 * success, so a failing merge (a key whose hash or equality
+			 * raises, or a resize MemoryError) leaves the instance dict
+			 * untouched. The swap replaces the dict object; external
+			 * references to the previous dict go stale, which is the accepted
+			 * cost of atomicity. The None branch clears in place (it must, to
+			 * empty the existing object); the two branches' aliasing contracts
+			 * are documented rather than made identical, because in-place
+			 * refill cannot be atomic. */
 			PY_MOVABLE(fresh, PyDict_New());
 
 			if (fresh == NULL || PyDict_Update(fresh, instance_dict) < 0) {
 				return NULL;
 			}
 
-			if (dict_merge_is_safe(instance_dict)) {
-				PyDict_Clear(dict);
-
-				if (PyDict_Update(dict, fresh) < 0) {
-					return NULL;
-				}
-			} else if (PyObject_GenericSetDict(self, fresh, NULL) < 0) {
+			if (PyObject_GenericSetDict(self, fresh, NULL) < 0) {
 				return NULL;
 			}
 		}

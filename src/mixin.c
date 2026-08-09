@@ -188,6 +188,12 @@ static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) 
 		return NULL;
 	}
 
+	/* A string reduce result means "the object is its own copy", the same way
+	 * stdlib copy.deepcopy and copy.copy handle it. */
+	if (PyUnicode_Check(rv)) {
+		return Py_NewRef(self);
+	}
+
 	if (!PyTuple_Check(rv)) {
 		PyErr_Format(
 			PyExc_TypeError,
