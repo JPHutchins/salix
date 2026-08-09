@@ -92,15 +92,12 @@ PyObject * Struct_new(
 ) {
 	if (!defines_own_init((StructType *) struct_class)) {
 		Py_ssize_t const argument_count = (
-			PyTuple_GET_SIZE(arguments) + (keywords != NULL ? PyDict_GET_SIZE(keywords) : 0)
+			PyTuple_GET_SIZE(arguments) +
+			(keywords != NULL ? PyDict_GET_SIZE(keywords) : 0)
 		);
 
 		if (argument_count > 0) {
-			PyErr_Format(
-				PyExc_TypeError,
-				"%.200s() takes no arguments",
-				struct_class->tp_name
-			);
+			PyErr_Format(PyExc_TypeError, "%.200s() takes no arguments", struct_class->tp_name);
 
 			return NULL;
 		}
@@ -338,7 +335,7 @@ static enum result write_slot(
 static struct field_lookup find_field(StructType const * const type, PyObject * const name) {
 	for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
 		if (name == PyTuple_GET_ITEM(type->struct_field_names, i)) {
-			return (struct field_lookup) {.tag = FIELD_LOOKUP_FOUND, .index = i};
+			return (struct field_lookup){.tag = FIELD_LOOKUP_FOUND, .index = i};
 		}
 	}
 
@@ -346,15 +343,15 @@ static struct field_lookup find_field(StructType const * const type, PyObject * 
 		int const compared = PyUnicode_Compare(name, PyTuple_GET_ITEM(type->struct_field_names, i));
 
 		if (compared == 0) {
-			return (struct field_lookup) {.tag = FIELD_LOOKUP_FOUND, .index = i};
+			return (struct field_lookup){.tag = FIELD_LOOKUP_FOUND, .index = i};
 		}
 
 		if (compared == -1 && PyErr_Occurred()) {
-			return (struct field_lookup) {.tag = FIELD_LOOKUP_ERROR};
+			return (struct field_lookup){.tag = FIELD_LOOKUP_ERROR};
 		}
 	}
 
-	return (struct field_lookup) {.tag = FIELD_LOOKUP_MISSING};
+	return (struct field_lookup){.tag = FIELD_LOOKUP_MISSING};
 }
 
 static enum result require_field(
@@ -529,7 +526,10 @@ static enum result validate_state(
 	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(unset_names); ++i) {
 		Py_ssize_t index;
 
-		if (require_field(type, PyTuple_GET_ITEM(unset_names, i), "__setstate__()", &index) != RESULT_OK) {
+		if (
+			require_field(type, PyTuple_GET_ITEM(unset_names, i), "__setstate__()", &index) !=
+			RESULT_OK
+		) {
 			return RESULT_ERROR;
 		}
 	}
@@ -611,7 +611,10 @@ PyObject * Struct_set_state(PyObject * const self, PyObject * const state) {
 	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(unset_names); ++i) {
 		Py_ssize_t index;
 
-		if (require_field(type, PyTuple_GET_ITEM(unset_names, i), "__setstate__()", &index) != RESULT_OK) {
+		if (
+			require_field(type, PyTuple_GET_ITEM(unset_names, i), "__setstate__()", &index) !=
+			RESULT_OK
+		) {
 			return NULL;
 		}
 

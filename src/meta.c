@@ -158,10 +158,17 @@ static struct member_lookup find_member(
 );
 
 PyTypeObject StructMeta_Type = {
-	PyVarObject_HEAD_INIT(NULL, 0) .tp_name = "salix._StructMeta",
+	PyVarObject_HEAD_INIT(NULL, 0)
+	.tp_name = "salix._StructMeta",
 	.tp_basicsize = sizeof(StructType),
 	.tp_itemsize = sizeof(PyMemberDef),
-	.tp_flags = ( Py_TPFLAGS_DEFAULT | Py_TPFLAGS_TYPE_SUBCLASS | Py_TPFLAGS_HAVE_GC | Py_TPFLAGS_HAVE_VECTORCALL | Py_TPFLAGS_BASETYPE ),
+	.tp_flags = (
+		Py_TPFLAGS_DEFAULT |
+		Py_TPFLAGS_TYPE_SUBCLASS |
+		Py_TPFLAGS_HAVE_GC |
+		Py_TPFLAGS_HAVE_VECTORCALL |
+		Py_TPFLAGS_BASETYPE
+	),
 	.tp_new = StructMeta_new,
 	.tp_dealloc = StructMeta_dealloc,
 	.tp_traverse = StructMeta_traverse,
@@ -384,7 +391,7 @@ static struct equality_source resolves_body_equality(PyObject * const bases) {
 	 * struct its branch answers, and every other case is the co-base walk,
 	 * which is where the cost of looking lives. */
 	if (PyTuple_GET_SIZE(bases) == 0) {
-		return (struct equality_source) {.tag = EQUALITY_RESOLVED, .from_a_body = false};
+		return (struct equality_source){.tag = EQUALITY_RESOLVED, .from_a_body = false};
 	}
 
 	PyObject * const first = PyTuple_GET_ITEM(bases, 0);
@@ -411,14 +418,14 @@ static struct equality_source equality_from_the_co_bases(
 	PY_OWNED(not_equal, PyUnicode_InternFromString("__ne__"));
 
 	if (equal == NULL || not_equal == NULL) {
-		return (struct equality_source) {.tag = EQUALITY_FAILED};
+		return (struct equality_source){.tag = EQUALITY_FAILED};
 	}
 
 	for (Py_ssize_t i = first; i < PyTuple_GET_SIZE(bases); ++i) {
 		PyObject * const base = PyTuple_GET_ITEM(bases, i);
 
 		if (is_struct_class(base)) {
-			return (struct equality_source) {
+			return (struct equality_source){
 				.tag = EQUALITY_RESOLVED,
 				.from_a_body = ((StructType *) base)->struct_resolves_body_eq,
 			};
@@ -427,7 +434,7 @@ static struct equality_source equality_from_the_co_bases(
 		struct definition const supplies_equality = base_defines(base, equal);
 
 		if (supplies_equality.tag == DEFINITION_UNREADABLE) {
-			return (struct equality_source) {.tag = EQUALITY_FAILED};
+			return (struct equality_source){.tag = EQUALITY_FAILED};
 		}
 
 		if (!supplies_equality.found) {
@@ -448,7 +455,7 @@ static struct equality_source equality_from_the_co_bases(
 		);
 	}
 
-	return (struct equality_source) {.tag = EQUALITY_RESOLVED, .from_a_body = false};
+	return (struct equality_source){.tag = EQUALITY_RESOLVED, .from_a_body = false};
 }
 
 static struct definition any_base_defines(
@@ -470,7 +477,7 @@ static struct definition any_base_defines(
 		}
 	}
 
-	return (struct definition) {.tag = DEFINITION_READ, .found = false};
+	return (struct definition){.tag = DEFINITION_READ, .found = false};
 }
 
 static struct definition base_defines_value(
@@ -481,7 +488,7 @@ static struct definition base_defines_value(
 	PyObject * const mro = ((PyTypeObject *) base)->tp_mro;
 
 	if (mro == NULL) {
-		return (struct definition) {.tag = DEFINITION_READ, .found = false};
+		return (struct definition){.tag = DEFINITION_READ, .found = false};
 	}
 
 	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); ++i) {
@@ -494,14 +501,14 @@ static struct definition base_defines_value(
 		PY_OWNED(dict, struct_type_dict((PyTypeObject *) entry));
 
 		if (dict == NULL) {
-			return (struct definition) {.tag = DEFINITION_UNREADABLE};
+			return (struct definition){.tag = DEFINITION_UNREADABLE};
 		}
 
 		PY_MOVABLE(bound, dict_value_ref(dict, name));
 
 		if (bound == NULL) {
 			if (PyErr_Occurred()) {
-				return (struct definition) {.tag = DEFINITION_UNREADABLE};
+				return (struct definition){.tag = DEFINITION_UNREADABLE};
 			}
 
 			continue;
@@ -511,10 +518,10 @@ static struct definition base_defines_value(
 			*value = py_move(&bound);
 		}
 
-		return (struct definition) {.tag = DEFINITION_READ, .found = true};
+		return (struct definition){.tag = DEFINITION_READ, .found = true};
 	}
 
-	return (struct definition) {.tag = DEFINITION_READ, .found = false};
+	return (struct definition){.tag = DEFINITION_READ, .found = false};
 }
 
 static struct definition base_defines(PyObject * const base, PyObject * const name) {
@@ -551,7 +558,7 @@ static struct options inherited_options(
 		);
 	}
 
-	return (struct options) {
+	return (struct options){
 		.frozen = from_behaviour.frozen || promised_frozen,
 		.eq = from_behaviour.eq,
 		.order = from_behaviour.order,
@@ -1320,7 +1327,7 @@ static struct member_lookup find_member(
 	char const * const encoded_name = PyUnicode_AsUTF8AndSize(name, &name_size);
 
 	if (encoded_name == NULL) {
-		return (struct member_lookup) {.tag = MEMBER_LOOKUP_ERROR};
+		return (struct member_lookup){.tag = MEMBER_LOOKUP_ERROR};
 	}
 
 	for (Py_ssize_t i = 0; i < member_count; ++i) {
@@ -1330,14 +1337,14 @@ static struct member_lookup find_member(
 			name_size == (Py_ssize_t) member_size &&
 			memcmp(encoded_name, members[i].name, member_size) == 0
 		) {
-			return (struct member_lookup) {
+			return (struct member_lookup){
 				.tag = MEMBER_LOOKUP_FOUND,
 				.slot_offset = members[i].offset,
 			};
 		}
 	}
 
-	return (struct member_lookup) {.tag = MEMBER_LOOKUP_MISSING};
+	return (struct member_lookup){.tag = MEMBER_LOOKUP_MISSING};
 }
 
 /* `visit` and `arg` are not free names: Py_VISIT expands to reference both by
