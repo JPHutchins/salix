@@ -355,6 +355,149 @@ static struct field_lookup find_field(StructType const * const type, PyObject * 
 	return (struct field_lookup){.tag = FIELD_LOOKUP_MISSING};
 }
 
+PyObject * Struct_get_state(PyObject * const self, PyObject * const noargs) {
+	if (!is_struct(self)) {
+		PyErr_Format(
+			PyExc_AttributeError,
+			"__getstate__ is defined on structs, and %.200s is not one",
+			Py_TYPE(self)->tp_name
+		);
+
+		return NULL;
+	}
+
+	StructType const * const type = struct_type_of(self);
+	PY_OWNED(values, PyDict_New());
+	PY_OWNED(unset_names, PyList_New(0));
+
+	if (values == NULL || unset_names == NULL) {
+		return NULL;
+	}
+
+	for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
+		PyObject * const name = PyTuple_GET_ITEM(type->struct_field_names, i);
+		PY_OWNED(value, struct_slot_ref(type, self, i));
+
+		if (value == NULL) {
+			if (PyList_Append(unset_names, name) < 0) {
+				return NULL;
+			}
+
+			continue;
+		}
+
+		if (PyDict_SetItem(values, name, value) < 0) {
+			return NULL;
+		}
+	}
+
+	PY_MOVABLE(unset, PyList_AsTuple(unset_names));
+
+	if (unset == NULL) {
+		return NULL;
+	}
+
+	return PyTuple_Pack(2, values, unset);
+}
+
+static enum result restore_unset(
+	StructType const * const type,
+	PyObject * const self,
+	Py_ssize_t const index
+) {
+	if (*struct_slot(type, self, index) == NULL) {
+		return RESULT_OK;
+	}
+
+	return write_slot(type, self, index, NULL);
+}
+
+static enum result restore_named(
+	StructType const * const type,
+	PyObject * const self,
+	PyObject * const name,
+	PyObject * const value
+) {
+	struct field_lookup const found = find_field(type, name);
+
+	switch (found.tag) {
+		case FIELD_LOOKUP_ERROR:
+			return RESULT_ERROR;
+		case FIELD_LOOKUP_MISSING:
+			PyErr_Format(
+				PyExc_AttributeError,
+				"%.200s has no field '%U'",
+				struct_type_name(type),
+				name
+			);
+
+			return RESULT_ERROR;
+		case FIELD_LOOKUP_FOUND: return (
+			value != NULL ? write_slot(type, self, found.index, value) :
+			restore_unset(type, self, found.index)
+		);
+	}
+
+	Py_UNREACHABLE();
+}
+
+PyObject * Struct_set_state(PyObject * const self, PyObject * const state) {
+	if (!is_struct(self)) {
+		PyErr_Format(
+			PyExc_AttributeError,
+			"__setstate__ is defined on structs, and %.200s is not one",
+			Py_TYPE(self)->tp_name
+		);
+
+		return NULL;
+	}
+
+	if (!PyTuple_Check(state)) {
+		PyErr_Format(
+			PyExc_TypeError,
+			"__setstate__() argument 1 must be a tuple, not %.200s",
+			Py_TYPE(state)->tp_name
+		);
+
+		return NULL;
+	}
+
+	PyObject * values = NULL;
+	PyObject * unset_names = NULL;
+
+	if (
+		!PyArg_ParseTuple(
+			state,
+			"O!O!:__setstate__",
+			&PyDict_Type,
+			&values,
+			&PyTuple_Type,
+			&unset_names
+		)
+	) {
+		return NULL;
+	}
+
+	StructType const * const type = struct_type_of(self);
+	Py_ssize_t position = 0;
+	PyObject * name = NULL;
+	PyObject * value = NULL;
+
+	while (PyDict_Next(values, &position, &name, &value)) {
+		if (restore_named(type, self, name, value) != RESULT_OK) {
+			return NULL;
+		}
+	}
+
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(unset_names); ++i) {
+		if (restore_named(type, self, PyTuple_GET_ITEM(unset_names, i), NULL) != RESULT_OK) {
+			return NULL;
+		}
+	}
+
+	Py_RETURN_NONE;
+}
+
 #ifdef TESTING
 
 #	include "testing.h"

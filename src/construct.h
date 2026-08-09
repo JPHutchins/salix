@@ -14,6 +14,10 @@ PyObject * Struct_new(PyTypeObject * struct_class, PyObject * arguments, PyObjec
 
 PyObject * Struct_set_field(PyObject * module, PyObject * arguments);
 
+PyObject * Struct_get_state(PyObject * self, PyObject * noargs);
+
+PyObject * Struct_set_state(PyObject * self, PyObject * state);
+
 bool struct_copies_default(PyTypeObject const * kind);
 
 PyObject * struct_default_copy(PyObject * declared);

@@ -1,6 +1,7 @@
 #include <Python.h>
 
 #include "compare.h"
+#include "construct.h"
 #include "hash.h"
 #include "mixin.h"
 #include "repr.h"
@@ -14,6 +15,7 @@ static PyObject * Struct_get_fields_as_msgspec(PyObject * self, void * closure);
 static PyObject * Struct_get_defaults_as_msgspec(PyObject * self, void * closure);
 static PyObject * metadata_of(PyObject * self, enum struct_metadata which, char const * name);
 static PyGetSetDef Struct_getset[];
+static PyMethodDef Struct_methods[];
 
 PyTypeObject StructMixin_Type = {
 	PyVarObject_HEAD_INIT(NULL, 0)
@@ -24,6 +26,7 @@ PyTypeObject StructMixin_Type = {
 	.tp_repr = Struct_repr,
 	.tp_hash = Struct_hash,
 	.tp_richcompare = Struct_rich_compare,
+	.tp_methods = Struct_methods,
 	.tp_getset = Struct_getset,
 };
 
@@ -49,6 +52,20 @@ static PyGetSetDef Struct_getset[] = {
 		.doc = "tuple of trailing defaults, under msgspec's name for it",
 	},
 	{.name = NULL},
+};
+
+static PyMethodDef Struct_methods[] = {
+	{
+		.ml_name = "__getstate__",
+		.ml_meth = Struct_get_state,
+		.ml_flags = METH_NOARGS,
+	},
+	{
+		.ml_name = "__setstate__",
+		.ml_meth = Struct_set_state,
+		.ml_flags = METH_O,
+	},
+	{.ml_name = NULL},
 };
 
 static PyObject * metadata_of(

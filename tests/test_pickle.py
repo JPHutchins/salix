@@ -1,0 +1,299 @@
+import copy
+import pickle
+
+import pytest
+
+from salix import Struct, set_field
+
+# The classes live at module level because pickle resolves a class by qualified
+# name, and an instance of a test-local class cannot be unpickled.
+
+init_calls: list[int] = []
+post_init_calls: list[int] = []
+
+
+class Plain(Struct):
+    x: int
+    y: int = 0
+
+
+class Mutable(Struct, frozen=False):
+    x: int
+    y: int = 0
+
+
+class WithInit(Struct, frozen=False):
+    x: int
+    y: int = 0
+
+    def __init__(self, both: int) -> None:
+        init_calls.append(both)
+        self.x = both
+        self.y = both
+
+
+class FrozenWithInit(Struct):
+    x: int
+    y: int
+
+    def __init__(self) -> None:
+        set_field(self, "x", 1)
+
+
+class Child(Plain):
+    z: int = 3
+
+
+class Empty(Struct):
+    pass
+
+
+class Node(Struct):
+    child: object = None
+
+
+class WithPostInit(Struct, frozen=False):
+    x: int
+
+    def __post_init__(self) -> None:
+        post_init_calls.append(self.x)
+
+
+class MutableDefault(Struct, frozen=False):
+    xs: list = []  # noqa: RUF012 -- the copy is the feature under test
+
+
+FACTORIES = {
+    "plain": lambda: Plain(1, 2),
+    "mutable": lambda: Mutable(1, 2),
+    "with_init": lambda: WithInit(7),
+    "frozen_with_init": FrozenWithInit,
+    "child": lambda: Child(1, 2),
+    "empty": Empty,
+    "with_post_init": lambda: WithPostInit(1),
+    "mutable_default": MutableDefault,
+}
+
+
+@pytest.mark.parametrize("protocol", [2, 5])
+@pytest.mark.parametrize("factory", FACTORIES.values(), ids=FACTORIES.keys())
+def test_round_trip_preserves_equality_and_type(factory, protocol):
+    instance = factory()
+    restored = pickle.loads(pickle.dumps(instance, protocol=protocol))
+
+    assert restored == instance
+    assert type(restored) is type(instance)
+
+
+def test_a_written_non_default_value_survives_the_round_trip():
+    """Written first, because tp_new fills defaults during loads whatever the
+    pickle said -- asserting the default back would pass on a round trip that
+    restored nothing at all."""
+
+    frozen = Plain(1, 2)
+    set_field(frozen, "x", 99)
+
+    mutable = Mutable(1, 2)
+    mutable.x = 99
+
+    assert pickle.loads(pickle.dumps(frozen)).x == 99
+    assert pickle.loads(pickle.dumps(mutable)).x == 99
+
+
+@pytest.mark.parametrize("factory", FACTORIES.values(), ids=FACTORIES.keys())
+def test_copy_and_deepcopy_for_every_base_shape(factory):
+    instance = factory()
+    copied = copy.copy(instance)
+    deep = copy.deepcopy(instance)
+
+    assert copied == instance
+    assert deep == instance
+    assert copied is not instance
+    assert deep is not instance
+
+
+def test_copy_shares_a_mutable_field_and_deepcopy_does_not():
+    instance = MutableDefault()
+    instance.xs.append(1)
+    copied = copy.copy(instance)
+    deep = copy.deepcopy(instance)
+
+    assert copied.xs is instance.xs
+    assert deep.xs is not instance.xs
+    assert deep.xs == instance.xs
+
+
+def test_a_restored_frozen_struct_still_refuses_writes():
+    restored = pickle.loads(pickle.dumps(Plain(1, 2)))
+
+    with pytest.raises(TypeError, match="does not support attribute assignment"):
+        restored.x = 9
+
+
+def test_post_init_runs_once_at_construction_and_not_on_restore():
+    post_init_calls.clear()
+    instance = WithPostInit(1)
+
+    assert post_init_calls == [1]
+
+    pickle.loads(pickle.dumps(instance))
+    copy.copy(instance)
+    copy.deepcopy(instance)
+
+    assert post_init_calls == [1]
+
+
+def test_a_custom_init_signature_is_preserved():
+    with pytest.raises(TypeError, match="takes 2 positional arguments"):
+        WithInit(1, 2)
+
+
+def test_the_round_trip_never_calls_init():
+    init_calls.clear()
+    instance = WithInit(7)
+
+    assert init_calls == [7]
+
+    pickle.loads(pickle.dumps(instance))
+    copy.copy(instance)
+    copy.deepcopy(instance)
+
+    assert init_calls == [7]
+
+
+def test_none_round_trips_as_none_not_absence():
+    instance = Mutable(1, 2)
+    instance.y = None
+
+    assert pickle.loads(pickle.dumps(instance)).y is None
+
+
+def test_an_unset_field_round_trips_as_unset():
+    instance = Mutable(1, 2)
+    del instance.x
+    restored = pickle.loads(pickle.dumps(instance))
+
+    with pytest.raises(AttributeError):
+        _ = restored.x
+
+    assert repr(restored) == "Mutable(x=<unset>, y=2)"
+
+
+def test_an_unwritten_required_field_round_trips_as_unset():
+    instance = FrozenWithInit()
+
+    assert instance.__getstate__() == ({"x": 1}, ("y",))
+
+    restored = pickle.loads(pickle.dumps(instance))
+
+    with pytest.raises(AttributeError):
+        _ = restored.y
+
+    assert repr(restored) == "FrozenWithInit(x=1, y=<unset>)"
+
+
+def test_a_self_referential_struct_round_trips_to_itself():
+    node = Node()
+    set_field(node, "child", node)
+
+    restored = pickle.loads(pickle.dumps(node))
+
+    assert restored.child is restored
+
+
+def test_deepcopy_of_a_self_referential_struct_keeps_the_cycle():
+    node = Node()
+    set_field(node, "child", node)
+
+    deep = copy.deepcopy(node)
+
+    assert deep.child is deep
+
+
+def test_zero_field_and_root_instances_round_trip_copy_and_deepcopy():
+    for instance in (Empty(), Struct()):
+        restored = pickle.loads(pickle.dumps(instance))
+
+        assert type(restored) is type(instance)
+        assert restored == instance
+        assert copy.copy(instance) is not instance
+        assert copy.deepcopy(instance) is not instance
+
+
+def test_the_state_is_the_values_and_the_unset_names():
+    assert Plain(1, 2).__getstate__() == ({"x": 1, "y": 2}, ())
+
+    instance = Mutable(1, 2)
+    del instance.y
+
+    assert instance.__getstate__() == ({"x": 1}, ("y",))
+
+
+def test_an_unknown_name_in_the_state_is_refused():
+    with pytest.raises(AttributeError, match="has no field"):
+        Plain(1, 2).__setstate__(({"x": 1, "z": 2}, ()))
+
+    with pytest.raises(AttributeError, match="has no field"):
+        Plain(1, 2).__setstate__(({}, ("z",)))
+
+
+def test_a_non_tuple_state_is_refused():
+    with pytest.raises(TypeError):
+        Plain(1, 2).__setstate__({"x": 1})
+
+
+def test_a_malformed_state_is_refused():
+    with pytest.raises(TypeError):
+        Plain(1, 2).__setstate__((1, 2))
+
+
+def test_getstate_takes_no_arguments():
+    with pytest.raises(TypeError):
+        Plain(1, 2).__getstate__(1)
+
+
+def test_a_struct_holding_a_lambda_is_not_picklable():
+    instance = Mutable(1, 2)
+    instance.y = lambda: 0
+
+    with pytest.raises((AttributeError, pickle.PicklingError)):
+        pickle.dumps(instance)
+
+
+def test_new_fills_defaults_and_leaves_required_unset():
+    instance = Plain.__new__(Plain)
+
+    assert instance.y == 0
+
+    with pytest.raises(AttributeError):
+        _ = instance.x
+
+
+def test_new_works_for_a_subclass():
+    instance = Child.__new__(Child)
+
+    assert instance.y == 0
+    assert instance.z == 3
+
+    with pytest.raises(AttributeError):
+        _ = instance.x
+
+
+def test_new_refuses_a_non_subtype():
+    with pytest.raises(TypeError):
+        Plain.__new__(object)
+
+
+def test_new_refuses_extra_arguments():
+    with pytest.raises(TypeError):
+        Plain.__new__(Plain, 1)
+
+
+@pytest.mark.parametrize("protocol", [0, 1])
+def test_protocols_0_and_1_are_deliberately_refused(protocol):
+    """The old protocols restore through copyreg._reconstructor, whose
+    object.__new__(cls) a struct refuses; a pickle that cannot be written by
+    them is a limitation that is deliberate rather than silent."""
+
+    with pytest.raises(TypeError):
+        pickle.dumps(Plain(1, 2), protocol=protocol)
