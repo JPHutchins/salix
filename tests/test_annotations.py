@@ -723,3 +723,22 @@ class TestAShadowedSuppressionFlag:
 
         assert raised.value.__suppress_context__ == 0
         assert raised.value.__context__ is None
+
+
+@pytest.mark.skipif(
+    sys.version_info < (3, 14),
+    reason="annotationlib is stdlib only from 3.14",
+)
+def test_the_format_enum_matches_annotationlib():
+    """The enum in annotations.c is annotationlib.Format's numbering — the
+    numeric format argument handed to the generated __annotate__ callable
+    dispatches on it, so a renumber or reorder would silently change how
+    annotations resolve. Pinned against the runtime values.
+    """
+
+    import annotationlib
+
+    assert annotationlib.Format.VALUE == 1
+    assert annotationlib.Format.VALUE_WITH_FAKE_GLOBALS == 2
+    assert annotationlib.Format.FORWARDREF == 3
+    assert annotationlib.Format.STRING == 4

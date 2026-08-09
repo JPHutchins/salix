@@ -153,7 +153,11 @@ def render_python(target: Target, version: str, hashes: dict[str, str]) -> Itera
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Pin CPython release asset digests from the GitHub API into nix/python-targets.nix; nothing is downloaded."
+        description=(
+            "Regenerate nix/python-targets.nix from a python-build-standalone release. "
+            "Interpreters come from .python-version; the GitHub API serves each asset's "
+            "digest, so nothing is downloaded to pin it."
+        )
     )
     parser.add_argument("--release", default=None)
     parser.add_argument("--python-version", type=Path, default=Path(".python-version"))
