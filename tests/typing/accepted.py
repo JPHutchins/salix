@@ -1,7 +1,3 @@
-"""What a type checker must accept and infer. Never executed -- the checkers
-are the assertion, and tests/typing is not collected by pytest.
-"""
-
 from typing import Literal
 
 from typing_extensions import assert_type

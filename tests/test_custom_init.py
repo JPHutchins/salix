@@ -1,14 +1,3 @@
-"""A class body that writes its own `__init__` keeps it.
-
-The generated constructor is a vectorcall on the type, and a vectorcall answers
-before `tp_call` ever reaches `__init__` -- so a body that defined one used to
-have it discarded without a word. A class that defines one now declines the
-vectorcall instead, which also means it declines what the vectorcall does that
-belongs to the signature it is replacing: `__post_init__`, and the refusal of a
-missing required argument. Declared defaults are not part of that -- they are
-written by `tp_new` before the body's `__init__` runs.
-"""
-
 import pickle
 import sys
 

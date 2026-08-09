@@ -1,10 +1,3 @@
-"""A field is untyped storage: whatever goes in comes back out, unchanged.
-
-Everything here runs against the whole value set rather than a stand-in int,
-because the C never inspects a value except to compare, hash or repr it -- and
-those three are exactly where an assumption about the type would bite.
-"""
-
 import pytest
 from values import (
     COPIED_WHEN_EMPTY,

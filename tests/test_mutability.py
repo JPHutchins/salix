@@ -1,11 +1,3 @@
-"""Frozen is the default, and the only option a base refuses to differ on.
-
-Spelled `frozen=False` rather than `mutable=True` because PEP 681 fixes the
-names a dataclass_transform base may accept: a custom keyword is invisible to a
-type checker, which would then either reject every legitimate write to a
-mutable struct or stop rejecting them on a frozen one.
-"""
-
 import pytest
 from values import EVERY, identify
 

@@ -1,11 +1,3 @@
-"""More than one struct base.
-
-Which base a class extends the layout of is not the same question as which
-bases constrain it. Reading both off the first match is how a fieldless base
-standing in front of one with fields dropped every field of the second, and
-took `frozen` with it.
-"""
-
 import weakref
 
 import pytest

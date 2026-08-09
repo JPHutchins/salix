@@ -1,5 +1,3 @@
-"""Equality, hashing, repr and pattern matching."""
-
 import pytest
 
 from salix import Struct, set_field

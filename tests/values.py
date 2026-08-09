@@ -1,9 +1,3 @@
-"""A field holds an arbitrary object, so the suite should pass arbitrary objects.
-
-Split by hashability, because that is the one property of a field value the
-struct itself is sensitive to.
-"""
-
 import array
 import dataclasses
 import datetime

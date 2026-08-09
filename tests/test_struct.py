@@ -1,21 +1,9 @@
-"""Tests for the `salix` extension.
-
-Seeded from the prototype's smoke test. Covers the features the annotation
-form supports: construction by position/keyword, defaults, immutability,
-structural equality, hashing, repr, __match_args__/__slots__/__annotations__,
-single-base field inheritance, and metaclass identity.
-
-Run with `uv run camas test` (or `python -m pytest`).
-"""
-
 import pytest
 
 from salix import Struct
 
 
 class Point2D(Struct):
-    """A simple 2D point."""
-
     x: float
     y: float
 
@@ -96,7 +84,6 @@ def test_eq_structural():
         x: float
         y: float
 
-    # Structural equality: equal field names + values, regardless of class.
     assert Point2D(1.0, 2.0) == Other2D(1.0, 2.0)
 
     class Point1D(Struct):

@@ -1,19 +1,3 @@
-"""What the field metadata is called, and why it is called two things.
-
-`_struct_fields_` and `_struct_defaults_` are salix's. The language reference
-reserves `__name__` for "the interpreter and its implementation, including the
-standard library", and says any other such use is "subject to breakage without
-warning"; PEP 8 puts it as never invent one, only use a documented one. A
-library that mints a dunder for itself is taking a name it was not offered.
-
-`__struct_fields__` and `__struct_defaults__` are msgspec's, and they are here
-because code written against msgspec reads them. That is the half PEP 8
-permits: using another project's documented name is not inventing one.
-
-So the two are not equal in standing, and the tests below say which is which
-rather than treating them as interchangeable spellings.
-"""
-
 import pytest
 
 from salix import Struct

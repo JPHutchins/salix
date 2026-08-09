@@ -1,11 +1,3 @@
-"""`__post_init__`, which the constructor calls once every field is written.
-
-There is no keyword for it: a class either defines one or it does not, and the
-constructor was silently discarding the definition before. The hook is resolved
-at class creation, so one bound to the class afterwards is not seen -- that is
-the price of keeping the constructor's cost to a null check.
-"""
-
 import sys
 
 import pytest

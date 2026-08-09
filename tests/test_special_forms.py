@@ -1,11 +1,3 @@
-"""Annotations that name something other than a field.
-
-`ClassVar` and `InitVar` are not fields, and `dataclass_transform` already tells
-a checker so. Treating them as fields is how checked code and running code come
-to disagree about what the first positional argument means, so they are refused
-until there is a way to ask for them.
-"""
-
 import sys
 from dataclasses import InitVar
 from typing import Annotated, ClassVar, Final

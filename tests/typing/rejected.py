@@ -1,11 +1,3 @@
-"""What a type checker must reject.
-
-Every ignore here is an assertion: with --warn-unused-ignores, an ignore that
-stops being needed is itself an error, so this file fails if the checker ever
-starts accepting one of these. That inversion is the only way to test for a
-diagnostic rather than for its absence.
-"""
-
 from salix import Struct, set_field
 
 

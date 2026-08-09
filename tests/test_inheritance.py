@@ -1,5 +1,3 @@
-"""Field inheritance: order, defaults, and what a subclass may restate."""
-
 import pytest
 
 from salix import Struct
