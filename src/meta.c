@@ -136,6 +136,11 @@ static enum result reject_unless_planned(
 	struct options options
 );
 static enum result install_post_init(StructType * struct_class);
+static bool is_reconstruction_shape(
+	StructType const * struct_class,
+	PyObject * rest,
+	PyObject * keywords
+);
 static PyObject * dispatch_new(
 	StructType * struct_class,
 	PyTypeObject * subtype,
@@ -1167,6 +1172,20 @@ static enum result install_fields(
 	return install_post_init(struct_class);
 }
 
+static bool is_reconstruction_shape(
+	StructType const * const struct_class,
+	PyObject * const rest,
+	PyObject * const keywords
+) {
+	Py_ssize_t const extra = PyTuple_GET_SIZE(rest);
+	bool const has_keywords = keywords != NULL && PyDict_GET_SIZE(keywords) > 0;
+
+	return (
+		(extra > 0 && !has_keywords && struct_class->struct_declares_getnewargs) ||
+		(has_keywords && struct_class->struct_declares_getnewargs_ex)
+	);
+}
+
 static PyObject * dispatch_new(
 	StructType * const struct_class,
 	PyTypeObject * const subtype,
@@ -1211,10 +1230,7 @@ static PyObject * dispatch_new(
 	}
 
 	bool const has_keywords = keywords != NULL && PyDict_GET_SIZE(keywords) > 0;
-	bool const reconstruction_shape = (
-		(extra > 0 && !has_keywords && struct_class->struct_declares_getnewargs) ||
-		(has_keywords && struct_class->struct_declares_getnewargs_ex)
-	);
+	bool const reconstruction_shape = is_reconstruction_shape(struct_class, rest, keywords);
 
 	if (has_keywords && !reconstruction_shape) {
 		PyErr_SetString(PyExc_TypeError, "__new__() takes no keyword arguments");
@@ -1284,7 +1300,9 @@ static PyObject * Struct_new_wrapper(
 		return NULL;
 	}
 
-	return dispatch_new((StructType *) self, subtype, rest, keywords, false);
+	bool const reconstruction = is_reconstruction_shape((StructType *) self, rest, keywords);
+
+	return dispatch_new((StructType *) self, subtype, rest, keywords, reconstruction);
 }
 
 static PyMethodDef struct_new_methoddef[] = {

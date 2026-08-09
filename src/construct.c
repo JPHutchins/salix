@@ -581,30 +581,6 @@ error:
 	return RESULT_ERROR;
 }
 
-static bool dict_key_is_safe(PyObject * const key) {
-	return (
-		PyUnicode_CheckExact(key) ||
-		PyLong_CheckExact(key) ||
-		PyFloat_CheckExact(key) ||
-		PyBool_Check(key) ||
-		key == Py_None
-	);
-}
-
-static bool dict_merge_is_safe(PyObject * const mapping) {
-	Py_ssize_t position = 0;
-	PyObject * key = NULL;
-	PyObject * value = NULL;
-
-	while (PyDict_Next(mapping, &position, &key, &value)) {
-		if (!dict_key_is_safe(key)) {
-			return false;
-		}
-	}
-
-	return true;
-}
-
 PyObject * Struct_set_state(PyObject * const self, PyObject * const state) {
 	if (!is_struct(self)) {
 		PyErr_Format(
@@ -704,35 +680,19 @@ PyObject * Struct_set_state(PyObject * const self, PyObject * const state) {
 		if (instance_dict == Py_None) {
 			PyDict_Clear(dict);
 		} else if (instance_dict != dict) {
-			if (dict_merge_is_safe(instance_dict)) {
-				/* Every key has a C-level hash and equality, so the merge cannot
-				 * call into Python and fail mid-way; refill the existing dict in
-				 * place and keep external references to it alive. Copy the
-				 * incoming entries up front, so a failure leaves the existing
-				 * dict untouched. */
-				PY_MOVABLE(fresh, PyDict_New());
+			/* Build the replacement dict up front, then swap it in only on
+			 * success, so a failing merge leaves the instance's dict and slots
+			 * untouched. __setstate__ replaces the dict object, so external
+			 * references to the previous dict go stale; that is the accepted
+			 * cost of the atomicity. */
+			PY_MOVABLE(fresh, PyDict_New());
 
-				if (fresh == NULL || PyDict_Update(fresh, instance_dict) < 0) {
-					return NULL;
-				}
+			if (fresh == NULL || PyDict_Update(fresh, instance_dict) < 0) {
+				return NULL;
+			}
 
-				PyDict_Clear(dict);
-
-				if (PyDict_Update(dict, fresh) < 0) {
-					return NULL;
-				}
-			} else {
-				/* A key with a custom hash or equality can raise while merging,
-				 * so build the replacement first and swap it in only on success. */
-				PY_MOVABLE(fresh, PyDict_New());
-
-				if (fresh == NULL || PyDict_Update(fresh, instance_dict) < 0) {
-					return NULL;
-				}
-
-				if (PyObject_GenericSetDict(self, fresh, NULL) < 0) {
-					return NULL;
-				}
+			if (PyObject_GenericSetDict(self, fresh, NULL) < 0) {
+				return NULL;
 			}
 		}
 	}

@@ -1,4 +1,5 @@
 import copy
+import copyreg
 import pickle
 from collections.abc import Callable
 
@@ -213,6 +214,33 @@ class GenuineWithGNA(Struct):
 
     def __getnewargs__(self):
         return (self.x,)
+
+
+class ValueErrorNew(Struct):
+    x: int = 5
+
+    def __new__(cls, v: int = 0):
+        if v:
+            raise ValueError("genuine rejection")
+        return super().__new__(cls)
+
+    def __getnewargs__(self):
+        return (self.x,)
+
+
+class DeclinesWithReduce(Struct):
+    x: int = 5
+
+    def __new__(cls, v: int = 0):
+        if v:
+            raise TypeError("declined for reconstruction")
+        return super().__new__(cls)
+
+    def __getnewargs__(self):
+        return (self.x,)
+
+    def __reduce__(self):
+        return (copyreg.__newobj__, (type(self), self.x), self.__getstate__())
 
 
 class WithReduce(Struct):
@@ -791,8 +819,32 @@ def test_a_genuine_body_typeerror_propagates_with_getnewargs_under_construction(
     with pytest.raises(TypeError, match="genuine rejection"):
         GenuineWithGNA(5)
 
-    with pytest.raises(TypeError, match="genuine rejection"):
-        GenuineWithGNA.__new__(GenuineWithGNA, 5)
+
+def test_a_body_new_typeerror_declines_reconstruction_and_falls_back():
+    instance = DeclinesForReconstruction()
+
+    assert copy.copy(instance) == instance
+    assert pickle.loads(pickle.dumps(instance)) == instance
+
+
+def test_a_body_new_raising_a_non_typeerror_propagates_on_reconstruction():
+    instance = ValueErrorNew()
+    with pytest.raises(ValueError, match="genuine rejection"):
+        copy.copy(instance)
+    with pytest.raises(ValueError, match="genuine rejection"):
+        pickle.loads(pickle.dumps(instance))
+
+
+def test_a_reduced_body_new_declining_reconstruction_round_trips_everywhere():
+    instance = DeclinesWithReduce()
+
+    assert copy.copy(instance) == instance
+    assert copy.deepcopy(instance) == instance
+
+    for protocol in (2, 3, 4, 5):
+        restored = pickle.loads(pickle.dumps(instance, protocol=protocol))
+        assert restored == instance
+        assert restored.x == 5
 
 
 def test_a_custom_reduce_controls_copy_and_deepcopy():
@@ -806,15 +858,16 @@ def test_a_custom_reduce_controls_copy_and_deepcopy():
     assert deep == instance
 
 
-def test_setstate_refills_the_existing_dict_in_place_when_safe():
+def test_setstate_replaces_the_instance_dict_for_atomicity():
     instance = WithDict(1)
     instance.extra = "world"
     reference = instance.__dict__
 
     instance.__setstate__(({"x": 2}, (), {"new": "val"}))
 
-    assert instance.__dict__ is reference
-    assert reference == {"new": "val"}
+    assert instance.__dict__ is not reference
+    assert instance.__dict__ == {"new": "val"}
+    assert reference == {"extra": "world"}
 
 
 def test_setstate_with_none_third_element_clears_the_instance_dict():
