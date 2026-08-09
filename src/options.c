@@ -17,7 +17,6 @@ enum : Py_ssize_t {
 	OPTION_COUNT = OPTION_WEAKREF + 1,
 };
 
-/* Which option a class keyword names, if any. */
 struct option_lookup {
 	enum { OPTION_LOOKUP_FOUND, OPTION_LOOKUP_UNKNOWN } tag;
 	enum option option;
@@ -42,8 +41,6 @@ static struct options_request checked(
 static struct options_request reject_unknown(PyObject * keyword);
 static PyObject * accepted_keywords(void);
 
-/* A fold over the class keywords: each one replaces the flag it names in what
- * the base already resolved to. */
 struct options_request options_read(
 	PyObject * const keywords,
 	struct options const inherited,
@@ -90,7 +87,6 @@ static struct option_lookup find_option(PyObject * const keyword) {
 	return (struct option_lookup){.tag = OPTION_LOOKUP_UNKNOWN};
 }
 
-/* C has no designated update, so the copy is how one flag is replaced. */
 static struct options with_option(
 	struct options const options,
 	enum option const which,
@@ -138,8 +134,6 @@ static struct options_request checked(
 		return (struct options_request){.tag = OPTIONS_REJECTED};
 	}
 
-	/* Ordering is the same structural comparison equality is, one operator
-	 * further; without it there are no values to order, only identities. */
 	if (requested.order && !requested.eq) {
 		PyErr_SetString(PyExc_TypeError, "order=True needs eq=True");
 
@@ -189,8 +183,6 @@ static PyObject * accepted_keywords(void) {
 
 #	include "testing.h"
 
-/* options_read takes a plain dict, so the whole resolution is testable without
- * a class -- and inheritance is easier to state here than through two bodies. */
 static PyObject * keywords_of(char const * const name, bool const value) {
 	PyObject * const keywords = PyDict_New();
 
