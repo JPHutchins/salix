@@ -47,7 +47,7 @@ struct options_request options_read(
 	bool const base_is_constraining
 ) {
 	if (keywords == NULL) {
-		return (struct options_request){.tag = OPTIONS_RESOLVED, .options = inherited};
+		return (struct options_request) {.tag = OPTIONS_RESOLVED, .options = inherited};
 	}
 
 	struct options requested = inherited;
@@ -68,7 +68,7 @@ struct options_request options_read(
 		int const truth = PyObject_IsTrue(value);
 
 		if (truth < 0) {
-			return (struct options_request){.tag = OPTIONS_REJECTED};
+			return (struct options_request) {.tag = OPTIONS_REJECTED};
 		}
 
 		requested = with_option(requested, found.option, truth != 0);
@@ -80,11 +80,11 @@ struct options_request options_read(
 static struct option_lookup find_option(PyObject * const keyword) {
 	for (Py_ssize_t i = 0; i < OPTION_COUNT; ++i) {
 		if (PyUnicode_CompareWithASCIIString(keyword, option_keywords[i]) == 0) {
-			return (struct option_lookup){.tag = OPTION_LOOKUP_FOUND, .option = (enum option) i};
+			return (struct option_lookup) {.tag = OPTION_LOOKUP_FOUND, .option = (enum option) i};
 		}
 	}
 
-	return (struct option_lookup){.tag = OPTION_LOOKUP_UNKNOWN};
+	return (struct option_lookup) {.tag = OPTION_LOOKUP_UNKNOWN};
 }
 
 static struct options with_option(
@@ -131,16 +131,16 @@ static struct options_request checked(
 			inherited.frozen ? "frozen" : "mutable"
 		);
 
-		return (struct options_request){.tag = OPTIONS_REJECTED};
+		return (struct options_request) {.tag = OPTIONS_REJECTED};
 	}
 
 	if (requested.order && !requested.eq) {
 		PyErr_SetString(PyExc_TypeError, "order=True needs eq=True");
 
-		return (struct options_request){.tag = OPTIONS_REJECTED};
+		return (struct options_request) {.tag = OPTIONS_REJECTED};
 	}
 
-	return (struct options_request){.tag = OPTIONS_RESOLVED, .options = requested};
+	return (struct options_request) {.tag = OPTIONS_RESOLVED, .options = requested};
 }
 
 static struct options_request reject_unknown(PyObject * const keyword) {
@@ -155,7 +155,7 @@ static struct options_request reject_unknown(PyObject * const keyword) {
 		);
 	}
 
-	return (struct options_request){.tag = OPTIONS_REJECTED};
+	return (struct options_request) {.tag = OPTIONS_REJECTED};
 }
 
 /* Listed from the table rather than spelled out, so a new option cannot leave
