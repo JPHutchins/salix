@@ -124,7 +124,13 @@ static inline int struct_probe_getnewargs(
 		PyObject * const dict = struct_type_dict((PyTypeObject *) entry);
 
 		if (dict == NULL) {
-			PyErr_Clear();
+			if (PyErr_Occurred()) {
+				Py_DECREF(ex_name);
+				Py_DECREF(plain_name);
+
+				return -1;
+			}
+
 			continue;
 		}
 

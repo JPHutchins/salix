@@ -243,6 +243,17 @@ class EmptyTupleStateCarrying(Struct):
         return ({"x": self.x, "y": self.y}, (), None)
 
 
+class EmptyTupleNoneState(Struct):
+    x: int
+    y: int
+
+    def __getnewargs__(self):
+        return ()
+
+    def __getstate__(self):
+        return None
+
+
 class BodyInitEmptyState(Struct, frozen=False):
     x: int = 0
 
@@ -1285,9 +1296,10 @@ def test_a_real_getnewargs_survives_a_none_getnewargs_ex():
 
 
 def test_a_getnewargs_under_providing_a_required_field_is_refused():
-    """The completeness check runs after __setstate__ (the state supplies the
-    fields it carries), so a getnewargs that under-provides a required field is
-    caught on the round-trip, not on the bare __new__ call."""
+    """A getnewargs whose args plus state do not cover a required field is a
+    broken reconstruction, refused by the single post-setstate completeness
+    check. UnderGetNewArgs has an empty state, so only its short getnewargs
+    could carry y, and it does not."""
 
     with pytest.raises(TypeError, match="missing required argument"):
         copy.copy(UnderGetNewArgs(5, 6))
@@ -1321,15 +1333,15 @@ def test_a_body_init_struct_with_getnewargs_constructs_with_init_arguments():
     assert B(5).x == 5
 
 
-def test_a_getnewargs_under_providing_a_required_field_is_refused_on_the_round_trip():
-    """A getnewargs that under-provides a required field is a broken
-    reconstruction contract, refused even when the state would carry the rest."""
+def test_a_state_supplying_a_required_field_round_trips_under_a_short_getnewargs():
+    """The single completeness check runs at the end of __setstate__, so a
+    getnewargs that supplies only x still round-trips when the state carries
+    the rest."""
 
-    with pytest.raises(TypeError, match="missing required argument"):
-        copy.copy(Child2(1, 2))
+    instance = Child2(1, 2)
 
-    with pytest.raises(TypeError, match="missing required argument"):
-        pickle.loads(pickle.dumps(Child2(1, 2)))
+    assert pickle.loads(pickle.dumps(instance)) == instance
+    assert copy.copy(instance) == instance
 
 
 def test_a_body_init_struct_with_getnewargs_and_empty_state_round_trips_to_defaults():
@@ -1360,6 +1372,17 @@ def test_an_empty_getnewargs_tuple_with_empty_state_raises_and_with_state_round_
 
     assert pickle.loads(pickle.dumps(instance)) == instance
     assert copy.copy(instance) == instance
+
+
+def test_an_empty_getnewargs_tuple_with_none_state_raises():
+    """A None __getstate__ means no state to restore, so a getnewargs returning
+    () has no carrier for the required fields; the reconstruction raises."""
+
+    with pytest.raises(TypeError, match="missing required argument"):
+        copy.copy(EmptyTupleNoneState(5, 6))
+
+    with pytest.raises(TypeError, match="missing required argument"):
+        pickle.loads(pickle.dumps(EmptyTupleNoneState(5, 6)))
 
 
 def test_a_getnewargs_ex_keyword_conflicting_with_a_positional_is_skipped():

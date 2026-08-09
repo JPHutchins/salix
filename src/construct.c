@@ -42,7 +42,6 @@ static enum result fill_defaults(
 	PyObject * self,
 	Py_ssize_t positional_count
 );
-static enum result require_reconstruction_complete(StructType const * type, PyObject * self);
 static struct field_lookup find_field(StructType const * type, PyObject * name);
 static enum result require_field(
 	StructType const * type,
@@ -70,7 +69,6 @@ static enum result resolve_state(
 static enum result require_restore_complete(
 	StructType const * type,
 	PyObject * self,
-	PyObject * values,
 	Py_ssize_t const * unset_indices,
 	Py_ssize_t unset_count,
 	bool declares_getnewargs
@@ -214,10 +212,7 @@ PyObject * Struct_new(
 	}
 
 	if (declares && argument_count > 0 && !body_init) {
-		if (
-			bind_reconstruction(type, self, arguments, keywords) != RESULT_OK ||
-			require_reconstruction_complete(type, self) != RESULT_OK
-		) {
+		if (bind_reconstruction(type, self, arguments, keywords) != RESULT_OK) {
 			return NULL;
 		}
 	}
@@ -331,28 +326,6 @@ static enum result fill_defaults(
 		}
 
 		*slot = value;
-	}
-
-	return RESULT_OK;
-}
-
-static enum result require_reconstruction_complete(
-	StructType const * const type,
-	PyObject * const self
-) {
-	Py_ssize_t const required_count = struct_required_count(type);
-
-	for (Py_ssize_t i = 0; i < required_count; ++i) {
-		if (*struct_slot(type, self, i) == NULL) {
-			PyErr_Format(
-				PyExc_TypeError,
-				"%.200s() reconstruction is missing required argument '%U'",
-				struct_type_name(type),
-				PyTuple_GET_ITEM(type->struct_field_names, i)
-			);
-
-			return RESULT_ERROR;
-		}
 	}
 
 	return RESULT_OK;
@@ -798,7 +771,6 @@ error:
 static enum result require_restore_complete(
 	StructType const * const type,
 	PyObject * const self,
-	PyObject * const values,
 	Py_ssize_t const * const unset_indices,
 	Py_ssize_t const unset_count,
 	bool const declares_getnewargs
@@ -825,19 +797,8 @@ static enum result require_restore_complete(
 
 		/* A custom partial __getstate__ that omits a required field is a
 		 * legitimate state; completeness is only enforced for a getnewargs
-		 * reconstruction whose state did not carry the field either. */
+		 * reconstruction, whose args and state together must cover the field. */
 		if (!declares_getnewargs) {
-			continue;
-		}
-
-		PyObject * const name = PyTuple_GET_ITEM(type->struct_field_names, i);
-		int const carried = PyDict_Contains(values, name);
-
-		if (carried < 0) {
-			return RESULT_ERROR;
-		}
-
-		if (carried == 1) {
 			continue;
 		}
 
@@ -845,7 +806,7 @@ static enum result require_restore_complete(
 			PyExc_TypeError,
 			"%.200s() missing required argument '%U'",
 			struct_type_name(type),
-			name
+			PyTuple_GET_ITEM(type->struct_field_names, i)
 		);
 
 		return RESULT_ERROR;
@@ -962,14 +923,7 @@ PyObject * Struct_set_state(PyObject * const self, PyObject * const state) {
 		if (struct_probe_getnewargs((PyTypeObject *) type, &declares, &declares_ex) < 0) {
 			outcome = RESULT_ERROR;
 		} else {
-			outcome = require_restore_complete(
-				type,
-				self,
-				values,
-				unset_indices,
-				unset_count,
-				declares
-			);
+			outcome = require_restore_complete(type, self, unset_indices, unset_count, declares);
 		}
 	}
 
