@@ -136,7 +136,7 @@ static enum result reject_unless_planned(
 	struct options options
 );
 static enum result install_post_init(StructType * struct_class);
-static bool is_reconstruction_shape(
+static int is_reconstruction_shape(
 	StructType const * struct_class,
 	PyObject * rest,
 	PyObject * keywords
@@ -1166,7 +1166,7 @@ static enum result install_fields(
 	return install_post_init(struct_class);
 }
 
-static bool is_reconstruction_shape(
+static int is_reconstruction_shape(
 	StructType const * const struct_class,
 	PyObject * const rest,
 	PyObject * const keywords
@@ -1176,7 +1176,9 @@ static bool is_reconstruction_shape(
 	bool declares = false;
 	bool declares_ex = false;
 
-	struct_probe_getnewargs(&struct_class->heap_type.ht_type, &declares, &declares_ex);
+	if (struct_probe_getnewargs(&struct_class->heap_type.ht_type, &declares, &declares_ex) < 0) {
+		return -1;
+	}
 
 	return ((extra > 0 && !has_keywords && declares) || (has_keywords && declares_ex));
 }
@@ -1210,7 +1212,11 @@ static PyObject * dispatch_new(
 	}
 
 	bool const has_keywords = keywords != NULL && PyDict_GET_SIZE(keywords) > 0;
-	bool const reconstruction_shape = is_reconstruction_shape(struct_class, rest, keywords);
+	int const reconstruction_shape = is_reconstruction_shape(struct_class, rest, keywords);
+
+	if (reconstruction_shape < 0) {
+		return NULL;
+	}
 
 	if (has_keywords && !reconstruction_shape) {
 		PyErr_SetString(PyExc_TypeError, "__new__() takes no keyword arguments");

@@ -96,7 +96,7 @@ static inline PyObject * dict_value_ref(PyObject * const mapping, PyObject * con
  * because the reconstruction shape accepts keywords only for
  * __getnewargs_ex__, while positional args are accepted for either.
  */
-static inline void struct_probe_getnewargs(
+static inline int struct_probe_getnewargs(
 	PyTypeObject const * const cls,
 	bool * const declares,
 	bool * const declares_ex
@@ -106,18 +106,17 @@ static inline void struct_probe_getnewargs(
 	PyObject * const mro = cls->tp_mro;
 
 	if (mro == NULL) {
-		return;
+		return 0;
 	}
 
 	PyObject * const ex_name = PyUnicode_InternFromString("__getnewargs_ex__");
 	PyObject * const plain_name = PyUnicode_InternFromString("__getnewargs__");
 
 	if (ex_name == NULL || plain_name == NULL) {
-		PyErr_Clear();
 		Py_XDECREF(ex_name);
 		Py_XDECREF(plain_name);
 
-		return;
+		return -1;
 	}
 
 	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); ++i) {
@@ -132,16 +131,30 @@ static inline void struct_probe_getnewargs(
 		PyObject * const ex = dict_value_ref(dict, ex_name);
 		PyObject * const plain = dict_value_ref(dict, plain_name);
 
-		if (ex == NULL) {
-			PyErr_Clear();
-		} else if (ex != Py_None) {
+		if (ex == NULL && PyErr_Occurred()) {
+			Py_XDECREF(plain);
+			Py_DECREF(dict);
+			Py_DECREF(ex_name);
+			Py_DECREF(plain_name);
+
+			return -1;
+		}
+
+		if (ex != NULL && ex != Py_None) {
 			*declares_ex = true;
 			*declares = true;
 		}
 
-		if (plain == NULL) {
-			PyErr_Clear();
-		} else if (plain != Py_None) {
+		if (plain == NULL && PyErr_Occurred()) {
+			Py_XDECREF(ex);
+			Py_DECREF(dict);
+			Py_DECREF(ex_name);
+			Py_DECREF(plain_name);
+
+			return -1;
+		}
+
+		if (plain != NULL && plain != Py_None) {
 			*declares = true;
 		}
 
@@ -156,6 +169,8 @@ static inline void struct_probe_getnewargs(
 
 	Py_DECREF(ex_name);
 	Py_DECREF(plain_name);
+
+	return 0;
 }
 
 /*

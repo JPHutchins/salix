@@ -263,6 +263,21 @@ class RedundantEx(Struct):
         return ((self.x,), {"x": self.x})
 
 
+class PartialState(Struct):
+    x: int
+    y: int
+
+    def __getstate__(self):
+        return ({"x": self.x}, (), None)
+
+
+class RedundantListEx(Struct):
+    xs: list = None
+
+    def __getnewargs_ex__(self):
+        return ((list(self.xs),), {"xs": list(self.xs)})
+
+
 class WithGNA(Struct):
     x: int
 
@@ -1306,22 +1321,27 @@ def test_a_body_init_struct_with_getnewargs_constructs_with_init_arguments():
     assert B(5).x == 5
 
 
-def test_a_state_supplying_a_required_field_round_trips_under_a_short_getnewargs():
-    """The completeness check runs after __setstate__, so a getnewargs that
-    supplies only x still round-trips when the state carries the rest."""
+def test_a_getnewargs_under_providing_a_required_field_is_refused_on_the_round_trip():
+    """A getnewargs that under-provides a required field is a broken
+    reconstruction contract, refused even when the state would carry the rest."""
 
-    instance = Child2(1, 2)
+    with pytest.raises(TypeError, match="missing required argument"):
+        copy.copy(Child2(1, 2))
 
-    assert pickle.loads(pickle.dumps(instance)) == instance
-    assert copy.copy(instance) == instance
+    with pytest.raises(TypeError, match="missing required argument"):
+        pickle.loads(pickle.dumps(Child2(1, 2)))
 
 
-def test_a_body_init_struct_with_getnewargs_and_empty_state_round_trips():
+def test_a_body_init_struct_with_getnewargs_and_empty_state_round_trips_to_defaults():
+    """A body-init struct's reconstruction is __setstate__'s job; an explicit
+    empty __getstate__ means the user chose to drop the data, so the field
+    comes back at its default, not the pre-pickle value."""
+
     instance = BodyInitEmptyState(7)
 
-    assert pickle.loads(pickle.dumps(instance)).x == 7
-    assert copy.copy(instance).x == 7
-    assert copy.deepcopy(instance).x == 7
+    assert pickle.loads(pickle.dumps(instance)).x == 0
+    assert copy.copy(instance).x == 0
+    assert copy.deepcopy(instance).x == 0
 
 
 def test_reduce_ex_with_no_argument_raises_like_stdlib():
@@ -1342,9 +1362,11 @@ def test_an_empty_getnewargs_tuple_with_empty_state_raises_and_with_state_round_
     assert copy.copy(instance) == instance
 
 
-def test_a_getnewargs_ex_keyword_conflicting_with_a_positional_is_refused():
-    with pytest.raises(TypeError, match="multiple values"):
-        RedundantEx.__new__(RedundantEx, 1, x=2)
+def test_a_getnewargs_ex_keyword_conflicting_with_a_positional_is_skipped():
+    """The redundant half of __getnewargs_ex__ (same field both positionally
+    and by keyword) is a stdlib-supported pattern; the positional wins."""
+
+    assert RedundantEx.__new__(RedundantEx, 1, x=2).x == 1
 
 
 def test_a_getnewargs_ex_redundant_keyword_is_skipped():
@@ -1352,3 +1374,49 @@ def test_a_getnewargs_ex_redundant_keyword_is_skipped():
 
     assert pickle.loads(pickle.dumps(instance, protocol=2)) == instance
     assert copy.copy(instance) == instance
+
+
+def test_a_getnewargs_ex_redundant_keyword_with_distinct_objects_is_skipped():
+    """The redundant keyword is skipped whenever the field is already bound,
+    so equal-but-distinct objects round-trip too."""
+
+    instance = RedundantListEx([1, 2])
+
+    assert pickle.loads(pickle.dumps(instance, protocol=2)) == instance
+    assert copy.copy(instance) == instance
+
+
+def test_a_custom_partial_getstate_omitting_a_required_field_round_trips():
+    """A non-getnewargs struct's custom partial __getstate__ is a legitimate
+    state; the omitted field round-trips as unset rather than raising."""
+
+    instance = PartialState(1, 2)
+    restored = pickle.loads(pickle.dumps(instance))
+
+    assert restored.x == 1
+
+    with pytest.raises(AttributeError):
+        _ = restored.y
+
+    copied = copy.copy(instance)
+    assert copied.x == 1
+
+    with pytest.raises(AttributeError):
+        _ = copied.y
+
+
+def test_a_body_init_construction_does_not_leak_init_arguments_into_fields():
+    class V(Struct, frozen=False):
+        x: int = 0
+        y: int = 0
+
+        def __init__(self, a, b):
+            self.x = a
+
+        def __getnewargs__(self):
+            return (self.x,)
+
+    instance = V(1, 2)
+
+    assert instance.x == 1
+    assert instance.y == 0
