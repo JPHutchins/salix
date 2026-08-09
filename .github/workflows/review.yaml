@@ -1,9 +1,3 @@
-# Code review — thin consumer of the code-review reusable workflow.
-# The full pipeline lives in the pinned ref; this repo keeps only the trigger, the superset
-# permissions, the MODEL_API_KEY secret, .github/prices.json, and its OWN check-running setup
-# (.github/actions/code-review-setup — Nix toolchain + cache + warm uv environment, invoked via
-# use_setup_action). Bump the @ref to upgrade. See: https://github.com/JPHutchins/code-review
-
 name: Code review
 
 on:
@@ -16,7 +10,7 @@ permissions:
   actions: read
   pull-requests: write
   issues: write
-  checks: write            # create the review's check-run attribution surface (alpha.33 / #115)
+  checks: write
 
 jobs:
   review:
@@ -35,33 +29,8 @@ jobs:
       api_base_url:  ${{ vars.API_BASE_URL }}
       model_full:    deepseek-v4-flash
       model_mechanic: deepseek-v4-flash
-      # Check-running via our own Nix composite at .github/actions/code-review-setup, because the dev
-      # shell is the only supported environment here and clang-tidy, gcc -fanalyzer, and the nix
-      # builds come from it -- an install_command could reach the python half of `camas check` and
-      # none of the C half.
       use_setup_action: true
-      # Enforced, and the reusable workflow's canary now proves on every run that it engaged.
       egress_policy: block
-      # Single line per host, folded: the reusable workflow splices this value into harden-runner's
-      # allowed-endpoints AFTER YAML parsing, so a '|' block scalar's newlines would reach the
-      # endpoint parser verbatim and break it.
-      #
-      # The first group is what run 30651665025's audit pass actually recorded a connection to, by the
-      # process that made it: install.determinate.systems (nix-installer, nix, determinate-nixd, node
-      # -- the installer serves itself), cache.nixos.org (nix), codeload.github.com (Runner.Worker,
-      # fetching this composite's own actions), releases.astral.sh (uv, fetching the interpreter the
-      # dev shell does not carry -- NOT a GitHub release asset, which is what the derived list guessed),
-      # files.pythonhosted.org (uv, the dev group's wheels).
-      #
-      # The second group is the cold-store class: unobserved because the run hit CI's 2.7GB store
-      # cache, and required the moment it misses -- which GitHub guarantees after 7 idle days, or any
-      # flake.lock change. tarballs.nixos.org is the fixed-output mirror; the crates hosts are jphfmt,
-      # which is not in nixpkgs and so gets built from the crate and its vendored lock; pypi.org is the
-      # index uv needs when the lock has to be re-resolved rather than replayed.
-      #
-      # Deliberately absent: raw.githubusercontent.com. The audit saw it, but from claude.exe and curl
-      # mid-review -- agent-initiated, not something the pipeline needs. Failing that closed is the
-      # entire point of locking the job that runs untrusted PR code.
       extra_endpoints: >-
         install.determinate.systems:443
         cache.nixos.org:443
