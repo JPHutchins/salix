@@ -85,6 +85,45 @@ class ChildOfBodyNew(WithBodyNew):
     y: int = 9
 
 
+class RecordingNew(Struct):
+    x: int = 0
+
+    def __new__(cls, both: int = 0):
+        body_new_calls.append(("recording_new", both))
+        obj = super().__new__(cls)
+        set_field(obj, "x", both)
+        return obj
+
+
+class ArgNew(Struct):
+    x: int
+
+    def __new__(cls, both: int):
+        body_new_calls.append(("arg_new", both))
+        obj = super().__new__(cls)
+        set_field(obj, "x", both)
+        return obj
+
+
+class SingletonNew(Struct):
+    x: int = 1
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            obj = super().__new__(cls)
+            set_field(obj, "x", 42)
+            cls._instance = obj
+        return cls._instance
+
+
+class WithGetNewArgs(Struct):
+    x: int
+
+    def __getnewargs__(self):
+        return (self.x,)
+
+
 FACTORIES: dict[str, Callable[[], Struct]] = {
     "plain": lambda: Plain(1, 2),
     "mutable": lambda: Mutable(1, 2),
@@ -474,8 +513,76 @@ def test_a_body_new_on_a_base_struct_survives_on_its_subclass():
 
     restored = pickle.loads(pickle.dumps(instance))
 
-    assert body_new_calls == ["with_body_new"]
+    assert body_new_calls == ["with_body_new", "with_body_new"]
     assert restored == instance
+
+
+def test_a_recording_body_new_is_honored_by_construction_copy_and_pickle():
+    instance = RecordingNew(7)
+
+    assert body_new_calls == [("recording_new", 7)]
+
+    copied = copy.copy(instance)
+    restored = pickle.loads(pickle.dumps(instance))
+
+    assert body_new_calls == [
+        ("recording_new", 7),
+        ("recording_new", 0),
+        ("recording_new", 0),
+    ]
+    assert copied == instance
+    assert restored == instance
+    assert copied.x == 7
+    assert restored.x == 7
+
+
+def test_a_body_new_requiring_an_arg_does_not_crash_copy():
+    instance = ArgNew(7)
+
+    assert body_new_calls == [("arg_new", 7)]
+
+    copied = copy.copy(instance)
+    restored = pickle.loads(pickle.dumps(instance))
+
+    assert copied == instance
+    assert restored == instance
+    assert body_new_calls == [("arg_new", 7)]
+
+
+def test_a_singleton_body_new_returns_the_same_instance_across_all_three():
+    first = SingletonNew()
+    copied = copy.copy(first)
+    restored = pickle.loads(pickle.dumps(first))
+
+    assert copied is first
+    assert restored is first
+
+
+def test_a_class_declaring_getnewargs_round_trips_copy_and_pickle():
+    instance = WithGetNewArgs(5)
+
+    assert copy.copy(instance) == instance
+    assert pickle.loads(pickle.dumps(instance)) == instance
+
+
+def test_a_bodyless_struct_keeps_the_plain_new_path():
+    instance = Plain(1, 2)
+
+    assert copy.copy(instance) == instance
+    assert pickle.loads(pickle.dumps(instance)) == instance
+
+    with pytest.raises(TypeError):
+        Plain.__new__(Plain, 1)
+
+
+def test_setstate_with_the_own_dict_as_third_element_is_a_no_op():
+    instance = WithDict(1)
+    instance.extra = "world"
+
+    instance.__setstate__(({"x": 9}, (), instance.__dict__))
+
+    assert instance.x == 9
+    assert instance.__dict__ == {"extra": "world"}
 
 
 @pytest.mark.parametrize("protocol", [0, 1])

@@ -137,9 +137,14 @@ static enum result reject_unless_planned(
 );
 static enum result install_post_init(StructType * struct_class);
 static PyObject * Struct_new_wrapper(PyObject * self, PyObject * arguments, PyObject * keywords);
+static PyObject * Struct_new_thunk(
+	PyTypeObject * struct_class,
+	PyObject * arguments,
+	PyObject * keywords
+);
 static bool is_struct_new_wrapper(PyObject * wrapper);
 static PyMethodDef struct_new_methoddef[];
-static enum result install_new_wrapper(StructType * struct_class);
+static enum result install_new_wrapper(StructType * struct_class, StructType const * base);
 static PyObject * StructMeta_call(PyObject * self, PyObject * args, PyObject * keywords);
 static Py_ssize_t * resolve_slot_offsets(
 	StructType * struct_class,
@@ -1131,16 +1136,50 @@ static enum result install_fields(
 	struct_class->struct_options = options;
 	struct_class->struct_resolves_body_eq = resolves_body_eq;
 
-	struct_class->heap_type.ht_type.tp_new = Struct_new;
-
-	if (!defines_own_init(struct_class)) {
-		struct_class->heap_type.ht_type.tp_vectorcall = Struct_vectorcall;
+	if (install_new_wrapper(struct_class, base) != RESULT_OK) {
+		return RESULT_ERROR;
 	}
 
-	return (
-		install_new_wrapper(struct_class) == RESULT_OK ? install_post_init(struct_class) :
-		RESULT_ERROR
-	);
+	PyTypeObject * const python_class = &struct_class->heap_type.ht_type;
+
+	if (struct_class->struct_body_new != NULL) {
+		python_class->tp_new = Struct_new_thunk;
+	} else {
+		python_class->tp_new = Struct_new;
+
+		if (!defines_own_init(struct_class)) {
+			python_class->tp_vectorcall = Struct_vectorcall;
+		}
+	}
+
+	return install_post_init(struct_class);
+}
+
+static PyObject * Struct_new_thunk(
+	PyTypeObject * const struct_class,
+	PyObject * const arguments,
+	PyObject * const keywords
+) {
+	PY_OWNED(wrapper, PyObject_GetAttrString((PyObject *) struct_class, "__new__"));
+
+	if (wrapper == NULL) {
+		return NULL;
+	}
+
+	Py_ssize_t const argument_count = PyTuple_GET_SIZE(arguments);
+	PY_OWNED(call_args, PyTuple_New(argument_count + 1));
+
+	if (call_args == NULL) {
+		return NULL;
+	}
+
+	PyTuple_SET_ITEM(call_args, 0, Py_NewRef(struct_class));
+
+	for (Py_ssize_t i = 0; i < argument_count; ++i) {
+		PyTuple_SET_ITEM(call_args, i + 1, Py_NewRef(PyTuple_GET_ITEM(arguments, i)));
+	}
+
+	return PyObject_Call(wrapper, call_args, keywords);
 }
 
 static PyObject * Struct_new_wrapper(
@@ -1148,17 +1187,23 @@ static PyObject * Struct_new_wrapper(
 	PyObject * const arguments,
 	PyObject * const keywords
 ) {
+	StructType * const type = (StructType *) self;
+
 	if (keywords != NULL && PyDict_GET_SIZE(keywords) > 0) {
-		PyErr_SetString(PyExc_TypeError, "__new__() takes no keyword arguments");
+		if (type->struct_body_new == NULL && !type->struct_declares_getnewargs) {
+			PyErr_SetString(PyExc_TypeError, "__new__() takes no keyword arguments");
+
+			return NULL;
+		}
+	}
+
+	if (PyTuple_GET_SIZE(arguments) < 1) {
+		PyErr_SetString(PyExc_TypeError, "__new__() expected at least 1 argument");
 
 		return NULL;
 	}
 
-	PyObject * arg0 = NULL;
-
-	if (!PyArg_UnpackTuple(arguments, "__new__", 1, 1, &arg0)) {
-		return NULL;
-	}
+	PyObject * const arg0 = PyTuple_GET_ITEM(arguments, 0);
 
 	if (!PyType_Check(arg0)) {
 		PyErr_Format(
@@ -1186,13 +1231,56 @@ static PyObject * Struct_new_wrapper(
 		return NULL;
 	}
 
+	Py_ssize_t const extra = PyTuple_GET_SIZE(arguments) - 1;
+
+	if (extra > 0 && type->struct_body_new == NULL && !type->struct_declares_getnewargs) {
+		PyErr_SetString(
+			PyExc_TypeError,
+			"__new__() takes exactly one argument (the type to instantiate)"
+		);
+
+		return NULL;
+	}
+
 	PY_OWNED(rest, PyTuple_GetSlice(arguments, 1, PyTuple_GET_SIZE(arguments)));
 
 	if (rest == NULL) {
 		return NULL;
 	}
 
-	return ((PyTypeObject *) self)->tp_new(subtype, rest, keywords);
+	if (type->struct_body_new != NULL) {
+		PY_OWNED(body_args, PyTuple_New(PyTuple_GET_SIZE(rest) + 1));
+
+		if (body_args == NULL) {
+			return NULL;
+		}
+
+		PyTuple_SET_ITEM(body_args, 0, Py_NewRef(subtype));
+
+		for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(rest); ++i) {
+			PyTuple_SET_ITEM(body_args, i + 1, Py_NewRef(PyTuple_GET_ITEM(rest, i)));
+		}
+
+		PY_MOVABLE(result, PyObject_Call(type->struct_body_new, body_args, keywords));
+
+		if (result != NULL) {
+			return py_move(&result);
+		}
+
+		if (!PyErr_ExceptionMatches(PyExc_TypeError)) {
+			return NULL;
+		}
+
+		if (PyTuple_GET_SIZE(rest) == 0 && (keywords == NULL || PyDict_GET_SIZE(keywords) == 0)) {
+			PyErr_Clear();
+
+			return Struct_new(subtype, rest, keywords);
+		}
+
+		return NULL;
+	}
+
+	return Struct_new(subtype, rest, keywords);
 }
 
 static PyMethodDef struct_new_methoddef[] = {
@@ -1214,32 +1302,121 @@ static bool is_struct_new_wrapper(PyObject * const wrapper) {
 	);
 }
 
-static enum result install_new_wrapper(StructType * const struct_class) {
+static struct definition first_body_new(
+	PyObject * const base,
+	PyObject * const name,
+	PyObject * * const value
+) {
+	PyObject * const mro = ((PyTypeObject *) base)->tp_mro;
+
+	if (mro == NULL) {
+		return (struct definition){.tag = DEFINITION_READ, .found = false};
+	}
+
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); ++i) {
+		PyObject * const entry = PyTuple_GET_ITEM(mro, i);
+
+		if (entry == (PyObject *) &PyBaseObject_Type || entry == (PyObject *) &StructMixin_Type) {
+			continue;
+		}
+
+		PY_OWNED(dict, struct_type_dict((PyTypeObject *) entry));
+
+		if (dict == NULL) {
+			return (struct definition){.tag = DEFINITION_UNREADABLE};
+		}
+
+		PY_MOVABLE(bound, dict_value_ref(dict, name));
+
+		if (bound == NULL) {
+			if (PyErr_Occurred()) {
+				return (struct definition){.tag = DEFINITION_UNREADABLE};
+			}
+
+			continue;
+		}
+
+		if (is_struct_new_wrapper(bound)) {
+			continue;
+		}
+
+		*value = py_move(&bound);
+
+		return (struct definition){.tag = DEFINITION_READ, .found = true};
+	}
+
+	return (struct definition){.tag = DEFINITION_READ, .found = false};
+}
+
+static enum result install_new_wrapper(
+	StructType * const struct_class,
+	StructType const * const base
+) {
 	PY_OWNED(new_name, PyUnicode_InternFromString("__new__"));
 
 	if (new_name == NULL) {
 		return RESULT_ERROR;
 	}
 
-	PY_MOVABLE(declared, NULL);
-	struct definition const defined = base_defines_value(
-		(PyObject *) struct_class,
-		new_name,
-		&declared
-	);
-
-	if (defined.tag == DEFINITION_UNREADABLE) {
-		return RESULT_ERROR;
-	}
-
-	if (defined.found && !is_struct_new_wrapper(declared)) {
-		return RESULT_OK;
-	}
-
 	PY_OWNED(dict, struct_type_dict(&struct_class->heap_type.ht_type));
 
 	if (dict == NULL) {
 		return RESULT_ERROR;
+	}
+
+	PY_MOVABLE(declared, dict_value_ref(dict, new_name));
+
+	if (declared == NULL && PyErr_Occurred()) {
+		return RESULT_ERROR;
+	}
+
+	if (declared != NULL && !is_struct_new_wrapper(declared)) {
+		struct_class->struct_body_new = py_move(&declared);
+	} else if (base != NULL && base->struct_body_new != NULL) {
+		struct_class->struct_body_new = Py_NewRef(base->struct_body_new);
+	} else {
+		PY_MOVABLE(mro_new, NULL);
+		struct definition const found = first_body_new(
+			(PyObject *) struct_class,
+			new_name,
+			&mro_new
+		);
+
+		if (found.tag == DEFINITION_UNREADABLE) {
+			return RESULT_ERROR;
+		}
+
+		if (found.found) {
+			struct_class->struct_body_new = py_move(&mro_new);
+		}
+	}
+
+	PY_OWNED(getnewargs, PyUnicode_InternFromString("__getnewargs__"));
+	PY_OWNED(getnewargs_ex, PyUnicode_InternFromString("__getnewargs_ex__"));
+
+	if (getnewargs == NULL || getnewargs_ex == NULL) {
+		return RESULT_ERROR;
+	}
+
+	struct definition const declared_args = base_defines((PyObject *) struct_class, getnewargs);
+
+	if (declared_args.tag == DEFINITION_UNREADABLE) {
+		return RESULT_ERROR;
+	}
+
+	if (declared_args.found) {
+		struct_class->struct_declares_getnewargs = true;
+	} else {
+		struct definition const declared_args_ex = base_defines(
+			(PyObject *) struct_class,
+			getnewargs_ex
+		);
+
+		if (declared_args_ex.tag == DEFINITION_UNREADABLE) {
+			return RESULT_ERROR;
+		}
+
+		struct_class->struct_declares_getnewargs = declared_args_ex.found;
 	}
 
 	PY_OWNED(wrapper, PyCFunction_NewEx(struct_new_methoddef, (PyObject *) struct_class, NULL));
@@ -1355,6 +1532,7 @@ static int StructMeta_traverse(PyObject * const self, visitproc const visit, voi
 	Py_VISIT(struct_class->struct_field_names);
 	Py_VISIT(struct_class->struct_defaults);
 	Py_VISIT(struct_class->struct_post_init);
+	Py_VISIT(struct_class->struct_body_new);
 
 	return PyType_Type.tp_traverse(self, visit, arg);
 }
@@ -1363,6 +1541,7 @@ static int StructMeta_clear(PyObject * const self) {
 	StructType * const struct_class = (StructType *) self;
 
 	Py_CLEAR(struct_class->struct_post_init);
+	Py_CLEAR(struct_class->struct_body_new);
 
 	if (struct_class->struct_field_names == NULL) {
 		return RESULT_OK;

@@ -42,6 +42,14 @@ static enum result write_slot(
 	PyObject * value
 );
 static enum result run_post_init(StructType const * type, PyObject * self);
+static PyObject * instance_dict_owned(PyObject * self);
+static enum result resolve_state(
+	StructType const * type,
+	PyObject * values,
+	PyObject * unset_names,
+	Py_ssize_t * * const values_indices,
+	Py_ssize_t * * const unset_indices
+);
 
 PyObject * Struct_vectorcall(
 	PyObject * const struct_class,
@@ -90,17 +98,17 @@ PyObject * Struct_new(
 	PyObject * const arguments,
 	PyObject * const keywords
 ) {
-	if (!defines_own_init((StructType *) struct_class)) {
-		Py_ssize_t const argument_count = (
-			PyTuple_GET_SIZE(arguments) +
-			(keywords != NULL ? PyDict_GET_SIZE(keywords) : 0)
-		);
+	StructType * const type = (StructType *) struct_class;
+	bool const body_init = defines_own_init(type);
+	Py_ssize_t const argument_count = (
+		PyTuple_GET_SIZE(arguments) +
+		(keywords != NULL ? PyDict_GET_SIZE(keywords) : 0)
+	);
 
-		if (argument_count > 0) {
-			PyErr_Format(PyExc_TypeError, "%.200s() takes no arguments", struct_class->tp_name);
+	if (argument_count > 0 && !body_init && !type->struct_declares_getnewargs) {
+		PyErr_Format(PyExc_TypeError, "%.200s() takes no arguments", struct_class->tp_name);
 
-			return NULL;
-		}
+		return NULL;
 	}
 
 	PY_MOVABLE(self, struct_class->tp_alloc(struct_class, 0));
@@ -108,8 +116,6 @@ PyObject * Struct_new(
 	if (self == NULL) {
 		return NULL;
 	}
-
-	StructType const * const type = (StructType *) struct_class;
 
 	return (
 		fill_defaults(type, self, struct_required_count(type)) == RESULT_OK ? py_move(&self) :
@@ -393,6 +399,26 @@ static enum result require_field(
 	Py_UNREACHABLE();
 }
 
+static PyObject * instance_dict_owned(PyObject * const self) {
+	PyObject * * const dict_slot = _PyObject_GetDictPtr(self);
+	PY_MOVABLE(dict, NULL);
+
+	STRUCT_BEGIN_CRITICAL_SECTION(self);
+	dict = Py_XNewRef(*dict_slot);
+
+	if (dict == NULL) {
+		dict = PyDict_New();
+
+		if (dict != NULL) {
+			*dict_slot = dict;
+			dict = Py_NewRef(dict);
+		}
+	}
+	STRUCT_END_CRITICAL_SECTION();
+
+	return py_move(&dict);
+}
+
 PyObject * Struct_get_state(PyObject * const self, PyObject * const noargs) {
 	if (!is_struct(self)) {
 		PyErr_Format(
@@ -440,21 +466,7 @@ PyObject * Struct_get_state(PyObject * const self, PyObject * const noargs) {
 	PY_MOVABLE(instance_dict, NULL);
 
 	if (Py_TYPE(self)->tp_dictoffset != 0) {
-		PyObject * * const dict_slot = _PyObject_GetDictPtr(self);
-		PY_MOVABLE(dict, NULL);
-
-		STRUCT_BEGIN_CRITICAL_SECTION(self);
-		dict = Py_XNewRef(*dict_slot);
-
-		if (dict == NULL) {
-			dict = PyDict_New();
-
-			if (dict != NULL) {
-				*dict_slot = dict;
-				dict = Py_NewRef(dict);
-			}
-		}
-		STRUCT_END_CRITICAL_SECTION();
+		PY_MOVABLE(dict, instance_dict_owned(self));
 
 		if (dict == NULL) {
 			return NULL;
@@ -494,47 +506,79 @@ static enum result restore_unset(
 	return outcome;
 }
 
-static enum result validate_state(
+static enum result resolve_state(
 	StructType const * const type,
 	PyObject * const values,
-	PyObject * const unset_names
+	PyObject * const unset_names,
+	Py_ssize_t * * const values_indices,
+	Py_ssize_t * * const unset_indices
 ) {
+	Py_ssize_t const value_count = PyDict_GET_SIZE(values);
+	Py_ssize_t const unset_count = PyTuple_GET_SIZE(unset_names);
+	Py_ssize_t * const resolved_values = PyMem_New(Py_ssize_t, value_count > 0 ? value_count : 1);
+	Py_ssize_t * const resolved_unset = PyMem_New(Py_ssize_t, unset_count > 0 ? unset_count : 1);
+
+	if (resolved_values == NULL || resolved_unset == NULL) {
+		PyMem_Free(resolved_values);
+		PyMem_Free(resolved_unset);
+		PyErr_NoMemory();
+
+		return RESULT_ERROR;
+	}
+
 	Py_ssize_t position = 0;
 	PyObject * name = NULL;
 	PyObject * value = NULL;
+	Py_ssize_t i = 0;
 
 	while (PyDict_Next(values, &position, &name, &value)) {
-		Py_ssize_t index;
-
-		if (require_field(type, name, "__setstate__()", &index) != RESULT_OK) {
-			return RESULT_ERROR;
+		if (require_field(type, name, "__setstate__()", &resolved_values[i]) != RESULT_OK) {
+			goto error;
 		}
 
-		int const also_unset = PySequence_Contains(unset_names, name);
+		++i;
+	}
 
-		if (also_unset < 0) {
-			return RESULT_ERROR;
+	bool * const set_flags = PyMem_Calloc(
+		type->struct_field_count > 0 ? type->struct_field_count : 1,
+		sizeof(bool)
+	);
+
+	if (set_flags == NULL) {
+		PyErr_NoMemory();
+		goto error;
+	}
+
+	for (Py_ssize_t v = 0; v < value_count; ++v) {
+		set_flags[resolved_values[v]] = true;
+	}
+
+	for (Py_ssize_t u = 0; u < unset_count; ++u) {
+		PyObject * const unset_name = PyTuple_GET_ITEM(unset_names, u);
+
+		if (require_field(type, unset_name, "__setstate__()", &resolved_unset[u]) != RESULT_OK) {
+			PyMem_Free(set_flags);
+			goto error;
 		}
 
-		if (also_unset == 1) {
-			PyErr_Format(PyExc_TypeError, "field '%U' listed as both set and unset", name);
-
-			return RESULT_ERROR;
+		if (set_flags[resolved_unset[u]]) {
+			PyErr_Format(PyExc_TypeError, "field '%U' listed as both set and unset", unset_name);
+			PyMem_Free(set_flags);
+			goto error;
 		}
 	}
 
-	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(unset_names); ++i) {
-		Py_ssize_t index;
-
-		if (
-			require_field(type, PyTuple_GET_ITEM(unset_names, i), "__setstate__()", &index) !=
-			RESULT_OK
-		) {
-			return RESULT_ERROR;
-		}
-	}
+	PyMem_Free(set_flags);
+	*values_indices = resolved_values;
+	*unset_indices = resolved_unset;
 
 	return RESULT_OK;
+
+error:
+	PyMem_Free(resolved_values);
+	PyMem_Free(resolved_unset);
+
+	return RESULT_ERROR;
 }
 
 PyObject * Struct_set_state(PyObject * const self, PyObject * const state) {
@@ -587,67 +631,58 @@ PyObject * Struct_set_state(PyObject * const self, PyObject * const state) {
 	}
 
 	StructType const * const type = struct_type_of(self);
+	Py_ssize_t * values_indices = NULL;
+	Py_ssize_t * unset_indices = NULL;
 
-	if (validate_state(type, values, unset_names) != RESULT_OK) {
+	if (resolve_state(type, values, unset_names, &values_indices, &unset_indices) != RESULT_OK) {
 		return NULL;
 	}
 
+	Py_ssize_t const unset_count = PyTuple_GET_SIZE(unset_names);
+	enum result outcome = RESULT_OK;
 	Py_ssize_t position = 0;
 	PyObject * name = NULL;
 	PyObject * value = NULL;
+	Py_ssize_t i = 0;
 
 	while (PyDict_Next(values, &position, &name, &value)) {
-		Py_ssize_t index;
-
-		if (require_field(type, name, "__setstate__()", &index) != RESULT_OK) {
-			return NULL;
+		if (write_slot(type, self, values_indices[i], value) != RESULT_OK) {
+			outcome = RESULT_ERROR;
+			break;
 		}
 
-		if (write_slot(type, self, index, value) != RESULT_OK) {
-			return NULL;
+		++i;
+	}
+
+	if (outcome == RESULT_OK) {
+		for (Py_ssize_t u = 0; u < unset_count; ++u) {
+			if (restore_unset(type, self, unset_indices[u]) != RESULT_OK) {
+				outcome = RESULT_ERROR;
+				break;
+			}
 		}
 	}
 
-	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(unset_names); ++i) {
-		Py_ssize_t index;
+	PyMem_Free(values_indices);
+	PyMem_Free(unset_indices);
 
-		if (
-			require_field(type, PyTuple_GET_ITEM(unset_names, i), "__setstate__()", &index) !=
-			RESULT_OK
-		) {
-			return NULL;
-		}
-
-		if (restore_unset(type, self, index) != RESULT_OK) {
-			return NULL;
-		}
+	if (outcome != RESULT_OK) {
+		return NULL;
 	}
 
 	if (Py_TYPE(self)->tp_dictoffset != 0) {
-		PyObject * * const dict_slot = _PyObject_GetDictPtr(self);
-		PY_MOVABLE(dict, NULL);
-
-		STRUCT_BEGIN_CRITICAL_SECTION(self);
-		dict = Py_XNewRef(*dict_slot);
+		PY_MOVABLE(dict, instance_dict_owned(self));
 
 		if (dict == NULL) {
-			dict = PyDict_New();
+			return NULL;
+		}
 
-			if (dict != NULL) {
-				*dict_slot = dict;
-				dict = Py_NewRef(dict);
+		if (instance_dict != Py_None && instance_dict != dict) {
+			PyDict_Clear(dict);
+
+			if (PyDict_Update(dict, instance_dict) < 0) {
+				return NULL;
 			}
-		}
-		STRUCT_END_CRITICAL_SECTION();
-
-		if (dict == NULL) {
-			return NULL;
-		}
-
-		PyDict_Clear(dict);
-
-		if (instance_dict != Py_None && PyDict_Update(dict, instance_dict) < 0) {
-			return NULL;
 		}
 	}
 

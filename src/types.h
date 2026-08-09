@@ -26,12 +26,14 @@ typedef struct {
 	PyObject * struct_defaults;
 	Py_ssize_t * struct_slot_offsets;
 	PyObject * struct_post_init;
+	PyObject * struct_body_new;
 
 	Py_ssize_t struct_field_count;
 	Py_ssize_t struct_default_count;
 	struct options struct_options;
 
 	bool struct_resolves_body_eq;
+	bool struct_declares_getnewargs;
 } StructType;
 
 /*
