@@ -145,8 +145,7 @@ static PyObject * dispatch_new(
 	StructType * struct_class,
 	PyTypeObject * subtype,
 	PyObject * rest,
-	PyObject * keywords,
-	bool reconstruction
+	PyObject * keywords
 );
 static PyObject * Struct_new_wrapper(PyObject * self, PyObject * arguments, PyObject * keywords);
 static PyObject * Struct_new_thunk(
@@ -1190,8 +1189,7 @@ static PyObject * dispatch_new(
 	StructType * const struct_class,
 	PyTypeObject * const subtype,
 	PyObject * const rest,
-	PyObject * const keywords,
-	bool const reconstruction
+	PyObject * const keywords
 ) {
 	Py_ssize_t const extra = PyTuple_GET_SIZE(rest);
 
@@ -1208,25 +1206,11 @@ static PyObject * dispatch_new(
 			PyTuple_SET_ITEM(body_args, i + 1, Py_NewRef(PyTuple_GET_ITEM(rest, i)));
 		}
 
-		PY_MOVABLE(result, PyObject_Call(struct_class->struct_body_new, body_args, keywords));
-
-		if (result != NULL) {
-			return py_move(&result);
-		}
-
-		if (!PyErr_ExceptionMatches(PyExc_TypeError)) {
-			return NULL;
-		}
-
-		bool const has_args = (extra > 0 || (keywords != NULL && PyDict_GET_SIZE(keywords) > 0));
-
-		if (reconstruction && struct_class->struct_declares_getnewargs && has_args) {
-			PyErr_Clear();
-
-			return Struct_new(subtype, rest, keywords);
-		}
-
-		return NULL;
+		/* A body __new__ that raises propagates the error; there is no fallback
+		 * to Struct_new on a TypeError. A body that cannot reconstruct must
+		 * accept the reconstruction arguments, or raise something other than
+		 * TypeError for a genuine rejection. */
+		return PyObject_Call(struct_class->struct_body_new, body_args, keywords);
 	}
 
 	bool const has_keywords = keywords != NULL && PyDict_GET_SIZE(keywords) > 0;
@@ -1252,7 +1236,7 @@ static PyObject * Struct_new_thunk(
 	PyObject * const arguments,
 	PyObject * const keywords
 ) {
-	return dispatch_new((StructType *) struct_class, struct_class, arguments, keywords, true);
+	return dispatch_new((StructType *) struct_class, struct_class, arguments, keywords);
 }
 
 static PyObject * Struct_new_wrapper(
@@ -1300,9 +1284,7 @@ static PyObject * Struct_new_wrapper(
 		return NULL;
 	}
 
-	bool const reconstruction = is_reconstruction_shape((StructType *) self, rest, keywords);
-
-	return dispatch_new((StructType *) self, subtype, rest, keywords, reconstruction);
+	return dispatch_new((StructType *) self, subtype, rest, keywords);
 }
 
 static PyMethodDef struct_new_methoddef[] = {
@@ -1523,10 +1505,9 @@ static PyObject * StructMeta_call(
 	StructType * const type = (StructType *) self;
 
 	/* A body __new__ is the constructor; route construction through the same
-	 * dispatch the wrapper uses so a genuine body TypeError propagates instead
-	 * of being swallowed by the reconstruction-only fallback. */
+	 * dispatch the wrapper uses so a body error propagates. */
 	if (type->struct_body_new != NULL) {
-		PY_MOVABLE(obj, dispatch_new(type, (PyTypeObject *) self, args, keywords, false));
+		PY_MOVABLE(obj, dispatch_new(type, (PyTypeObject *) self, args, keywords));
 
 		if (obj == NULL) {
 			return NULL;

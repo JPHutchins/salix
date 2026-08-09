@@ -54,11 +54,7 @@ PyMODINIT_FUNC PyInit_salix(void) {
 static int struct_exec(PyObject * const module) {
 	StructMeta_Type.tp_base = &PyType_Type;
 
-	if (
-		PyType_Ready(&StructMeta_Type) < 0 ||
-		PyType_Ready(&StructMixin_Type) < 0 ||
-		Struct_mixin_init() != RESULT_OK
-	) {
+	if (PyType_Ready(&StructMeta_Type) < 0 || PyType_Ready(&StructMixin_Type) < 0) {
 		return RESULT_ERROR;
 	}
 

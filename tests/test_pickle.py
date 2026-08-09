@@ -243,6 +243,18 @@ class DeclinesWithReduce(Struct):
         return (copyreg.__newobj__, (type(self), self.x), self.__getstate__())
 
 
+class DeclinesWithReduceNoGNA(Struct):
+    x: int = 5
+
+    def __new__(cls, v: int = 0):
+        if v:
+            raise TypeError("declined for reconstruction")
+        return super().__new__(cls)
+
+    def __reduce__(self):
+        return (copyreg.__newobj__, (type(self), self.x), self.__getstate__())
+
+
 class WithReduce(Struct):
     x: int = 0
 
@@ -700,13 +712,13 @@ def test_a_body_new_raising_typeerror_genuinely_propagates():
     RejectingNew.reject = False
 
 
-def test_a_body_new_declining_only_for_reconstruction_reconstructs_via_struct_new():
+def test_a_body_new_raising_typeerror_on_reconstruction_propagates():
     instance = DeclinesForReconstruction()
 
-    assert instance.x == 5
-
-    assert copy.copy(instance) == instance
-    assert pickle.loads(pickle.dumps(instance)) == instance
+    with pytest.raises(TypeError, match="declined for reconstruction"):
+        copy.copy(instance)
+    with pytest.raises(TypeError, match="declined for reconstruction"):
+        pickle.loads(pickle.dumps(instance))
 
 
 def test_a_class_declaring_getnewargs_round_trips_copy_and_pickle():
@@ -820,13 +832,6 @@ def test_a_genuine_body_typeerror_propagates_with_getnewargs_under_construction(
         GenuineWithGNA(5)
 
 
-def test_a_body_new_typeerror_declines_reconstruction_and_falls_back():
-    instance = DeclinesForReconstruction()
-
-    assert copy.copy(instance) == instance
-    assert pickle.loads(pickle.dumps(instance)) == instance
-
-
 def test_a_body_new_raising_a_non_typeerror_propagates_on_reconstruction():
     instance = ValueErrorNew()
     with pytest.raises(ValueError, match="genuine rejection"):
@@ -835,16 +840,28 @@ def test_a_body_new_raising_a_non_typeerror_propagates_on_reconstruction():
         pickle.loads(pickle.dumps(instance))
 
 
-def test_a_reduced_body_new_declining_reconstruction_round_trips_everywhere():
+def test_a_reduced_body_new_typeerror_propagates_on_every_reconstruction_path():
     instance = DeclinesWithReduce()
 
-    assert copy.copy(instance) == instance
-    assert copy.deepcopy(instance) == instance
+    for func in (copy.copy, copy.deepcopy):
+        with pytest.raises(TypeError, match="declined for reconstruction"):
+            func(instance)
 
     for protocol in (2, 3, 4, 5):
-        restored = pickle.loads(pickle.dumps(instance, protocol=protocol))
-        assert restored == instance
-        assert restored.x == 5
+        with pytest.raises(TypeError, match="declined for reconstruction"):
+            pickle.loads(pickle.dumps(instance, protocol=protocol))
+
+
+def test_a_reduced_body_new_without_getnewargs_propagates_consistently():
+    instance = DeclinesWithReduceNoGNA()
+
+    for func in (copy.copy, copy.deepcopy):
+        with pytest.raises(TypeError, match="declined for reconstruction"):
+            func(instance)
+
+    for protocol in (2, 3, 4, 5):
+        with pytest.raises(TypeError, match="declined for reconstruction"):
+            pickle.loads(pickle.dumps(instance, protocol=protocol))
 
 
 def test_a_custom_reduce_controls_copy_and_deepcopy():

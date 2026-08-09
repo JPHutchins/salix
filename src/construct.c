@@ -681,10 +681,12 @@ PyObject * Struct_set_state(PyObject * const self, PyObject * const state) {
 			PyDict_Clear(dict);
 		} else if (instance_dict != dict) {
 			/* Build the replacement dict up front, then swap it in only on
-			 * success, so a failing merge leaves the instance's dict and slots
-			 * untouched. __setstate__ replaces the dict object, so external
-			 * references to the previous dict go stale; that is the accepted
-			 * cost of the atomicity. */
+			 * success, so a failing merge leaves the instance's dict object
+			 * untouched. The slots were already written above, so setstate is
+			 * atomic with respect to validation and the dict merge, not to a
+			 * mid-restore allocation failure in the slot loop. The dict object
+			 * is replaced, so external references to the previous dict go
+			 * stale; that is the accepted cost of the atomicity. */
 			PY_MOVABLE(fresh, PyDict_New());
 
 			if (fresh == NULL || PyDict_Update(fresh, instance_dict) < 0) {

@@ -24,8 +24,6 @@ static PyObject * deepcopy_object(PyObject * object, PyObject * memo);
 static PyGetSetDef Struct_getset[];
 static PyMethodDef Struct_methods[];
 
-static PyObject * copy_deepcopy_function = NULL;
-
 PyTypeObject StructMixin_Type = {
 	PyVarObject_HEAD_INIT(NULL, 0)
 	.tp_name = "salix._StructMixin",
@@ -165,30 +163,24 @@ static PyObject * call_method_onearg(
 	return PyObject_CallOneArg(method, arg);
 }
 
-enum result Struct_mixin_init(void) {
+static PyObject * deepcopy_object(PyObject * const object, PyObject * const memo) {
 	PY_OWNED(copy_module, PyImport_ImportModule("copy"));
 
 	if (copy_module == NULL) {
-		return RESULT_ERROR;
+		return NULL;
 	}
 
-	copy_deepcopy_function = PyObject_GetAttrString(copy_module, "deepcopy");
+	PY_OWNED(deepcopy, PyObject_GetAttrString(copy_module, "deepcopy"));
 
-	return copy_deepcopy_function != NULL ? RESULT_OK : RESULT_ERROR;
-}
+	if (deepcopy == NULL) {
+		return NULL;
+	}
 
-static PyObject * deepcopy_object(PyObject * const object, PyObject * const memo) {
-	return PyObject_CallFunctionObjArgs(copy_deepcopy_function, object, memo, NULL);
+	return PyObject_CallFunctionObjArgs(deepcopy, object, memo, NULL);
 }
 
 static PyObject * reconstruction_args_of(PyObject * const self, PyObject * * const keywords) {
 	*keywords = NULL;
-	StructType const * const type = struct_type_of(self);
-
-	if (!type->struct_declares_getnewargs) {
-		return PyTuple_New(0);
-	}
-
 	PY_OWNED(ex, optional_attribute(self, "__getnewargs_ex__"));
 
 	if (ex != NULL) {
