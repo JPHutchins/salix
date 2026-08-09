@@ -1,9 +1,3 @@
-"""camas tasks for the benchmark member.
-
---package: msgspec and record-type belong to this member, and a root-level
-`uv run` neither installs nor guarantees them.
-"""
-
 from camas import Config, Task
 
 run = Task("uv run --package salix-bench python bench.py")

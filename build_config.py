@@ -1,9 +1,3 @@
-"""What the extension is built from.
-
-setup.py imports this for the local build and nix/wheel.nix shells out to it for
-the cross builds, so a flag or a new translation unit lands in both.
-"""
-
 from typing import Final, NamedTuple
 
 

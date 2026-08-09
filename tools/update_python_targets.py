@@ -1,9 +1,3 @@
-"""Regenerate nix/python-targets.nix from a python-build-standalone release.
-
-Interpreters come from .python-version; the GitHub API serves each asset's
-digest, so nothing is downloaded to pin it.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -16,8 +10,6 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 RELEASES = "https://api.github.com/repos/astral-sh/python-build-standalone/releases"
-# The freethreaded builds are the same triples under a variant suffix, and
-# they are what a `cp313t`-and-up wheel is compiled against.
 ASSET = re.compile(
     r"^cpython-(?P<version>\d+\.\d+(?:\.\w+)?)\+\d+-(?P<triple>.+?)"
     r"(?P<variant>-freethreaded)?-install_only_stripped\.tar\.gz$"

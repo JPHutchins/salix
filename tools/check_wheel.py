@@ -1,10 +1,3 @@
-"""Verify a wheel without executing it.
-
-Five of the six platforms cannot run on the builder, so what is checkable is
-the wheel's internal consistency and whether the payload matches the tag it
-ships under.
-"""
-
 from __future__ import annotations
 
 import base64
@@ -22,8 +15,6 @@ MACHO_64_MAGIC = b"\xcf\xfa\xed\xfe"
 
 
 class Shape(NamedTuple):
-    """What the platform tag implies the binary must be."""
-
     container: str
     machine: str
 
@@ -122,13 +113,6 @@ def check(path: Path) -> Iterator[Failure]:
 
 
 def init_symbol(payload: str) -> bytes:
-    """A payload has to export the init function of the module it is.
-
-    The extension is built as a package's __init__, so the module it stands for
-    is the directory holding it -- which is also what CPython's loader derives
-    the symbol from.
-    """
-
     directory, _, filename = payload.rpartition("/")
     stem = filename.split(".")[0]
     module = directory.rpartition("/")[2] if stem == "__init__" else stem

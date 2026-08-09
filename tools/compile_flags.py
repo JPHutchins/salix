@@ -1,10 +1,3 @@
-"""Write `compile_flags.txt`, which clangd and clang-tidy both read directly.
-
-One flag set covers every translation unit here, so the fixed-flags form does
-the job a compilation database would, and neither tool needs the build to have
-run. The flags are what setuptools composes: sysconfig's, then the project's.
-"""
-
 import shlex
 import sys
 import sysconfig
