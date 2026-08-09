@@ -4,6 +4,7 @@
 #include "annotations.h"
 #include "owned.h"
 
+/* annotationlib.Format. The numbering is the API. */
 enum annotation_format {
 	ANNOTATION_FORMAT_VALUE = 1,
 	ANNOTATION_FORMAT_VALUE_WITH_FAKE_GLOBALS = 2,
