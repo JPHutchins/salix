@@ -1165,7 +1165,7 @@ static PyObject * Struct_new_wrapper(
 		PyErr_Format(
 			PyExc_TypeError,
 			"%s.__new__(%s): %s is not a subtype of %s",
-			subtype->tp_name,
+			((PyTypeObject *) self)->tp_name,
 			subtype->tp_name,
 			subtype->tp_name,
 			((PyTypeObject *) self)->tp_name

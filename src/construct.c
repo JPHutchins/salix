@@ -768,14 +768,9 @@ PyObject * Struct_set_state(PyObject * const self, PyObject * const state) {
 					return NULL;
 				}
 
-				PyObject * * const dict_slot = struct_dict_slot_ptr(self);
-
 				STRUCT_BEGIN_CRITICAL_SECTION(self);
-				*dict_slot = fresh;
-				fresh = NULL;
+				PyObject_GenericSetDict(self, fresh, NULL);
 				STRUCT_END_CRITICAL_SECTION();
-
-				Py_DECREF(dict);
 			}
 		} else {
 			PY_MOVABLE(dict, struct_instance_dict_ref(self));
