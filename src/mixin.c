@@ -124,7 +124,10 @@ static PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 	/* A __copy__ defined by a co-base sits after _StructMixin in the MRO, so
 	 * the mixin's method would shadow it for copy.copy's lookup. Defer to
 	 * the first __copy__ found outside the mixin's own dict, exactly the one
-	 * copy.copy would have found without the mixin's method in the way. */
+	 * copy.copy would have found without the mixin's method in the way. The
+	 * value is resolved through attribute lookup on the defining class, so a
+	 * classmethod, property or member descriptor is bound the way copy.py's
+	 * getattr would, and fails the same TypeError it would. */
 	PyObject * const copy_name = struct_copy_name();
 
 	if (copy_name == NULL) {
@@ -158,7 +161,7 @@ static PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 			continue;
 		}
 
-		PY_MOVABLE(method, dict_value_ref(entry_dict, name));
+		PY_MOVABLE(method, PyObject_GetAttr(entry, name));
 
 		if (method == NULL) {
 			return NULL;

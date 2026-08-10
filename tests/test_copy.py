@@ -170,6 +170,45 @@ def test_a_co_base_copy_is_deferred_to():
     assert copied.was_copied is True
 
 
+def test_a_classmethod_co_base_copy_fails_like_copy_dot_py():
+    class CM:
+        @classmethod
+        def __copy__(cls) -> str:
+            return "cm-copy"
+
+    class RealStruct(Struct, CM, frozen=False):
+        x: int
+
+    # copy.py binds the classmethod, then calls the bound method with the
+    # instance — two arguments to a one-argument classmethod.
+    with pytest.raises(TypeError, match="positional"):
+        copy.copy(RealStruct(1))
+
+
+def test_a_property_co_base_copy_fails_like_copy_dot_py():
+    class Prop:
+        @property
+        def __copy__(self) -> str:
+            return "prop-copy"
+
+    class RealStruct(Struct, Prop, frozen=False):
+        x: int
+
+    with pytest.raises(TypeError, match="property"):
+        copy.copy(RealStruct(1))
+
+
+def test_a_member_descriptor_co_base_copy_fails_like_copy_dot_py():
+    class Slotted:
+        __slots__ = ("__copy__",)
+
+    class RealStruct(Struct, Slotted, frozen=False):
+        x: int
+
+    with pytest.raises(TypeError, match="member_descriptor"):
+        copy.copy(RealStruct(1))
+
+
 def test_a_dispatch_table_copier_is_honored_for_an_impostor():
     def special_copy(instance):
         return (list, ([1, 2, 3],))
