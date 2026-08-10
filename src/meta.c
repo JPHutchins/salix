@@ -1140,6 +1140,8 @@ static enum result install_fields(
 		resolve_member_offsets(struct_class, offsets, field_count, &member_count);
 
 	if (member_offsets == NULL) {
+		PyMem_Free(offsets);
+
 		return RESULT_ERROR;
 	}
 

@@ -273,11 +273,12 @@ def test_a_shared_struct_is_safe_to_copy_while_another_thread_writes_it():
 
 
 def test_a_dict_bearing_struct_is_safe_to_copy_while_another_thread_writes_its_dict():
-    """The dict-copy branch: the slot is read under the same section, then
-    copied outside it. The writer mutates the dict in place, so the slot
-    pointer is stable and the race is the copy against the mutation, which
-    the dict's own lock settles. Survival is the assertion; every written
-    value is an int, so a copy of garbage cannot pass by accident."""
+    """The dict-copy branch: the slot and the dict pointer are read under
+    one section, then the dict is copied outside it. The writer mutates the
+    dict in place and writes the slot, so the race is the copy against both,
+    which the dict's own lock and the section settle. Survival is the
+    assertion; every written value is an int, so a copy of garbage cannot
+    pass by accident."""
 
     class Dicted:
         pass
@@ -292,6 +293,7 @@ def test_a_dict_bearing_struct_is_safe_to_copy_while_another_thread_writes_its_d
 
     def write():
         for i in range(rounds):
+            shared.value = i
             shared.__dict__["extra"] = i
 
     def read():
@@ -299,6 +301,7 @@ def test_a_dict_bearing_struct_is_safe_to_copy_while_another_thread_writes_its_d
             copied = copy.copy(shared)
 
             if i % 1000 == 0:
+                assert isinstance(copied.value, int)
                 assert isinstance(copied.__dict__["extra"], int)
                 assert copied.__dict__ is not shared.__dict__
 

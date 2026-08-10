@@ -47,16 +47,6 @@ static PyMethodDef Struct_methods[] = {
  * property or member descriptor is bound the way getattr would, and fails
  * the same TypeError it would; NULL means none was found.
  */
-static PyObject * struct_copy_name(void) {
-	static PyObject * name = NULL;
-
-	if (name == NULL) {
-		name = PyUnicode_InternFromString("__copy__");
-	}
-
-	return name;
-}
-
 static PyObject * deferred_co_base_copy(PyObject * const self, PyObject * const name) {
 	PyTypeObject * const cls = Py_TYPE(self);
 	PyObject * const mro = cls->tp_mro;
@@ -90,21 +80,29 @@ static PyObject * deferred_co_base_copy(PyObject * const self, PyObject * const 
 			return NULL;
 		}
 
-		/* copy.py's getattr(cls, '__copy__') binds a classmethod to the
-		 * concrete class; resolving on the defining entry would bind it to
-		 * the co-base and hand the method the wrong cls. */
+		/* copy.py's getattr(cls, '__copy__', None) binds a classmethod to
+		 * the concrete class, and treats a descriptor __get__ AttributeError
+		 * as "no __copy__", falling through; both are reproduced here. */
 		if (PyObject_TypeCheck(raw, &PyClassMethod_Type)) {
 			return PyObject_CallMethod(raw, "__get__", "OO", Py_None, (PyObject *) Py_TYPE(self));
 		}
 
-		return PyObject_GetAttr(entry, name);
+		PyObject * const resolved = PyObject_GetAttr(entry, name);
+
+		if (resolved == NULL && PyErr_ExceptionMatches(PyExc_AttributeError)) {
+			PyErr_Clear();
+
+			return NULL;
+		}
+
+		return resolved;
 	}
 
 	return NULL;
 }
 
 static PyObject * Struct_copy_delegate(PyObject * const self) {
-	PyObject * const copy_name = struct_copy_name();
+	PY_OWNED(copy_name, PyUnicode_InternFromString("__copy__"));
 
 	if (copy_name == NULL) {
 		return NULL;
@@ -142,7 +140,33 @@ static PyObject * Struct_copy_delegate(PyObject * const self) {
 	if (copier != NULL) {
 		reduced = PyObject_CallOneArg(copier, self);
 	} else {
-		reduced = PyObject_CallMethod(self, "__reduce_ex__", "i", 4);
+		/* copy.py's reduce chain: __reduce_ex__ if present, else __reduce__,
+		 * and a class that sets either to None skips it. */
+		PY_OWNED(reduce_ex, optional_attribute(self, "__reduce_ex__"));
+
+		if (reduce_ex == NULL && PyErr_Occurred()) {
+			return NULL;
+		}
+
+		if (reduce_ex != NULL) {
+			reduced = PyObject_CallFunction(reduce_ex, "i", 4);
+		} else {
+			PY_OWNED(reduce, optional_attribute(self, "__reduce__"));
+
+			if (reduce == NULL && PyErr_Occurred()) {
+				return NULL;
+			}
+
+			if (reduce != NULL) {
+				reduced = PyObject_CallNoArgs(reduce);
+			} else {
+				PyErr_Format(
+					PyExc_TypeError,
+					"un(shallow)copyable object of type %.200s",
+					Py_TYPE(self)->tp_name
+				);
+			}
+		}
 	}
 
 	return reduced != NULL ? copy_reconstruct(self, reduced, copy_module) : NULL;
@@ -200,7 +224,7 @@ static PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 	StructType * const type = struct_type_of(self);
 	PyTypeObject * const cls = &type->heap_type.ht_type;
 
-	PyObject * const copy_name = struct_copy_name();
+	PY_OWNED(copy_name, PyUnicode_InternFromString("__copy__"));
 
 	if (copy_name == NULL) {
 		return NULL;
@@ -216,7 +240,7 @@ static PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 		return PyObject_CallOneArg(deferred, self);
 	}
 
-	/* copy.py consults dispatch_table before __copy__, and the mixin's
+	/* copy.py consults dispatch_table after __copy__, and the mixin's
 	 * method would shadow a user registration for a real struct; honor it
 	 * the same way the delegate does, with the same reduce-path handling. */
 	PY_OWNED(copy_module, PyImport_ImportModule("copy"));
@@ -249,9 +273,8 @@ static PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 		return NULL;
 	}
 
-	struct_slots_copy_into(type, self, copy);
-
-	PY_MOVABLE(dict, struct_instance_dict_ref(self));
+	PY_MOVABLE(dict, NULL);
+	struct_slots_copy_into(type, self, copy, &dict);
 
 	if (dict != NULL) {
 		PY_OWNED(copied, PyDict_Copy(dict));

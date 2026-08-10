@@ -225,15 +225,19 @@ static inline void struct_slots_ref_or_none_into(
 }
 
 /*
- * Every slot the type owns, under one acquisition: the struct fields and the
- * non-struct base members whose offsets install_fields resolved. An unwritten
- * slot stays unwritten in the destination. The loop stores only, so nothing
- * here can fail.
+ * Every slot the type owns, plus the instance dict, under one acquisition:
+ * the struct fields and the non-struct base members whose offsets
+ * install_fields resolved. An unwritten slot stays unwritten in the
+ * destination. `dict` receives a strong reference to the instance dict if
+ * the slot holds one; reading never creates the dict, so copying a struct
+ * that never had a __dict__ does not materialize one on the source. The
+ * loop stores only, so nothing here can fail.
  */
 static inline void struct_slots_copy_into(
 	StructType const * const type,
 	PyObject * const source,
-	PyObject * const destination
+	PyObject * const destination,
+	PyObject * * const dict
 ) {
 	STRUCT_BEGIN_CRITICAL_SECTION(source);
 
@@ -254,29 +258,13 @@ static inline void struct_slots_copy_into(
 		}
 	}
 
-	STRUCT_END_CRITICAL_SECTION();
-}
+	PyObject * * const dict_slot = _PyObject_GetDictPtr(source);
 
-/*
- * A strong reference to the instance dict if the slot holds one, NULL
- * otherwise. Reading never creates the dict, so copying a struct that never
- * had a __dict__ does not materialize one on the source; the slot is read
- * under the same lock a concurrent writer's attr store takes.
- */
-static inline PyObject * struct_instance_dict_ref(PyObject * const self) {
-	PyObject * * const dict_slot = _PyObject_GetDictPtr(self);
-
-	if (dict_slot == NULL) {
-		return NULL;
+	if (dict_slot != NULL) {
+		*dict = Py_XNewRef(*dict_slot);
 	}
 
-	PyObject * dict = NULL;
-
-	STRUCT_BEGIN_CRITICAL_SECTION(self);
-	dict = Py_XNewRef(*dict_slot);
 	STRUCT_END_CRITICAL_SECTION();
-
-	return dict;
 }
 
 static inline Py_ssize_t struct_required_count(StructType const * const type) {
