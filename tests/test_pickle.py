@@ -436,6 +436,16 @@ def test_setstate_replaces_the_instance_dict():
     assert instance.__dict__ == {"extra": "fresh"}
 
 
+def test_a_swapped_instance_dict_is_visible_to_attribute_reads():
+    instance = WithDict(1)
+    instance.extra = "world"
+
+    instance.__setstate__(({"x": 5}, (), {"extra": "fresh"}))
+
+    assert instance.extra == "fresh"
+    assert instance.__dict__ == {"extra": "fresh"}
+
+
 def test_getstate_snapshots_the_instance_dict_without_materializing_an_absent_one():
     instance = WithDict(1)
 

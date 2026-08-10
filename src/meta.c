@@ -1154,11 +1154,13 @@ static PyObject * Struct_new_wrapper(
 		return NULL;
 	}
 
-	PyObject * arg0 = NULL;
+	if (PyTuple_GET_SIZE(arguments) < 1) {
+		PyErr_SetString(PyExc_TypeError, "__new__() expected at least 1 argument");
 
-	if (!PyArg_UnpackTuple(arguments, "__new__", 1, 1, &arg0)) {
 		return NULL;
 	}
+
+	PyObject * const arg0 = PyTuple_GET_ITEM(arguments, 0);
 
 	if (!PyType_Check(arg0)) {
 		PyErr_Format(

@@ -206,21 +206,30 @@ static inline struct slot_pair struct_slot_pair_ref(
  * this loop calls back into Python. 3.14t, eight fields: 111.4ns to 81.1,
  * against 77.5 for the unsynchronised read this replaced.
  */
+/* NULL when the type has no instance dict slot (tp_dictoffset == 0). */
 static inline PyObject * * struct_dict_slot_ptr(PyObject * const self) {
 	return _PyObject_GetDictPtr(self);
 }
 
 /*
  * A strong reference to the instance dict if the slot holds one, NULL otherwise.
- * Reading never creates the dict, so pickling a struct that never had a
- * __dict__ does not materialize one on the source. The slot is read under the
- * same lock a concurrent writer's attr store takes, matching the slot readers.
+ * A dictless struct yields NULL; the caller distinguishes that from an
+ * allocation failure via PyErr_Occurred. Reading never creates the dict, so
+ * pickling a struct that never had a __dict__ does not materialize one on the
+ * source. The slot is read under the same lock a concurrent writer's attr
+ * store takes, matching the slot readers.
  */
 static inline PyObject * struct_instance_dict_ref(PyObject * const self) {
+	PyObject * * const dict_slot = struct_dict_slot_ptr(self);
+
+	if (dict_slot == NULL) {
+		return NULL;
+	}
+
 	PyObject * dict = NULL;
 
 	STRUCT_BEGIN_CRITICAL_SECTION(self);
-	dict = Py_XNewRef(*struct_dict_slot_ptr(self));
+	dict = Py_XNewRef(*dict_slot);
 	STRUCT_END_CRITICAL_SECTION();
 
 	return dict;
@@ -228,13 +237,18 @@ static inline PyObject * struct_instance_dict_ref(PyObject * const self) {
 
 /*
  * A strong reference to the instance dict, creating and installing one when the
- * slot is NULL. The mutation runs under the instance's critical section, the
- * same lock a concurrent writer's attr store takes, so a store landing between
- * the read and the install is not dropped. The slot owns one reference and the
- * caller owns a second.
+ * slot is NULL. A dictless struct yields NULL. The mutation runs under the
+ * instance's critical section, the same lock a concurrent writer's attr store
+ * takes, so a store landing between the read and the install is not dropped.
+ * The slot owns one reference and the caller owns a second.
  */
 static inline PyObject * struct_instance_dict_slot_ref(PyObject * const self) {
 	PyObject * * const dict_slot = struct_dict_slot_ptr(self);
+
+	if (dict_slot == NULL) {
+		return NULL;
+	}
+
 	PyObject * dict = NULL;
 
 	STRUCT_BEGIN_CRITICAL_SECTION(self);
