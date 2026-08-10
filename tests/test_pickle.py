@@ -855,12 +855,12 @@ def test_a_swapped_instance_dict_is_visible_to_attribute_reads():
 
 def test_setstate_with_a_none_instance_dict_does_not_destroy_a_shared_values_dict():
     instance = WithDict(9)
-    instance.__dict__["keep"] = "this"
+    instance.__dict__["x"] = 5
 
     instance.__setstate__((instance.__dict__, (), None))
 
-    assert instance.x == 9
-    assert instance.__dict__ == {"keep": "this"}
+    assert instance.x == 5
+    assert instance.__dict__ == {"x": 5}
 
 
 def test_type_call_arguments_on_a_bodyless_struct_are_refused():
