@@ -385,3 +385,24 @@ def test_copy_takes_one_reference_per_field_and_releases_them_with_the_copy():
     del copied
 
     assert sys.getrefcount(sentinel) == before
+
+
+def test_a_deferred_co_base_copy_does_not_leak_the_method():
+    """The deferral calls the co-base's __copy__ with an owned reference,
+    and the scope exit releases it: a leak would keep the method alive one
+    reference per copy."""
+
+    class HasCopy:
+        def __copy__(self):
+            return self
+
+    class Real(Struct, HasCopy, frozen=False):
+        x: int
+
+    method = HasCopy.__dict__["__copy__"]
+    before = sys.getrefcount(method)
+
+    for _ in range(1000):
+        copy.copy(Real(1))
+
+    assert sys.getrefcount(method) == before

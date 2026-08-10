@@ -164,7 +164,7 @@ static PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 			return NULL;
 		}
 
-		return PyObject_CallOneArg(py_move(&method), self);
+		return PyObject_CallOneArg(method, self);
 	}
 
 	PY_MOVABLE(copy, cls->tp_alloc(cls, 0));
