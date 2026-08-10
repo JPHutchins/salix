@@ -477,6 +477,16 @@ def test_setstate_with_an_empty_dict_on_a_dictless_struct_is_accepted():
     assert instance.x == 9
 
 
+def test_a_none_instance_dict_does_not_destroy_a_shared_values_dict():
+    instance = WithDict(9)
+    instance.__dict__["x"] = 5
+
+    instance.__setstate__((instance.__dict__, (), None))
+
+    assert instance.x == 5
+    assert instance.__dict__ == {"x": 5}
+
+
 def test_a_failed_dict_merge_leaves_the_slots_unwritten():
     class CollidingKey:
         eq_calls = 0

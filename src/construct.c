@@ -501,60 +501,103 @@ static enum result validate_state(
 	PyObject * const values,
 	PyObject * const unset_names,
 	Py_ssize_t * * const values_indices,
+	PyObject * * const value_snapshot,
 	Py_ssize_t * * const unset_indices
 ) {
 	Py_ssize_t const value_count = PyDict_GET_SIZE(values);
 	Py_ssize_t const unset_count = PyTuple_GET_SIZE(unset_names);
-	Py_ssize_t * const indices = PyMem_Calloc(value_count + unset_count, sizeof(Py_ssize_t));
+	Py_ssize_t * const resolved_values = PyMem_New(Py_ssize_t, value_count > 0 ? value_count : 1);
+	Py_ssize_t * const resolved_unset = PyMem_New(Py_ssize_t, unset_count > 0 ? unset_count : 1);
+	PY_MOVABLE(snapshot, PyList_New(value_count));
 
-	if (indices == NULL) {
+	if (resolved_values == NULL || resolved_unset == NULL || snapshot == NULL) {
+		PyMem_Free(resolved_values);
+		PyMem_Free(resolved_unset);
+		PyErr_NoMemory();
+
 		return RESULT_ERROR;
 	}
 
 	Py_ssize_t position = 0;
-	Py_ssize_t slot = 0;
+	Py_ssize_t i = 0;
 	PyObject * name = NULL;
 	PyObject * value = NULL;
-	Py_ssize_t index;
 
 	while (PyDict_Next(values, &position, &name, &value)) {
-		if (require_field(type, name, "__setstate__()", &index) != RESULT_OK) {
-			PyMem_Free(indices);
-			return RESULT_ERROR;
+		if (require_field(type, name, "__setstate__()", &resolved_values[i]) != RESULT_OK) {
+			goto error;
 		}
 
-		int const also_unset = PySequence_Contains(unset_names, name);
-
-		if (also_unset < 0) {
-			PyMem_Free(indices);
-			return RESULT_ERROR;
-		}
-
-		if (also_unset == 1) {
-			PyErr_Format(PyExc_TypeError, "field '%U' listed as both set and unset", name);
-			PyMem_Free(indices);
-			return RESULT_ERROR;
-		}
-
-		indices[slot++] = index;
+		PyList_SET_ITEM(snapshot, i, Py_NewRef(value));
+		++i;
 	}
 
-	for (Py_ssize_t i = 0; i < unset_count; ++i) {
-		if (
-			require_field(type, PyTuple_GET_ITEM(unset_names, i), "__setstate__()", &index) !=
-			RESULT_OK
-		) {
-			PyMem_Free(indices);
-			return RESULT_ERROR;
-		}
+	bool * const set_flags = PyMem_Calloc(
+		type->struct_field_count > 0 ? type->struct_field_count : 1,
+		sizeof(bool)
+	);
 
-		indices[slot++] = index;
+	if (set_flags == NULL) {
+		PyErr_NoMemory();
+		goto error;
 	}
 
-	*values_indices = indices;
-	*unset_indices = indices + value_count;
+	for (Py_ssize_t v = 0; v < value_count; ++v) {
+		set_flags[resolved_values[v]] = true;
+	}
+
+	bool * const unset_flags = PyMem_Calloc(
+		type->struct_field_count > 0 ? type->struct_field_count : 1,
+		sizeof(bool)
+	);
+
+	if (unset_flags == NULL) {
+		PyErr_NoMemory();
+		PyMem_Free(set_flags);
+		goto error;
+	}
+
+	for (Py_ssize_t u = 0; u < unset_count; ++u) {
+		PyObject * const unset_name = PyTuple_GET_ITEM(unset_names, u);
+
+		if (require_field(type, unset_name, "__setstate__()", &resolved_unset[u]) != RESULT_OK) {
+			PyMem_Free(set_flags);
+			PyMem_Free(unset_flags);
+			goto error;
+		}
+
+		Py_ssize_t const index = resolved_unset[u];
+
+		if (set_flags[index]) {
+			PyErr_Format(PyExc_TypeError, "field '%U' listed as both set and unset", unset_name);
+			PyMem_Free(set_flags);
+			PyMem_Free(unset_flags);
+			goto error;
+		}
+
+		if (unset_flags[index]) {
+			PyErr_Format(PyExc_TypeError, "field '%U' listed more than once as unset", unset_name);
+			PyMem_Free(set_flags);
+			PyMem_Free(unset_flags);
+			goto error;
+		}
+
+		unset_flags[index] = true;
+	}
+
+	PyMem_Free(set_flags);
+	PyMem_Free(unset_flags);
+	*values_indices = resolved_values;
+	*value_snapshot = py_move(&snapshot);
+	*unset_indices = resolved_unset;
 
 	return RESULT_OK;
+
+error:
+	PyMem_Free(resolved_values);
+	PyMem_Free(resolved_unset);
+
+	return RESULT_ERROR;
 }
 
 PyObject * Struct_set_state(PyObject * const self, PyObject * const state) {
@@ -574,8 +617,18 @@ PyObject * Struct_set_state(PyObject * const self, PyObject * const state) {
 		if (dict != Py_None && !PyDict_Check(dict)) {
 			PyErr_Format(
 				PyExc_TypeError,
-				"__setstate__() argument 1 must be a dict, None, or (dict, slots) tuple, not %.200s",
-				Py_TYPE(state)->tp_name
+				"__setstate__() dict element must be a dict or None, not %.200s",
+				Py_TYPE(dict)->tp_name
+			);
+
+			return NULL;
+		}
+
+		if (slots != NULL && slots != Py_None && !PyDict_Check(slots)) {
+			PyErr_Format(
+				PyExc_TypeError,
+				"__setstate__() slots element must be a dict, not %.200s",
+				Py_TYPE(slots)->tp_name
 			);
 
 			return NULL;
@@ -602,16 +655,6 @@ PyObject * Struct_set_state(PyObject * const self, PyObject * const state) {
 		}
 
 		if (slots != NULL && slots != Py_None) {
-			if (!PyDict_Check(slots)) {
-				PyErr_Format(
-					PyExc_TypeError,
-					"__setstate__() slots element must be a dict, not %.200s",
-					Py_TYPE(slots)->tp_name
-				);
-
-				return NULL;
-			}
-
 			Py_ssize_t position = 0;
 			PyObject * name = NULL;
 			PyObject * value = NULL;
@@ -678,8 +721,19 @@ PyObject * Struct_set_state(PyObject * const self, PyObject * const state) {
 	StructType const * const type = struct_type_of(self);
 	Py_ssize_t * values_indices = NULL;
 	Py_ssize_t * unset_indices = NULL;
+	PY_MOVABLE(value_snapshot, NULL);
 
-	if (validate_state(type, values, unset_names, &values_indices, &unset_indices) != RESULT_OK) {
+	if (
+		validate_state(
+			type,
+			values,
+			unset_names,
+			&values_indices,
+			&value_snapshot,
+			&unset_indices
+		) !=
+		RESULT_OK
+	) {
 		return NULL;
 	}
 
@@ -689,6 +743,7 @@ PyObject * Struct_set_state(PyObject * const self, PyObject * const state) {
 
 			if (dict == NULL && PyErr_Occurred()) {
 				PyMem_Free(values_indices);
+				PyMem_Free(unset_indices);
 				return NULL;
 			}
 
@@ -698,18 +753,20 @@ PyObject * Struct_set_state(PyObject * const self, PyObject * const state) {
 				STRUCT_END_CRITICAL_SECTION();
 			}
 		} else {
-			PY_MOVABLE(dict, struct_instance_dict_slot_ref(self));
+			PY_MOVABLE(dict, struct_instance_dict_ref(self));
 
-			if (dict == NULL) {
+			if (dict == NULL && PyErr_Occurred()) {
 				PyMem_Free(values_indices);
+				PyMem_Free(unset_indices);
 				return NULL;
 			}
 
-			if (instance_dict != dict) {
+			if (dict == NULL || instance_dict != dict) {
 				PY_MOVABLE(fresh, PyDict_New());
 
 				if (fresh == NULL || PyDict_Update(fresh, instance_dict) < 0) {
 					PyMem_Free(values_indices);
+					PyMem_Free(unset_indices);
 					return NULL;
 				}
 
@@ -720,14 +777,13 @@ PyObject * Struct_set_state(PyObject * const self, PyObject * const state) {
 		}
 	}
 
-	Py_ssize_t position = 0;
-	Py_ssize_t slot = 0;
-	PyObject * name = NULL;
-	PyObject * value = NULL;
-
-	while (PyDict_Next(values, &position, &name, &value)) {
-		if (write_slot(type, self, values_indices[slot++], value) != RESULT_OK) {
+	for (Py_ssize_t i = 0; i < PyList_GET_SIZE(value_snapshot); ++i) {
+		if (
+			write_slot(type, self, values_indices[i], PyList_GET_ITEM(value_snapshot, i)) !=
+			RESULT_OK
+		) {
 			PyMem_Free(values_indices);
+			PyMem_Free(unset_indices);
 			return NULL;
 		}
 	}
@@ -735,11 +791,13 @@ PyObject * Struct_set_state(PyObject * const self, PyObject * const state) {
 	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(unset_names); ++i) {
 		if (restore_unset(type, self, unset_indices[i]) != RESULT_OK) {
 			PyMem_Free(values_indices);
+			PyMem_Free(unset_indices);
 			return NULL;
 		}
 	}
 
 	PyMem_Free(values_indices);
+	PyMem_Free(unset_indices);
 	Py_RETURN_NONE;
 }
 

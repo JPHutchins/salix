@@ -1,6 +1,6 @@
 from typing import Any, Final
 
-from typing_extensions import dataclass_transform
+from typing_extensions import Self, dataclass_transform
 
 @dataclass_transform(frozen_default=True)
 class Struct:
@@ -18,6 +18,7 @@ class Struct:
         match_args: bool = True,
         weakref: bool = False,
     ) -> None: ...
+    def __new__(cls, *args: Any, **kwargs: Any) -> Self: ...
     def __getstate__(self) -> tuple[dict[str, Any], tuple[str, ...], dict[Any, Any] | None]: ...
     def __setstate__(
         self, state: tuple[dict[str, Any], tuple[str, ...], dict[Any, Any] | None], /

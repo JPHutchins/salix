@@ -1178,7 +1178,7 @@ static PyObject * Struct_new_wrapper(
 		PyErr_Format(
 			PyExc_TypeError,
 			"%s.__new__(%s): %s is not a subtype of %s",
-			((PyTypeObject *) self)->tp_name,
+			subtype->tp_name,
 			subtype->tp_name,
 			subtype->tp_name,
 			((PyTypeObject *) self)->tp_name
@@ -1191,7 +1191,7 @@ static PyObject * Struct_new_wrapper(
 		PyErr_Format(
 			PyExc_TypeError,
 			"%.200s.__new__() takes at most 2 positional arguments but %zd were given",
-			((PyTypeObject *) self)->tp_name,
+			subtype->tp_name,
 			PyTuple_GET_SIZE(arguments)
 		);
 
@@ -1226,12 +1226,7 @@ static enum result install_new_wrapper(StructType * const struct_class) {
 		return RESULT_ERROR;
 	}
 
-	PY_MOVABLE(declared, NULL);
-	struct definition const defined = base_defines_value(
-		(PyObject *) struct_class,
-		new_name,
-		&declared
-	);
+	struct definition const defined = base_defines((PyObject *) struct_class, new_name);
 
 	if (defined.tag == DEFINITION_UNREADABLE) {
 		return RESULT_ERROR;
