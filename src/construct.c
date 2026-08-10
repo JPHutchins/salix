@@ -440,30 +440,18 @@ PyObject * Struct_get_state(PyObject * const self, PyObject * const noargs) {
 	PY_MOVABLE(instance_dict, NULL);
 
 	if (Py_TYPE(self)->tp_dictoffset != 0) {
-		PyObject * * const dict_slot = _PyObject_GetDictPtr(self);
-		PY_MOVABLE(dict, NULL);
+		PY_MOVABLE(dict, struct_instance_dict_ref(self));
 
-		STRUCT_BEGIN_CRITICAL_SECTION(self);
-		dict = Py_XNewRef(*dict_slot);
+		if (dict == NULL && PyErr_Occurred()) {
+			return NULL;
+		}
 
-		if (dict == NULL) {
-			dict = PyDict_New();
+		if (dict != NULL) {
+			instance_dict = PyDict_Copy(dict);
 
-			if (dict != NULL) {
-				*dict_slot = dict;
-				dict = Py_NewRef(dict);
+			if (instance_dict == NULL) {
+				return NULL;
 			}
-		}
-		STRUCT_END_CRITICAL_SECTION();
-
-		if (dict == NULL) {
-			return NULL;
-		}
-
-		instance_dict = PyDict_Copy(dict);
-
-		if (instance_dict == NULL) {
-			return NULL;
 		}
 	}
 
@@ -497,42 +485,60 @@ static enum result restore_unset(
 static enum result validate_state(
 	StructType const * const type,
 	PyObject * const values,
-	PyObject * const unset_names
+	PyObject * const unset_names,
+	Py_ssize_t * * const values_indices,
+	Py_ssize_t * * const unset_indices
 ) {
+	Py_ssize_t const value_count = PyDict_GET_SIZE(values);
+	Py_ssize_t const unset_count = PyTuple_GET_SIZE(unset_names);
+	Py_ssize_t * const indices = PyMem_Calloc(value_count + unset_count, sizeof(Py_ssize_t));
+
+	if (indices == NULL) {
+		return RESULT_ERROR;
+	}
+
 	Py_ssize_t position = 0;
+	Py_ssize_t slot = 0;
 	PyObject * name = NULL;
 	PyObject * value = NULL;
+	Py_ssize_t index;
 
 	while (PyDict_Next(values, &position, &name, &value)) {
-		Py_ssize_t index;
-
 		if (require_field(type, name, "__setstate__()", &index) != RESULT_OK) {
+			PyMem_Free(indices);
 			return RESULT_ERROR;
 		}
 
 		int const also_unset = PySequence_Contains(unset_names, name);
 
 		if (also_unset < 0) {
+			PyMem_Free(indices);
 			return RESULT_ERROR;
 		}
 
 		if (also_unset == 1) {
 			PyErr_Format(PyExc_TypeError, "field '%U' listed as both set and unset", name);
-
+			PyMem_Free(indices);
 			return RESULT_ERROR;
 		}
+
+		indices[slot++] = index;
 	}
 
-	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(unset_names); ++i) {
-		Py_ssize_t index;
-
+	for (Py_ssize_t i = 0; i < unset_count; ++i) {
 		if (
 			require_field(type, PyTuple_GET_ITEM(unset_names, i), "__setstate__()", &index) !=
 			RESULT_OK
 		) {
+			PyMem_Free(indices);
 			return RESULT_ERROR;
 		}
+
+		indices[slot++] = index;
 	}
+
+	*values_indices = indices;
+	*unset_indices = indices + value_count;
 
 	return RESULT_OK;
 }
@@ -586,71 +592,83 @@ PyObject * Struct_set_state(PyObject * const self, PyObject * const state) {
 		return NULL;
 	}
 
-	StructType const * const type = struct_type_of(self);
+	if (
+		Py_TYPE(self)->tp_dictoffset == 0 &&
+		instance_dict != Py_None &&
+		PyDict_GET_SIZE(instance_dict) > 0
+	) {
+		PyErr_SetString(PyExc_TypeError, "cannot set an instance dict on a struct without one");
 
-	if (validate_state(type, values, unset_names) != RESULT_OK) {
 		return NULL;
 	}
 
+	StructType const * const type = struct_type_of(self);
+	Py_ssize_t * values_indices = NULL;
+	Py_ssize_t * unset_indices = NULL;
+
+	if (validate_state(type, values, unset_names, &values_indices, &unset_indices) != RESULT_OK) {
+		return NULL;
+	}
+
+	if (Py_TYPE(self)->tp_dictoffset != 0) {
+		PY_MOVABLE(dict, struct_instance_dict_slot_ref(self));
+
+		if (dict == NULL) {
+			PyMem_Free(values_indices);
+			return NULL;
+		}
+
+		/* The replace is built up front and swapped only on full success, so a
+		 * failing merge (a key whose __hash__/__eq__ raises during the copy)
+		 * leaves the instance's dict untouched. The swap replaces the dict
+		 * object in the slot, stranding any external reference to the old one;
+		 * that is the accepted cost of atomicity. The None branch clears in
+		 * place. */
+		if (instance_dict == Py_None) {
+			STRUCT_BEGIN_CRITICAL_SECTION(self);
+			PyDict_Clear(dict);
+			STRUCT_END_CRITICAL_SECTION();
+		} else if (instance_dict != dict) {
+			PY_MOVABLE(fresh, PyDict_New());
+
+			if (fresh == NULL || PyDict_Update(fresh, instance_dict) < 0) {
+				PyMem_Free(values_indices);
+				return NULL;
+			}
+
+			int swapped;
+
+			STRUCT_BEGIN_CRITICAL_SECTION(self);
+			swapped = PyObject_GenericSetDict(self, fresh, NULL);
+			STRUCT_END_CRITICAL_SECTION();
+
+			if (swapped < 0) {
+				PyMem_Free(values_indices);
+				return NULL;
+			}
+		}
+	}
+
 	Py_ssize_t position = 0;
+	Py_ssize_t slot = 0;
 	PyObject * name = NULL;
 	PyObject * value = NULL;
 
 	while (PyDict_Next(values, &position, &name, &value)) {
-		Py_ssize_t index;
-
-		if (require_field(type, name, "__setstate__()", &index) != RESULT_OK) {
-			return NULL;
-		}
-
-		if (write_slot(type, self, index, value) != RESULT_OK) {
+		if (write_slot(type, self, values_indices[slot++], value) != RESULT_OK) {
+			PyMem_Free(values_indices);
 			return NULL;
 		}
 	}
 
 	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(unset_names); ++i) {
-		Py_ssize_t index;
-
-		if (
-			require_field(type, PyTuple_GET_ITEM(unset_names, i), "__setstate__()", &index) !=
-			RESULT_OK
-		) {
-			return NULL;
-		}
-
-		if (restore_unset(type, self, index) != RESULT_OK) {
+		if (restore_unset(type, self, unset_indices[i]) != RESULT_OK) {
+			PyMem_Free(values_indices);
 			return NULL;
 		}
 	}
 
-	if (Py_TYPE(self)->tp_dictoffset != 0) {
-		PyObject * * const dict_slot = _PyObject_GetDictPtr(self);
-		PY_MOVABLE(dict, NULL);
-
-		STRUCT_BEGIN_CRITICAL_SECTION(self);
-		dict = Py_XNewRef(*dict_slot);
-
-		if (dict == NULL) {
-			dict = PyDict_New();
-
-			if (dict != NULL) {
-				*dict_slot = dict;
-				dict = Py_NewRef(dict);
-			}
-		}
-		STRUCT_END_CRITICAL_SECTION();
-
-		if (dict == NULL) {
-			return NULL;
-		}
-
-		PyDict_Clear(dict);
-
-		if (instance_dict != Py_None && PyDict_Update(dict, instance_dict) < 0) {
-			return NULL;
-		}
-	}
-
+	PyMem_Free(values_indices);
 	Py_RETURN_NONE;
 }
 

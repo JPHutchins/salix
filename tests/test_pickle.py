@@ -436,6 +436,65 @@ def test_setstate_replaces_the_instance_dict():
     assert instance.__dict__ == {"extra": "fresh"}
 
 
+def test_getstate_snapshots_the_instance_dict_without_materializing_an_absent_one():
+    instance = WithDict(1)
+
+    state = instance.__getstate__()
+
+    assert state[0] == {"x": 1}
+    assert state[1] == ()
+
+    if state[2] is None:
+        assert instance.__dict__ == {}
+    else:
+        assert state[2] == {}
+
+
+def test_setstate_on_a_dictless_struct_refuses_a_non_empty_dict():
+    with pytest.raises(TypeError, match="instance dict"):
+        Plain(1, 2).__setstate__(({"x": 1}, (), {"extra": "world"}))
+
+
+def test_setstate_with_an_empty_dict_on_a_dictless_struct_is_accepted():
+    instance = Plain(1, 2)
+
+    instance.__setstate__(({"x": 9}, (), {}))
+
+    assert instance.x == 9
+
+
+def test_a_failed_dict_merge_leaves_the_slots_unwritten():
+    class CollidingKey:
+        eq_calls = 0
+
+        def __init__(self, name):
+            self.name = name
+
+        def __hash__(self):
+            return 42 if self.name != "tmp" else 7
+
+        def __eq__(self, other):
+            CollidingKey.eq_calls += 1
+
+            if CollidingKey.eq_calls > 1:
+                raise RuntimeError("eq failed")
+
+            return self is other
+
+    first = CollidingKey("a")
+    second = CollidingKey("b")
+    tmp = CollidingKey("tmp")
+    state_dict = {first: 1, second: 2, tmp: 3}
+    del state_dict[tmp]
+
+    instance = WithDict(9)
+
+    with pytest.raises(RuntimeError, match="eq failed"):
+        instance.__setstate__(({"x": 2}, (), state_dict))
+
+    assert instance.x == 9
+
+
 def test_type_call_arguments_on_a_bodyless_struct_are_refused():
     class TypeCallingMeta(type(Struct)):
         def __call__(cls, *args, **kwargs):
