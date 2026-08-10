@@ -196,7 +196,7 @@ static inline struct slot_pair struct_slot_pair_ref(
 	theirs = Py_NewRef(theirs != NULL ? theirs : Py_None);
 	STRUCT_END_CRITICAL_SECTION2();
 
-	return (struct slot_pair) {.mine = mine, .theirs = theirs};
+	return (struct slot_pair){.mine = mine, .theirs = theirs};
 }
 
 /*
