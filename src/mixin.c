@@ -120,6 +120,57 @@ static PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 	if (dict_slot != NULL) {
 		dict = Py_XNewRef(*dict_slot);
 	}
+
+	/* A non-struct base's own __slots__ members are not struct fields, so
+	 * the loop above never touches them; walk the MRO's member descriptors
+	 * and copy those slots too, or a struct with a slotted base would lose
+	 * the base's state in the copy. The struct's own field descriptors are
+	 * skipped by offset, so no slot is copied twice. */
+	PyObject * const mro = cls->tp_mro;
+
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); ++i) {
+		PyTypeObject * const entry = (PyTypeObject *) PyTuple_GET_ITEM(mro, i);
+		PY_OWNED(entry_dict, struct_type_dict(entry));
+
+		if (entry_dict == NULL) {
+			return NULL;
+		}
+
+		Py_ssize_t position = 0;
+		PyObject * key;
+		PyObject * value;
+
+		while (PyDict_Next(entry_dict, &position, &key, &value)) {
+			if (!PyObject_TypeCheck(value, &PyMemberDescr_Type)) {
+				continue;
+			}
+
+			PyMemberDef const * const member = ((PyMemberDescrObject *) value)->d_member;
+
+			if (member == NULL || member->type != SLOT_MEMBER_TYPE) {
+				continue;
+			}
+
+			bool is_struct_field = false;
+
+			for (Py_ssize_t f = 0; f < type->struct_field_count; ++f) {
+				if (member->offset == type->struct_slot_offsets[f]) {
+					is_struct_field = true;
+					break;
+				}
+			}
+
+			if (is_struct_field) {
+				continue;
+			}
+
+			PyObject * const * const source = (PyObject * *) ((char *) self + member->offset);
+
+			if (*source != NULL) {
+				*((PyObject * *) ((char *) copy + member->offset)) = Py_NewRef(*source);
+			}
+		}
+	}
 	STRUCT_END_CRITICAL_SECTION();
 
 	if (dict != NULL) {

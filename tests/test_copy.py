@@ -157,6 +157,27 @@ def test_a_weakref_slot_is_not_carried_into_the_copy():
     assert copied_ref() is copied
 
 
+def test_a_non_struct_base_slot_is_carried_into_the_copy():
+    class WithSlots:
+        __slots__ = ("a",)
+
+    class S(Struct, WithSlots, frozen=False):
+        x: int
+
+    instance = S(1)
+    instance.a = "base-slot-value"
+    copied = copy.copy(instance)
+
+    assert copied is not instance
+    assert copied.x == 1
+    assert copied.a == "base-slot-value"
+
+    bare = copy.copy(S(2))
+
+    with pytest.raises(AttributeError):
+        _ = bare.a
+
+
 def test_a_self_reference_in_a_field_still_points_at_the_source():
     class Loop(Struct, frozen=False):
         other: object = None
