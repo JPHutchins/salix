@@ -1187,11 +1187,12 @@ static PyObject * Struct_new_wrapper(
 		return NULL;
 	}
 
-	if (defines_own_init((StructType *) subtype) && PyTuple_GET_SIZE(arguments) > 1) {
+	if (defines_own_init((StructType *) subtype) && PyTuple_GET_SIZE(arguments) > 2) {
 		PyErr_Format(
 			PyExc_TypeError,
-			"%.200s.__new__() takes no extra arguments for a struct with __init__",
-			((PyTypeObject *) self)->tp_name
+			"%.200s.__new__() takes at most 2 positional arguments but %zd were given",
+			((PyTypeObject *) self)->tp_name,
+			PyTuple_GET_SIZE(arguments)
 		);
 
 		return NULL;

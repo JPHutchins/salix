@@ -582,14 +582,26 @@ PyObject * Struct_set_state(PyObject * const self, PyObject * const state) {
 		}
 
 		if (dict != Py_None) {
-			int swapped = PyObject_GenericSetDict(self, dict, NULL);
+			PY_MOVABLE(instance_dict, struct_instance_dict_slot_ref(self));
 
-			if (swapped < 0) {
+			if (instance_dict == NULL) {
+				if (!PyErr_Occurred()) {
+					PyErr_Format(
+						PyExc_AttributeError,
+						"%.200s object has no attribute '__dict__'",
+						Py_TYPE(self)->tp_name
+					);
+				}
+
+				return NULL;
+			}
+
+			if (PyDict_Update(instance_dict, dict) < 0) {
 				return NULL;
 			}
 		}
 
-		if (slots != NULL) {
+		if (slots != NULL && slots != Py_None) {
 			if (!PyDict_Check(slots)) {
 				PyErr_Format(
 					PyExc_TypeError,
