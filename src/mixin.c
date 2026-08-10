@@ -12,6 +12,7 @@ static int Struct_set_attribute(PyObject * self, PyObject * name, PyObject * val
 static PyObject * Struct_copy(PyObject * self, PyObject * noargs);
 static PyObject * Struct_copy_delegate(PyObject * self);
 static PyObject * copy_reconstruct(PyObject * self, PyObject * reduced, PyObject * copy_module);
+static PyObject * deferred_co_base_copy(PyObject * self, PyObject * name);
 static PyObject * Struct_get_field_names(PyObject * self, void * closure);
 static PyObject * Struct_get_defaults(PyObject * self, void * closure);
 static PyObject * Struct_get_fields_as_msgspec(PyObject * self, void * closure);
@@ -38,7 +39,74 @@ static PyMethodDef Struct_methods[] = {
 	{.ml_name = NULL},
 };
 
+/*
+ * A __copy__ defined by a co-base sits after _StructMixin in the MRO, so
+ * the mixin's method would shadow it for copy.py's getattr lookup. This
+ * returns the first __copy__ found outside the mixin's own dict, resolved
+ * through attribute lookup on the defining class so a classmethod,
+ * property or member descriptor is bound the way getattr would, and fails
+ * the same TypeError it would; NULL means none was found.
+ */
+static PyObject * struct_copy_name(void) {
+	static PyObject * name = NULL;
+
+	if (name == NULL) {
+		name = PyUnicode_InternFromString("__copy__");
+	}
+
+	return name;
+}
+
+static PyObject * deferred_co_base_copy(PyObject * const self, PyObject * const name) {
+	PyTypeObject * const cls = Py_TYPE(self);
+	PyObject * const mro = cls->tp_mro;
+
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); ++i) {
+		PyObject * const entry = PyTuple_GET_ITEM(mro, i);
+
+		if (entry == (PyObject *) &StructMixin_Type) {
+			continue;
+		}
+
+		PY_OWNED(entry_dict, struct_type_dict((PyTypeObject *) entry));
+
+		if (entry_dict == NULL) {
+			return NULL;
+		}
+
+		int const present = PyDict_Contains(entry_dict, name);
+
+		if (present < 0) {
+			return NULL;
+		}
+
+		if (present == 0) {
+			continue;
+		}
+
+		return PyObject_GetAttr(entry, name);
+	}
+
+	return NULL;
+}
+
 static PyObject * Struct_copy_delegate(PyObject * const self) {
+	PyObject * const copy_name = struct_copy_name();
+
+	if (copy_name == NULL) {
+		return NULL;
+	}
+
+	PY_OWNED(deferred, deferred_co_base_copy(self, copy_name));
+
+	if (deferred == NULL && PyErr_Occurred()) {
+		return NULL;
+	}
+
+	if (deferred != NULL) {
+		return PyObject_CallOneArg(deferred, self);
+	}
+
 	PY_OWNED(copy_module, PyImport_ImportModule("copy"));
 
 	if (copy_module == NULL) {
@@ -111,16 +179,6 @@ static PyObject * copy_reconstruct(
 	return PyObject_Call(reconstruct, arguments, NULL);
 }
 
-static PyObject * struct_copy_name(void) {
-	static PyObject * name = NULL;
-
-	if (name == NULL) {
-		name = PyUnicode_InternFromString("__copy__");
-	}
-
-	return name;
-}
-
 static PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 	if (!is_struct(self)) {
 		return Struct_copy_delegate(self);
@@ -129,53 +187,20 @@ static PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 	StructType * const type = struct_type_of(self);
 	PyTypeObject * const cls = &type->heap_type.ht_type;
 
-	/* A __copy__ defined by a co-base sits after _StructMixin in the MRO, so
-	 * the mixin's method would shadow it for copy.copy's lookup. Defer to
-	 * the first __copy__ found outside the mixin's own dict, exactly the one
-	 * copy.copy would have found without the mixin's method in the way. The
-	 * value is resolved through attribute lookup on the defining class, so a
-	 * classmethod, property or member descriptor is bound the way copy.py's
-	 * getattr would, and fails the same TypeError it would. */
 	PyObject * const copy_name = struct_copy_name();
 
 	if (copy_name == NULL) {
 		return NULL;
 	}
 
-	PY_OWNED(name, Py_NewRef(copy_name));
+	PY_OWNED(deferred, deferred_co_base_copy(self, copy_name));
 
-	PyObject * const mro = cls->tp_mro;
+	if (deferred == NULL && PyErr_Occurred()) {
+		return NULL;
+	}
 
-	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); ++i) {
-		PyObject * const entry = PyTuple_GET_ITEM(mro, i);
-
-		if (entry == (PyObject *) &StructMixin_Type) {
-			continue;
-		}
-
-		PY_OWNED(entry_dict, struct_type_dict((PyTypeObject *) entry));
-
-		if (entry_dict == NULL) {
-			return NULL;
-		}
-
-		int const present = PyDict_Contains(entry_dict, name);
-
-		if (present < 0) {
-			return NULL;
-		}
-
-		if (present == 0) {
-			continue;
-		}
-
-		PY_MOVABLE(method, PyObject_GetAttr(entry, name));
-
-		if (method == NULL) {
-			return NULL;
-		}
-
-		return PyObject_CallOneArg(method, self);
+	if (deferred != NULL) {
+		return PyObject_CallOneArg(deferred, self);
 	}
 
 	/* copy.py consults dispatch_table before __copy__, and the mixin's

@@ -223,6 +223,23 @@ def test_a_dispatch_table_copier_is_honored_for_a_real_struct():
         del copy.dispatch_table[Point]
 
 
+def test_an_impostor_delegates_to_a_co_base_copy():
+    class HasCopy:
+        def __copy__(self) -> "HasCopy":
+            copied = HasCopy()
+            copied.was_copied = True
+
+            return copied
+
+    class ImpostorWithCopy(Struct.__mro__[1], list, HasCopy):
+        pass
+
+    copied = copy.copy(ImpostorWithCopy())
+
+    assert type(copied) is HasCopy
+    assert copied.was_copied is True
+
+
 def test_a_dispatch_table_copier_is_honored_for_an_impostor():
     def special_copy(instance):
         return (list, ([1, 2, 3],))
