@@ -10,6 +10,7 @@
 
 static int Struct_set_attribute(PyObject * self, PyObject * name, PyObject * value);
 static PyObject * Struct_copy(PyObject * self, PyObject * noargs);
+static PyObject * Struct_copy_delegate(PyObject * self);
 static PyObject * Struct_get_field_names(PyObject * self, void * closure);
 static PyObject * Struct_get_defaults(PyObject * self, void * closure);
 static PyObject * Struct_get_fields_as_msgspec(PyObject * self, void * closure);
@@ -36,15 +37,59 @@ static PyMethodDef Struct_methods[] = {
 	{.ml_name = NULL},
 };
 
-static PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
-	if (!is_struct(self)) {
+static PyObject * Struct_copy_delegate(PyObject * const self) {
+	PY_OWNED(reduced, PyObject_CallMethod(self, "__reduce_ex__", "i", 4));
+
+	if (reduced == NULL) {
+		return NULL;
+	}
+
+	if (PyUnicode_Check(reduced)) {
+		return Py_NewRef(self);
+	}
+
+	if (!PyTuple_Check(reduced)) {
 		PyErr_Format(
-			PyExc_AttributeError,
-			"__copy__ is defined on structs, and %.200s is not one",
-			Py_TYPE(self)->tp_name
+			PyExc_TypeError,
+			"__reduce_ex__ returned %.200s, not a tuple",
+			Py_TYPE(reduced)->tp_name
 		);
 
 		return NULL;
+	}
+
+	PY_OWNED(copy_module, PyImport_ImportModule("copy"));
+
+	if (copy_module == NULL) {
+		return NULL;
+	}
+
+	PY_OWNED(reconstruct, PyObject_GetAttrString(copy_module, "_reconstruct"));
+
+	if (reconstruct == NULL) {
+		return NULL;
+	}
+
+	Py_ssize_t const parts = PyTuple_GET_SIZE(reduced);
+	PY_OWNED(arguments, PyTuple_New(parts + 2));
+
+	if (arguments == NULL) {
+		return NULL;
+	}
+
+	PyTuple_SET_ITEM(arguments, 0, Py_NewRef(self));
+	PyTuple_SET_ITEM(arguments, 1, Py_NewRef(Py_None));
+
+	for (Py_ssize_t i = 0; i < parts; ++i) {
+		PyTuple_SET_ITEM(arguments, i + 2, Py_NewRef(PyTuple_GET_ITEM(reduced, i)));
+	}
+
+	return PyObject_Call(reconstruct, arguments, NULL);
+}
+
+static PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
+	if (!is_struct(self)) {
+		return Struct_copy_delegate(self);
 	}
 
 	StructType * const type = struct_type_of(self);
@@ -55,8 +100,12 @@ static PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 		return NULL;
 	}
 
+	PY_MOVABLE(dict, NULL);
+
+	STRUCT_BEGIN_CRITICAL_SECTION(self);
+
 	for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
-		PY_OWNED(value, struct_slot_ref(type, self, i));
+		PyObject * const value = *struct_slot(type, self, i);
 
 		if (value != NULL) {
 			*struct_slot(type, copy, i) = Py_NewRef(value);
@@ -66,22 +115,15 @@ static PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 	PyObject * * const dict_slot = _PyObject_GetDictPtr(self);
 
 	if (dict_slot != NULL) {
-		PY_MOVABLE(dict, NULL);
-
-		STRUCT_BEGIN_CRITICAL_SECTION(self);
 		dict = Py_XNewRef(*dict_slot);
-		STRUCT_END_CRITICAL_SECTION();
+	}
+	STRUCT_END_CRITICAL_SECTION();
 
-		if (dict != NULL) {
-			PY_MOVABLE(copied, PyDict_Copy(dict));
+	if (dict != NULL) {
+		PY_OWNED(copied, PyDict_Copy(dict));
 
-			if (copied == NULL) {
-				return NULL;
-			}
-
-			if (PyObject_GenericSetDict(copy, copied, NULL) < 0) {
-				return NULL;
-			}
+		if (copied == NULL || PyObject_GenericSetDict(copy, copied, NULL) < 0) {
+			return NULL;
 		}
 	}
 

@@ -15,25 +15,28 @@ class Mutable(Struct, frozen=False):
     x: int
 
 
-post_init_calls: list[int] = []
+@pytest.fixture(params=["post_init", "init"])
+def hooked(request):
+    calls: list[int] = []
 
+    if request.param == "post_init":
 
-class WithPostInit(Struct, frozen=False):
-    x: int
+        class Hooked(Struct, frozen=False):
+            x: int
 
-    def __post_init__(self) -> None:
-        post_init_calls.append(self.x)
+            def __post_init__(self) -> None:
+                calls.append(self.x)
 
+    else:
 
-init_calls: list[int] = []
+        class Hooked(Struct, frozen=False):
+            x: int
 
+            def __init__(self, x: int) -> None:
+                calls.append(x)
+                self.x = x
 
-class WithInit(Struct, frozen=False):
-    x: int
-
-    def __init__(self, x: int) -> None:
-        init_calls.append(x)
-        self.x = x
+    return Hooked, calls
 
 
 class Shadowing(Struct):
@@ -83,21 +86,13 @@ def test_an_unset_field_stays_unset_in_the_copy():
     assert "x=<unset>" in repr(copied)
 
 
-def test_post_init_does_not_run_on_the_copy():
-    post_init_calls.clear()
-    source = WithPostInit(1)
+def test_a_constructor_hook_does_not_run_on_the_copy(hooked):
+    hooked_class, calls = hooked
+    source = hooked_class(1)
     copied = copy.copy(source)
 
     assert copied == source
-    assert post_init_calls == [1]
-
-
-def test_a_custom_init_does_not_run_on_the_copy():
-    init_calls.clear()
-    copied = copy.copy(WithInit(1))
-
-    assert copied.x == 1
-    assert init_calls == [1]
+    assert calls == [1]
 
 
 def test_a_body_copy_shadows_the_mixin_one():
@@ -106,9 +101,14 @@ def test_a_body_copy_shadows_the_mixin_one():
     assert copied == Shadowing(1001)
 
 
-def test_copy_on_a_mixin_subclass_that_is_not_a_struct_is_refused():
-    with pytest.raises(AttributeError, match="__copy__ is defined on structs"):
-        copy.copy(Impostor())
+def test_a_mixin_subclass_that_is_not_a_struct_copies_like_its_other_base():
+    instance = Impostor([1, 2])
+    instance.extra = "world"
+    copied = copy.copy(instance)
+
+    assert type(copied) is Impostor
+    assert copied == [1, 2]
+    assert copied.extra == "world"
 
 
 def test_the_instance_dict_is_copied_shallowly():
@@ -123,10 +123,14 @@ def test_the_instance_dict_is_copied_shallowly():
     assert copied.__dict__["extra"] is instance.__dict__["extra"]
 
 
-def test_a_frozen_struct_copies():
-    copied = copy.copy(Point(1, "two"))
+def test_a_field_named_like_a_mixin_copy_method_is_refused_at_class_creation():
+    with pytest.raises(TypeError, match="__copy__"):
+        class Colliding(Struct):
+            __copy__: int
 
-    assert copied == Point(1, "two")
+    with pytest.raises(TypeError, match="__deepcopy__"):
+        class Colliding(Struct):
+            __deepcopy__: int
 
 
 def test_a_subclass_copies_every_inherited_field():
@@ -144,11 +148,13 @@ def test_a_weakref_slot_is_not_carried_into_the_copy():
         x: int
 
     instance = Weak(1)
-    ref = weakref.ref(instance)
+    source_ref = weakref.ref(instance)
     copied = copy.copy(instance)
+    copied_ref = weakref.ref(copied)
 
     assert copied == Weak(1)
-    assert ref() is instance
+    assert source_ref() is instance
+    assert copied_ref() is copied
 
 
 def test_a_self_reference_in_a_field_still_points_at_the_source():

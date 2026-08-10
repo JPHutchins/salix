@@ -44,6 +44,22 @@ def run_on_every_thread(work):
     assert not failures, failures[:3]
 
 
+def run_in_roles(work_pairs):
+    # Sliced to the thread count rather than doubled from half of it, so an odd
+    # THREADS is one role short of a writer instead of one thread short of a
+    # role.
+    roles = iter((list(work_pairs) * THREADS)[:THREADS])
+    claim = threading.Lock()
+
+    def work():
+        with claim:
+            role = next(roles)
+
+        role()
+
+    run_on_every_thread(work)
+
+
 def test_concurrent_construction_and_reads():
     def work():
         for i in range(ITERATIONS):
@@ -174,19 +190,7 @@ def test_a_shared_struct_is_safe_to_read_while_another_thread_writes_it():
                 assert equal is False
                 assert isinstance(hashed, int)
 
-    # Sliced to the thread count rather than doubled from half of it, so an odd
-    # THREADS is one role short of a writer instead of one thread short of a
-    # role.
-    roles = iter(([write, read] * THREADS)[:THREADS])
-    claim = threading.Lock()
-
-    def work():
-        with claim:
-            role = next(roles)
-
-        role()
-
-    run_on_every_thread(work)
+    run_in_roles((write, read))
 
 
 def test_a_shared_ordered_struct_is_safe_to_compare_while_another_thread_writes_it():
@@ -233,49 +237,69 @@ def test_a_shared_ordered_struct_is_safe_to_compare_while_another_thread_writes_
             if i % 1000 == 0:
                 assert ordered is True
 
-    roles = iter(([write, read] * THREADS)[:THREADS])
-    claim = threading.Lock()
-
-    def work():
-        with claim:
-            role = next(roles)
-
-        role()
-
-    run_on_every_thread(work)
+    run_in_roles((write, read))
 
 
 def test_a_shared_struct_is_safe_to_copy_while_another_thread_writes_it():
     """The copy path reads every slot through the same section the readers
     above use, so the load-incref window the writers exposed is closed the
-    same way. Survival is the assertion, and every written value is two
-    elements, so a copy that read a torn pointer cannot pass by accident."""
+    same way. Survival is the assertion. One writer, because `first >=
+    second` also pins the copy being a single-section snapshot: the writer
+    writes first and then second, so the source's own states always satisfy
+    it, while a per-slot read could assemble (i, i+1) across a writer
+    round, which the source never held."""
 
     class Shared(Struct, frozen=False):
-        value: object
+        first: object
+        second: object
 
-    shared = Shared([0, 0])
+    shared = Shared(0, 0)
 
     rounds = ITERATIONS * 5
 
     def write():
         for i in range(rounds):
-            shared.value = [i, i]
+            shared.first = i
+            shared.second = i
 
     def read():
         for i in range(rounds):
             copied = copy.copy(shared)
 
             if i % 1000 == 0:
-                assert len(copied.value) == 2
+                assert copied.first >= copied.second
 
-    roles = iter(([write, read] * THREADS)[:THREADS])
-    claim = threading.Lock()
+    run_in_roles((write,) + (read,) * (THREADS - 1))
 
-    def work():
-        with claim:
-            role = next(roles)
 
-        role()
+def test_a_dict_bearing_struct_is_safe_to_copy_while_another_thread_writes_its_dict():
+    """The dict-copy branch: the slot is read under the same section, then
+    copied outside it. The writer mutates the dict in place, so the slot
+    pointer is stable and the race is the copy against the mutation, which
+    the dict's own lock settles. Survival is the assertion; every written
+    value is an int, so a copy of garbage cannot pass by accident."""
 
-    run_on_every_thread(work)
+    class Dicted:
+        pass
+
+    class Shared(Struct, Dicted, frozen=False):
+        value: object
+
+    shared = Shared(0)
+    shared.__dict__["extra"] = -1
+
+    rounds = ITERATIONS * 5
+
+    def write():
+        for i in range(rounds):
+            shared.__dict__["extra"] = i
+
+    def read():
+        for i in range(rounds):
+            copied = copy.copy(shared)
+
+            if i % 1000 == 0:
+                assert isinstance(copied.__dict__["extra"], int)
+                assert copied.__dict__ is not shared.__dict__
+
+    run_in_roles((write, read))

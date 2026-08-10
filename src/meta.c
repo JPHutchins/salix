@@ -97,6 +97,7 @@ static enum result refuse_colliding_methods(
 	PyObject * all_names,
 	PyObject * class_name
 );
+static enum result refuse_mixin_method_fields(PyObject * all_names);
 static int defines_a_method(
 	PyObject * bound,
 	PyObject * field_name,
@@ -273,6 +274,7 @@ static PyObject * build_struct_class(
 
 	if (
 		refuse_colliding_methods(original_namespace, plan.all_names, name) != RESULT_OK ||
+		refuse_mixin_method_fields(plan.all_names) != RESULT_OK ||
 		refuse_displaced_slots(
 				original_namespace,
 				plan.all_names,
@@ -817,6 +819,37 @@ static enum result drop_class_variables(PyObject * const namespace, PyObject * c
 		int const present = PyDict_Contains(namespace, field_name);
 
 		if (present < 0 || (present == 1 && PyDict_DelItem(namespace, field_name) < 0)) {
+			return RESULT_ERROR;
+		}
+	}
+
+	return RESULT_OK;
+}
+
+static enum result refuse_mixin_method_fields(PyObject * const all_names) {
+	static char const * const names[] = {"__copy__", "__deepcopy__", NULL};
+
+	for (char const * const * name = names; *name != NULL; ++name) {
+		PY_OWNED(interned, PyUnicode_InternFromString(*name));
+
+		if (interned == NULL) {
+			return RESULT_ERROR;
+		}
+
+		int const present = PySequence_Contains(all_names, interned);
+
+		if (present < 0) {
+			return RESULT_ERROR;
+		}
+
+		if (present == 1) {
+			PyErr_Format(
+				PyExc_TypeError,
+				"%s is a field, and the mixin defines a method of the same name "
+				"which the field's descriptor would shadow; rename the field",
+				*name
+			);
+
 			return RESULT_ERROR;
 		}
 	}
