@@ -185,6 +185,24 @@ def test_a_classmethod_co_base_copy_fails_like_copy_dot_py():
         copy.copy(RealStruct(1))
 
 
+def test_a_two_argument_classmethod_co_base_copy_receives_the_leaf_class():
+    class CM:
+        @classmethod
+        def __copy__(cls, x: int) -> str:  # noqa: PLE0302 -- the arity is the case under test
+            return f"got class {cls.__name__}"
+
+    class RealStruct(Struct, CM, frozen=False):
+        x: int
+
+    class PlainCM(CM):
+        pass
+
+    # copy.py binds the classmethod to the concrete class; the struct must
+    # receive its own class, not the co-base that defines the method.
+    assert copy.copy(PlainCM()) == "got class PlainCM"
+    assert copy.copy(RealStruct(7)) == "got class RealStruct"
+
+
 def test_a_property_co_base_copy_fails_like_copy_dot_py():
     class Prop:
         @property

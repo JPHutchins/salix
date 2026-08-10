@@ -84,6 +84,19 @@ static PyObject * deferred_co_base_copy(PyObject * const self, PyObject * const 
 			continue;
 		}
 
+		PY_OWNED(raw, dict_value_ref(entry_dict, name));
+
+		if (raw == NULL) {
+			return NULL;
+		}
+
+		/* copy.py's getattr(cls, '__copy__') binds a classmethod to the
+		 * concrete class; resolving on the defining entry would bind it to
+		 * the co-base and hand the method the wrong cls. */
+		if (PyObject_TypeCheck(raw, &PyClassMethod_Type)) {
+			return PyObject_CallMethod(raw, "__get__", "OO", Py_None, (PyObject *) Py_TYPE(self));
+		}
+
 		return PyObject_GetAttr(entry, name);
 	}
 
