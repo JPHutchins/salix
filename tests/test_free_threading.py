@@ -1,3 +1,4 @@
+import copy
 import sys
 import sysconfig
 import threading
@@ -231,6 +232,42 @@ def test_a_shared_ordered_struct_is_safe_to_compare_while_another_thread_writes_
 
             if i % 1000 == 0:
                 assert ordered is True
+
+    roles = iter(([write, read] * THREADS)[:THREADS])
+    claim = threading.Lock()
+
+    def work():
+        with claim:
+            role = next(roles)
+
+        role()
+
+    run_on_every_thread(work)
+
+
+def test_a_shared_struct_is_safe_to_copy_while_another_thread_writes_it():
+    """The copy path reads every slot through the same section the readers
+    above use, so the load-incref window the writers exposed is closed the
+    same way. Survival is the assertion, and every written value is two
+    elements, so a copy that read a torn pointer cannot pass by accident."""
+
+    class Shared(Struct, frozen=False):
+        value: object
+
+    shared = Shared([0, 0])
+
+    rounds = ITERATIONS * 5
+
+    def write():
+        for i in range(rounds):
+            shared.value = [i, i]
+
+    def read():
+        for i in range(rounds):
+            copied = copy.copy(shared)
+
+            if i % 1000 == 0:
+                assert len(copied.value) == 2
 
     roles = iter(([write, read] * THREADS)[:THREADS])
     claim = threading.Lock()

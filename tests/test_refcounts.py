@@ -1,3 +1,4 @@
+import copy
 import gc
 import sys
 import sysconfig
@@ -366,3 +367,21 @@ def test_a_delegating_metatype_installs_the_field_table_once():
     # install_post_init resolved. A second install would take a third and never
     # give it back.
     assert sys.getrefcount(post_init) - before == 2
+
+
+def test_copy_takes_one_reference_per_field_and_releases_them_with_the_copy():
+    """The copy is a fresh instance whose slots hold fresh references: sharing
+    the value is not sharing the count. A copy that borrowed the source's
+    references would leave the sentinel's count unmoved, and a copy that forgot
+    to release them would leave it stuck one pair high after `del`."""
+
+    sentinel = Sentinel()
+    pair = Pair(sentinel, sentinel)
+    before = sys.getrefcount(sentinel)
+    copied = copy.copy(pair)
+
+    assert sys.getrefcount(sentinel) == before + 2
+
+    del copied
+
+    assert sys.getrefcount(sentinel) == before

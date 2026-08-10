@@ -3,17 +3,20 @@
 #include "compare.h"
 #include "hash.h"
 #include "mixin.h"
+#include "owned.h"
 #include "repr.h"
 #include "result.h"
 #include "types.h"
 
 static int Struct_set_attribute(PyObject * self, PyObject * name, PyObject * value);
+static PyObject * Struct_copy(PyObject * self, PyObject * noargs);
 static PyObject * Struct_get_field_names(PyObject * self, void * closure);
 static PyObject * Struct_get_defaults(PyObject * self, void * closure);
 static PyObject * Struct_get_fields_as_msgspec(PyObject * self, void * closure);
 static PyObject * Struct_get_defaults_as_msgspec(PyObject * self, void * closure);
 static PyObject * metadata_of(PyObject * self, enum struct_metadata which, char const * name);
 static PyGetSetDef Struct_getset[];
+static PyMethodDef Struct_methods[];
 
 PyTypeObject StructMixin_Type = {
 	PyVarObject_HEAD_INIT(NULL, 0)
@@ -25,7 +28,65 @@ PyTypeObject StructMixin_Type = {
 	.tp_hash = Struct_hash,
 	.tp_richcompare = Struct_rich_compare,
 	.tp_getset = Struct_getset,
+	.tp_methods = Struct_methods,
 };
+
+static PyMethodDef Struct_methods[] = {
+	{"__copy__", Struct_copy, METH_NOARGS, NULL},
+	{.ml_name = NULL},
+};
+
+static PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
+	if (!is_struct(self)) {
+		PyErr_Format(
+			PyExc_AttributeError,
+			"__copy__ is defined on structs, and %.200s is not one",
+			Py_TYPE(self)->tp_name
+		);
+
+		return NULL;
+	}
+
+	StructType * const type = struct_type_of(self);
+	PyTypeObject * const cls = &type->heap_type.ht_type;
+	PY_MOVABLE(copy, cls->tp_alloc(cls, 0));
+
+	if (copy == NULL) {
+		return NULL;
+	}
+
+	for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
+		PY_OWNED(value, struct_slot_ref(type, self, i));
+
+		if (value != NULL) {
+			*struct_slot(type, copy, i) = Py_NewRef(value);
+		}
+	}
+
+	PyObject * * const dict_slot = _PyObject_GetDictPtr(self);
+
+	if (dict_slot != NULL) {
+		PY_MOVABLE(dict, NULL);
+
+		STRUCT_BEGIN_CRITICAL_SECTION(self);
+		dict = Py_XNewRef(*dict_slot);
+		STRUCT_END_CRITICAL_SECTION();
+
+		if (dict != NULL) {
+			PY_MOVABLE(copied, PyDict_Copy(dict));
+
+			if (copied == NULL) {
+				return NULL;
+			}
+
+			if (PyObject_GenericSetDict(copy, copied, NULL) < 0) {
+				return NULL;
+			}
+		}
+	}
+
+	return py_move(&copy);
+}
 
 static PyGetSetDef Struct_getset[] = {
 	{
