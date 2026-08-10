@@ -1295,6 +1295,25 @@ def test_an_impostor_mixin_subclass_round_trips_through_object_pickling():
     assert type(restored) is type(instance)
     assert restored.extra == "world"
 
+
+def test_impostor_setstate_merges_into_the_existing_dict():
+    instance = Impostor()
+    instance.keep = "this"
+
+    instance.__setstate__({"extra": "world"})
+
+    assert instance.extra == "world"
+    assert instance.keep == "this"
+
+
+def test_impostor_setstate_accepts_a_dict_none_state():
+    instance = Impostor()
+    instance.extra = "world"
+
+    instance.__setstate__(({"extra": "fresh"}, None))
+
+    assert instance.extra == "fresh"
+
 @pytest.mark.parametrize("protocol", [0, 1])
 def test_protocols_0_and_1_are_deliberately_refused(protocol):
     """The old protocols restore through copyreg._reconstructor, whose
