@@ -52,7 +52,6 @@ static StructType * find_struct_base(PyObject * bases);
 static StructType * find_behaviour_base(PyObject * bases);
 static struct equality_source resolves_body_equality(PyObject * bases);
 static struct equality_source equality_from_the_co_bases(PyObject * bases, Py_ssize_t first);
-static struct definition base_defines_value(PyObject * base, PyObject * name, PyObject * * value);
 static struct definition base_defines(PyObject * base, PyObject * name);
 static struct definition any_base_defines(PyObject * bases, Py_ssize_t first, PyObject * name);
 static struct options inherited_options(PyObject * bases, StructType const * behaviour);
@@ -479,11 +478,7 @@ static struct definition any_base_defines(
 	return (struct definition){.tag = DEFINITION_READ, .found = false};
 }
 
-static struct definition base_defines_value(
-	PyObject * const base,
-	PyObject * const name,
-	PyObject * * const value
-) {
+static struct definition base_defines(PyObject * const base, PyObject * const name) {
 	PyObject * const mro = ((PyTypeObject *) base)->tp_mro;
 
 	if (mro == NULL) {
@@ -513,18 +508,10 @@ static struct definition base_defines_value(
 			continue;
 		}
 
-		if (value != NULL) {
-			*value = py_move(&bound);
-		}
-
 		return (struct definition){.tag = DEFINITION_READ, .found = true};
 	}
 
 	return (struct definition){.tag = DEFINITION_READ, .found = false};
-}
-
-static struct definition base_defines(PyObject * const base, PyObject * const name) {
-	return base_defines_value(base, name, NULL);
 }
 
 static bool any_struct_base_is_mutable(PyObject * const bases) {

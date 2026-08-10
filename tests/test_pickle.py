@@ -451,6 +451,8 @@ def test_a_swapped_instance_dict_is_visible_to_attribute_reads():
 
 
 def test_getstate_snapshots_the_instance_dict_without_materializing_an_absent_one():
+    import sys
+
     instance = WithDict(1)
 
     state = instance.__getstate__()
@@ -458,10 +460,11 @@ def test_getstate_snapshots_the_instance_dict_without_materializing_an_absent_on
     assert state[0] == {"x": 1}
     assert state[1] == ()
 
-    if state[2] is None:
-        assert instance.__dict__ == {}
-    else:
+    if sys.version_info >= (3, 14):
         assert state[2] == {}
+    else:
+        assert state[2] is None
+        assert instance.__dict__ == {}
 
 
 def test_setstate_on_a_dictless_struct_refuses_a_non_empty_dict():

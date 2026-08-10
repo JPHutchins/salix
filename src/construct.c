@@ -414,7 +414,7 @@ PyObject * Struct_get_state(PyObject * const self, PyObject * const noargs) {
 			Py_RETURN_NONE;
 		}
 
-		return dict;
+		return py_move(&dict);
 #endif
 	}
 
@@ -508,9 +508,9 @@ static enum result validate_state(
 	Py_ssize_t const unset_count = PyTuple_GET_SIZE(unset_names);
 	Py_ssize_t * const resolved_values = PyMem_New(Py_ssize_t, value_count > 0 ? value_count : 1);
 	Py_ssize_t * const resolved_unset = PyMem_New(Py_ssize_t, unset_count > 0 ? unset_count : 1);
-	PY_MOVABLE(snapshot, PyList_New(value_count));
+	PY_OWNED(items, PyDict_Items(values));
 
-	if (resolved_values == NULL || resolved_unset == NULL || snapshot == NULL) {
+	if (resolved_values == NULL || resolved_unset == NULL || items == NULL) {
 		PyMem_Free(resolved_values);
 		PyMem_Free(resolved_unset);
 		PyErr_NoMemory();
@@ -518,18 +518,25 @@ static enum result validate_state(
 		return RESULT_ERROR;
 	}
 
-	Py_ssize_t position = 0;
-	Py_ssize_t i = 0;
-	PyObject * name = NULL;
-	PyObject * value = NULL;
+	Py_ssize_t const item_count = PyList_GET_SIZE(items);
+	PY_MOVABLE(snapshot, PyList_New(item_count));
 
-	while (PyDict_Next(values, &position, &name, &value)) {
+	if (snapshot == NULL) {
+		PyMem_Free(resolved_values);
+		PyMem_Free(resolved_unset);
+		return RESULT_ERROR;
+	}
+
+	for (Py_ssize_t i = 0; i < item_count; ++i) {
+		PyObject * const pair = PyList_GET_ITEM(items, i);
+		PyObject * const name = PyTuple_GET_ITEM(pair, 0);
+		PyObject * const value = PyTuple_GET_ITEM(pair, 1);
+
 		if (require_field(type, name, "__setstate__()", &resolved_values[i]) != RESULT_OK) {
 			goto error;
 		}
 
 		PyList_SET_ITEM(snapshot, i, Py_NewRef(value));
-		++i;
 	}
 
 	bool * const set_flags = PyMem_Calloc(
@@ -655,12 +662,19 @@ PyObject * Struct_set_state(PyObject * const self, PyObject * const state) {
 		}
 
 		if (slots != NULL && slots != Py_None) {
-			Py_ssize_t position = 0;
-			PyObject * name = NULL;
-			PyObject * value = NULL;
+			PY_OWNED(items, PyDict_Items(slots));
 
-			while (PyDict_Next(slots, &position, &name, &value)) {
-				if (PyObject_SetAttr(self, name, value) < 0) {
+			if (items == NULL) {
+				return NULL;
+			}
+
+			for (Py_ssize_t i = 0; i < PyList_GET_SIZE(items); ++i) {
+				PyObject * const pair = PyList_GET_ITEM(items, i);
+
+				if (
+					PyObject_SetAttr(self, PyTuple_GET_ITEM(pair, 0), PyTuple_GET_ITEM(pair, 1)) <
+					0
+				) {
 					return NULL;
 				}
 			}
