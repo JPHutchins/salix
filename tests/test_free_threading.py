@@ -48,7 +48,7 @@ def run_in_roles(work_pairs):
     # Sliced to the thread count rather than doubled from half of it, so an odd
     # THREADS is one role short of a writer instead of one thread short of a
     # role.
-    roles = iter((list(work_pairs) * THREADS)[:THREADS])
+    roles = iter((work_pairs * THREADS)[:THREADS])
     claim = threading.Lock()
 
     def work():

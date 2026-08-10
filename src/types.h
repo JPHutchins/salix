@@ -25,10 +25,12 @@ typedef struct {
 	PyObject * struct_field_names;
 	PyObject * struct_defaults;
 	Py_ssize_t * struct_slot_offsets;
+	Py_ssize_t * struct_member_offsets;
 	PyObject * struct_post_init;
 
 	Py_ssize_t struct_field_count;
 	Py_ssize_t struct_default_count;
+	Py_ssize_t struct_member_count;
 	struct options struct_options;
 
 	bool struct_resolves_body_eq;
@@ -220,6 +222,61 @@ static inline void struct_slots_ref_or_none_into(
 	}
 
 	STRUCT_END_CRITICAL_SECTION();
+}
+
+/*
+ * Every slot the type owns, under one acquisition: the struct fields and the
+ * non-struct base members whose offsets install_fields resolved. An unwritten
+ * slot stays unwritten in the destination. The loop stores only, so nothing
+ * here can fail.
+ */
+static inline void struct_slots_copy_into(
+	StructType const * const type,
+	PyObject * const source,
+	PyObject * const destination
+) {
+	STRUCT_BEGIN_CRITICAL_SECTION(source);
+
+	for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
+		PyObject * const value = *struct_slot(type, source, i);
+
+		if (value != NULL) {
+			*struct_slot(type, destination, i) = Py_NewRef(value);
+		}
+	}
+
+	for (Py_ssize_t i = 0; i < type->struct_member_count; ++i) {
+		Py_ssize_t const offset = type->struct_member_offsets[i];
+		PyObject * const value = *(PyObject * *) ((char *) source + offset);
+
+		if (value != NULL) {
+			*((PyObject * *) ((char *) destination + offset)) = Py_NewRef(value);
+		}
+	}
+
+	STRUCT_END_CRITICAL_SECTION();
+}
+
+/*
+ * A strong reference to the instance dict if the slot holds one, NULL
+ * otherwise. Reading never creates the dict, so copying a struct that never
+ * had a __dict__ does not materialize one on the source; the slot is read
+ * under the same lock a concurrent writer's attr store takes.
+ */
+static inline PyObject * struct_instance_dict_ref(PyObject * const self) {
+	PyObject * * const dict_slot = _PyObject_GetDictPtr(self);
+
+	if (dict_slot == NULL) {
+		return NULL;
+	}
+
+	PyObject * dict = NULL;
+
+	STRUCT_BEGIN_CRITICAL_SECTION(self);
+	dict = Py_XNewRef(*dict_slot);
+	STRUCT_END_CRITICAL_SECTION();
+
+	return dict;
 }
 
 static inline Py_ssize_t struct_required_count(StructType const * const type) {

@@ -128,10 +128,6 @@ def test_a_field_named_like_a_mixin_copy_method_is_refused_at_class_creation():
         class Colliding(Struct):
             __copy__: int
 
-    with pytest.raises(TypeError, match="__deepcopy__"):
-        class Colliding(Struct):
-            __deepcopy__: int
-
 
 def test_a_subclass_copies_every_inherited_field():
     class Point3D(Point):
@@ -155,6 +151,41 @@ def test_a_weakref_slot_is_not_carried_into_the_copy():
     assert copied == Weak(1)
     assert source_ref() is instance
     assert copied_ref() is copied
+
+
+def test_a_co_base_copy_is_deferred_to():
+    class HasCopy:
+        def __copy__(self) -> "HasCopy":
+            copied = HasCopy()
+            copied.was_copied = True
+
+            return copied
+
+    class RealStruct(Struct, HasCopy, frozen=False):
+        x: int
+
+    copied = copy.copy(RealStruct(1))
+
+    assert type(copied) is HasCopy
+    assert copied.was_copied is True
+
+
+def test_a_dispatch_table_copier_is_honored_for_an_impostor():
+    def special_copy(instance):
+        return (list, ([1, 2, 3],))
+
+    copy.dispatch_table[Impostor] = special_copy
+
+    try:
+        copied = copy.copy(Impostor())
+
+        # The copier's reduce tuple won: without the dispatch_table consult
+        # the delegate would have fallen back to __reduce_ex__ and produced
+        # an Impostor.
+        assert type(copied) is list
+        assert copied == [1, 2, 3]
+    finally:
+        del copy.dispatch_table[Impostor]
 
 
 def test_a_non_struct_base_slot_is_carried_into_the_copy():

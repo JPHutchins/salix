@@ -38,7 +38,30 @@ static PyMethodDef Struct_methods[] = {
 };
 
 static PyObject * Struct_copy_delegate(PyObject * const self) {
-	PY_OWNED(reduced, PyObject_CallMethod(self, "__reduce_ex__", "i", 4));
+	PY_OWNED(copy_module, PyImport_ImportModule("copy"));
+
+	if (copy_module == NULL) {
+		return NULL;
+	}
+
+	PY_OWNED(dispatch_table, PyObject_GetAttrString(copy_module, "dispatch_table"));
+
+	if (dispatch_table == NULL) {
+		return NULL;
+	}
+
+	PY_MOVABLE(reduced, NULL);
+	PY_OWNED(copier, dict_value_ref(dispatch_table, (PyObject *) Py_TYPE(self)));
+
+	if (copier == NULL && PyErr_Occurred()) {
+		return NULL;
+	}
+
+	if (copier != NULL) {
+		reduced = PyObject_CallOneArg(copier, self);
+	} else {
+		reduced = PyObject_CallMethod(self, "__reduce_ex__", "i", 4);
+	}
 
 	if (reduced == NULL) {
 		return NULL;
@@ -48,19 +71,12 @@ static PyObject * Struct_copy_delegate(PyObject * const self) {
 		return Py_NewRef(self);
 	}
 
-	if (!PyTuple_Check(reduced)) {
-		PyErr_Format(
-			PyExc_TypeError,
-			"__reduce_ex__ returned %.200s, not a tuple",
-			Py_TYPE(reduced)->tp_name
-		);
+	/* The tuple is handed to copy._reconstruct the way copy.copy's reduce
+	 * branch hands `*rv` to it, so a non-tuple iterable is accepted and a
+	 * non-iterable fails the same TypeError `*rv` would raise. */
+	PY_OWNED(tuple, PySequence_Tuple(reduced));
 
-		return NULL;
-	}
-
-	PY_OWNED(copy_module, PyImport_ImportModule("copy"));
-
-	if (copy_module == NULL) {
+	if (tuple == NULL) {
 		return NULL;
 	}
 
@@ -70,7 +86,7 @@ static PyObject * Struct_copy_delegate(PyObject * const self) {
 		return NULL;
 	}
 
-	Py_ssize_t const parts = PyTuple_GET_SIZE(reduced);
+	Py_ssize_t const parts = PyTuple_GET_SIZE(tuple);
 	PY_OWNED(arguments, PyTuple_New(parts + 2));
 
 	if (arguments == NULL) {
@@ -81,10 +97,20 @@ static PyObject * Struct_copy_delegate(PyObject * const self) {
 	PyTuple_SET_ITEM(arguments, 1, Py_NewRef(Py_None));
 
 	for (Py_ssize_t i = 0; i < parts; ++i) {
-		PyTuple_SET_ITEM(arguments, i + 2, Py_NewRef(PyTuple_GET_ITEM(reduced, i)));
+		PyTuple_SET_ITEM(arguments, i + 2, Py_NewRef(PyTuple_GET_ITEM(tuple, i)));
 	}
 
 	return PyObject_Call(reconstruct, arguments, NULL);
+}
+
+static PyObject * struct_copy_name(void) {
+	static PyObject * name = NULL;
+
+	if (name == NULL) {
+		name = PyUnicode_InternFromString("__copy__");
+	}
+
+	return name;
 }
 
 static PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
@@ -94,84 +120,62 @@ static PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 
 	StructType * const type = struct_type_of(self);
 	PyTypeObject * const cls = &type->heap_type.ht_type;
+
+	/* A __copy__ defined by a co-base sits after _StructMixin in the MRO, so
+	 * the mixin's method would shadow it for copy.copy's lookup. Defer to
+	 * the first __copy__ found outside the mixin's own dict, exactly the one
+	 * copy.copy would have found without the mixin's method in the way. */
+	PyObject * const copy_name = struct_copy_name();
+
+	if (copy_name == NULL) {
+		return NULL;
+	}
+
+	PY_OWNED(name, Py_NewRef(copy_name));
+
+	PyObject * const mro = cls->tp_mro;
+
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); ++i) {
+		PyObject * const entry = PyTuple_GET_ITEM(mro, i);
+
+		if (entry == (PyObject *) &StructMixin_Type) {
+			continue;
+		}
+
+		PY_OWNED(entry_dict, struct_type_dict((PyTypeObject *) entry));
+
+		if (entry_dict == NULL) {
+			return NULL;
+		}
+
+		int const present = PyDict_Contains(entry_dict, name);
+
+		if (present < 0) {
+			return NULL;
+		}
+
+		if (present == 0) {
+			continue;
+		}
+
+		PY_MOVABLE(method, dict_value_ref(entry_dict, name));
+
+		if (method == NULL) {
+			return NULL;
+		}
+
+		return PyObject_CallOneArg(py_move(&method), self);
+	}
+
 	PY_MOVABLE(copy, cls->tp_alloc(cls, 0));
 
 	if (copy == NULL) {
 		return NULL;
 	}
 
-	PY_MOVABLE(dict, NULL);
+	struct_slots_copy_into(type, self, copy);
 
-	STRUCT_BEGIN_CRITICAL_SECTION(self);
-
-	for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
-		PyObject * const value = *struct_slot(type, self, i);
-
-		if (value != NULL) {
-			*struct_slot(type, copy, i) = Py_NewRef(value);
-		}
-	}
-
-	/* The one read that sees the managed-dict slot without materializing
-	 * the source's dict on 3.13, where the slot is NULL until first use;
-	 * PyObject_GenericGetDict would create it, mutating the source. */
-	PyObject * * const dict_slot = _PyObject_GetDictPtr(self);
-
-	if (dict_slot != NULL) {
-		dict = Py_XNewRef(*dict_slot);
-	}
-
-	/* A non-struct base's own __slots__ members are not struct fields, so
-	 * the loop above never touches them; walk the MRO's member descriptors
-	 * and copy those slots too, or a struct with a slotted base would lose
-	 * the base's state in the copy. The struct's own field descriptors are
-	 * skipped by offset, so no slot is copied twice. */
-	PyObject * const mro = cls->tp_mro;
-
-	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); ++i) {
-		PyTypeObject * const entry = (PyTypeObject *) PyTuple_GET_ITEM(mro, i);
-		PY_OWNED(entry_dict, struct_type_dict(entry));
-
-		if (entry_dict == NULL) {
-			return NULL;
-		}
-
-		Py_ssize_t position = 0;
-		PyObject * key;
-		PyObject * value;
-
-		while (PyDict_Next(entry_dict, &position, &key, &value)) {
-			if (!PyObject_TypeCheck(value, &PyMemberDescr_Type)) {
-				continue;
-			}
-
-			PyMemberDef const * const member = ((PyMemberDescrObject *) value)->d_member;
-
-			if (member == NULL || member->type != SLOT_MEMBER_TYPE) {
-				continue;
-			}
-
-			bool is_struct_field = false;
-
-			for (Py_ssize_t f = 0; f < type->struct_field_count; ++f) {
-				if (member->offset == type->struct_slot_offsets[f]) {
-					is_struct_field = true;
-					break;
-				}
-			}
-
-			if (is_struct_field) {
-				continue;
-			}
-
-			PyObject * const * const source = (PyObject * *) ((char *) self + member->offset);
-
-			if (*source != NULL) {
-				*((PyObject * *) ((char *) copy + member->offset)) = Py_NewRef(*source);
-			}
-		}
-	}
-	STRUCT_END_CRITICAL_SECTION();
+	PY_MOVABLE(dict, struct_instance_dict_ref(self));
 
 	if (dict != NULL) {
 		PY_OWNED(copied, PyDict_Copy(dict));
