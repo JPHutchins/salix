@@ -112,6 +112,9 @@ static PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 		}
 	}
 
+	/* The one read that sees the managed-dict slot without materializing
+	 * the source's dict on 3.13, where the slot is NULL until first use;
+	 * PyObject_GenericGetDict would create it, mutating the source. */
 	PyObject * * const dict_slot = _PyObject_GetDictPtr(self);
 
 	if (dict_slot != NULL) {
