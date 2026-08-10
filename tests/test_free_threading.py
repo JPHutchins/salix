@@ -234,8 +234,7 @@ def test_concurrent_pickling_while_another_thread_writes_it():
             restored = pickle.loads(pickle.dumps(shared if i % 2 else sealed))
             value = restored.value
 
-            if i % 1000 == 0:
-                assert len(value) == 2
+            assert len(value) == 2
 
     roles = iter(([write, pickle_round_trip] * THREADS)[:THREADS])
     claim = threading.Lock()
@@ -261,6 +260,11 @@ def test_concurrent_getstate_while_another_thread_writes_the_instance_dict():
     """
 
     shared = DictCarrying(0)
+    # A fresh instance: its dict slot is NULL, so every __getstate__ until the
+    # writer's first store exercises instance_dict_ref's empty-dict
+    # materialize-and-restore branch -- the path the read-side race fix is
+    # about. No seed, because seeding would make the dict non-empty from the
+    # start and skip that branch entirely.
     rounds = ITERATIONS * 5
     saw_dict_entry = [False]
 
@@ -272,6 +276,9 @@ def test_concurrent_getstate_while_another_thread_writes_the_instance_dict():
         for i in range(rounds):
             state = shared.__getstate__()
 
+            # Before the writer's first store the dict slot is still NULL, so
+            # the third element is None; after it, the writer's entry is there.
+            # Only the non-None case can contain the entry.
             if state[2] is not None and "extra" in state[2]:
                 saw_dict_entry[0] = True
 
@@ -290,6 +297,9 @@ def test_concurrent_getstate_while_another_thread_writes_the_instance_dict():
 
     run_on_every_thread(work)
 
+    # The writer stores on every one of its `rounds` iterations, so by the time
+    # every thread has run to completion at least one store must have landed
+    # and been observed.
     assert saw_dict_entry[0]
 
 

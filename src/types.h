@@ -19,6 +19,19 @@ enum { SLOT_MEMBER_TYPE = T_OBJECT_EX };
 enum { SLOT_MEMBER_TYPE = Py_T_OBJECT_EX };
 #endif
 
+/* The type a reduce reconstruction is building, set around the reconstruction's
+ * __new__ call so Struct_new can tell a reconstruction (whose arguments come
+ * from __getnewargs__ and must bind into the fields) from a normal construction
+ * (whose arguments belong to __init__ and must not leak into the fields). Only
+ * the type itself matches, so a construction nested inside a reconstruction's
+ * __new__ body -- of a different type -- is seen as construction. Defined in
+ * construct.c. */
+extern _Thread_local PyTypeObject * struct_reconstruction_type;
+
+static inline bool struct_reconstructing(PyTypeObject const * const cls) {
+	return struct_reconstruction_type == cls;
+}
+
 typedef struct {
 	PyHeapTypeObject heap_type;
 
@@ -26,6 +39,7 @@ typedef struct {
 	PyObject * struct_defaults;
 	Py_ssize_t * struct_slot_offsets;
 	PyObject * struct_post_init;
+	PyObject * struct_body_new;
 
 	Py_ssize_t struct_field_count;
 	Py_ssize_t struct_default_count;
@@ -85,6 +99,98 @@ static inline PyObject * struct_type_dict(PyTypeObject * const type) {
 	return PyType_GetDict(type);
 }
 #endif
+
+static inline PyObject * dict_value_ref(PyObject * const mapping, PyObject * const key);
+
+/*
+ * Whether the class's MRO binds __getnewargs__ or __getnewargs_ex__. Reading
+ * the class dicts, not getattr, so a user __getattr__ never runs and a hook
+ * added after creation is seen. Reports the two declarations separately
+ * because the reconstruction shape accepts keywords only for
+ * __getnewargs_ex__, while positional args are accepted for either.
+ */
+static inline int struct_probe_getnewargs(
+	PyTypeObject const * const cls,
+	bool * const declares,
+	bool * const declares_ex
+) {
+	*declares = false;
+	*declares_ex = false;
+	PyObject * const mro = cls->tp_mro;
+
+	if (mro == NULL) {
+		return 0;
+	}
+
+	PyObject * const ex_name = PyUnicode_InternFromString("__getnewargs_ex__");
+	PyObject * const plain_name = PyUnicode_InternFromString("__getnewargs__");
+
+	if (ex_name == NULL || plain_name == NULL) {
+		Py_XDECREF(ex_name);
+		Py_XDECREF(plain_name);
+
+		return -1;
+	}
+
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); ++i) {
+		PyObject * const entry = PyTuple_GET_ITEM(mro, i);
+		PyObject * const dict = struct_type_dict((PyTypeObject *) entry);
+
+		if (dict == NULL) {
+			if (PyErr_Occurred()) {
+				Py_DECREF(ex_name);
+				Py_DECREF(plain_name);
+
+				return -1;
+			}
+
+			continue;
+		}
+
+		PyObject * const ex = dict_value_ref(dict, ex_name);
+		PyObject * const plain = dict_value_ref(dict, plain_name);
+
+		if (ex == NULL && PyErr_Occurred()) {
+			Py_XDECREF(plain);
+			Py_DECREF(dict);
+			Py_DECREF(ex_name);
+			Py_DECREF(plain_name);
+
+			return -1;
+		}
+
+		if (ex != NULL && ex != Py_None) {
+			*declares_ex = true;
+			*declares = true;
+		}
+
+		if (plain == NULL && PyErr_Occurred()) {
+			Py_XDECREF(ex);
+			Py_DECREF(dict);
+			Py_DECREF(ex_name);
+			Py_DECREF(plain_name);
+
+			return -1;
+		}
+
+		if (plain != NULL && plain != Py_None) {
+			*declares = true;
+		}
+
+		Py_XDECREF(ex);
+		Py_XDECREF(plain);
+		Py_DECREF(dict);
+
+		if (*declares && *declares_ex) {
+			break;
+		}
+	}
+
+	Py_DECREF(ex_name);
+	Py_DECREF(plain_name);
+
+	return 0;
+}
 
 /*
  * A strong reference to the value, or NULL if the key is gone.
@@ -285,6 +391,43 @@ static inline void struct_slots_ref_or_none_into(
 
 static inline Py_ssize_t struct_required_count(StructType const * const type) {
 	return type->struct_field_count - type->struct_default_count;
+}
+
+/* Every required field of a getnewargs reconstruction's result is set. Called
+ * after the reconstruction's __new__ for the None-state path, where __setstate__
+ * is skipped and the args are the only carrier. Returns -1 with an exception set
+ * on an incomplete reconstruction, 0 on complete. */
+static inline int struct_reconstruction_complete(PyObject * const result) {
+	if (!is_struct(result)) {
+		return 0;
+	}
+
+	StructType const * const type = struct_type_of(result);
+	bool declares = false;
+	bool declares_ex = false;
+
+	if (struct_probe_getnewargs(&type->heap_type.ht_type, &declares, &declares_ex) < 0) {
+		return -1;
+	}
+
+	if (!declares) {
+		return 0;
+	}
+
+	for (Py_ssize_t i = 0; i < struct_required_count(type); ++i) {
+		if (*struct_slot(type, result, i) == NULL) {
+			PyErr_Format(
+				PyExc_TypeError,
+				"%.200s() missing required argument '%U'",
+				struct_type_name(type),
+				PyTuple_GET_ITEM(type->struct_field_names, i)
+			);
+
+			return -1;
+		}
+	}
+
+	return 0;
 }
 
 static inline bool defines_own_init(StructType const * const struct_class) {

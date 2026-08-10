@@ -8,3 +8,8 @@
  * Not const: PyType_Ready fills in tp_dict, tp_mro, tp_bases and the inherited
  * slots at import time, and PyObject_TypeCheck takes a mutable pointer. */
 extern PyTypeObject StructMixin_Type;
+
+PyObject * Struct_reduce_newobj(PyObject * module, PyObject * args);
+PyObject * Struct_reduce_newobj_ex(PyObject * module, PyObject * args);
+PyObject * Struct_reduce_newobj_check(PyObject * module, PyObject * args);
+PyObject * Struct_reduce_newobj_ex_check(PyObject * module, PyObject * args);

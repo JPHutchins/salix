@@ -5,6 +5,22 @@
 #include "result.h"
 #include "types.h"
 
+/* Py_TPFLAGS_INLINE_VALUES and Py_TPFLAGS_MANAGED_DICT joined the public
+ * object.h in 3.13 and 3.11 respectively; the flag values have been stable, so
+ * they are spelled here rather than gated on the public header. */
+enum {
+	STRUCT_TPFLAGS_INLINE_VALUES = 1 << 2,
+	STRUCT_TPFLAGS_MANAGED_DICT = 1 << 4,
+};
+
+/* A heap type's instance dict lives just before the object header on a
+ * managed-dict build (3.11+). Reading it directly, rather than through
+ * _PyObject_GetDictPtr, avoids materializing an inline-values dict: that
+ * helper creates and stores one for a null slot, which would make __getstate__
+ * mutate the instance. The offset is CPython's MANAGED_DICT_OFFSET. */
+
+_Thread_local PyTypeObject * struct_reconstruction_type = NULL;
+
 struct field_lookup {
 	enum { FIELD_LOOKUP_FOUND, FIELD_LOOKUP_MISSING, FIELD_LOOKUP_ERROR } tag;
 	Py_ssize_t index;
@@ -42,6 +58,23 @@ static enum result write_slot(
 	PyObject * value
 );
 static enum result run_post_init(StructType const * type, PyObject * self);
+static PyObject * instance_dict_owned(PyObject * self);
+static PyObject * instance_dict_ref(PyObject * self);
+static enum result resolve_state(
+	StructType const * type,
+	PyObject * values,
+	PyObject * unset_names,
+	Py_ssize_t * * const values_indices,
+	PyObject * * const value_snapshot,
+	Py_ssize_t * * const unset_indices
+);
+static enum result require_restore_complete(
+	StructType const * type,
+	PyObject * self,
+	Py_ssize_t const * unset_indices,
+	Py_ssize_t unset_count,
+	bool declares_getnewargs
+);
 
 PyObject * Struct_vectorcall(
 	PyObject * const struct_class,
@@ -85,22 +118,93 @@ PyObject * Struct_vectorcall(
 	return py_move(&self);
 }
 
+static enum result bind_reconstruction(
+	StructType const * const type,
+	PyObject * const self,
+	PyObject * const arguments,
+	PyObject * const keywords
+) {
+	Py_ssize_t const positional_count = PyTuple_GET_SIZE(arguments);
+
+	if (positional_count > type->struct_field_count) {
+		PyErr_Format(
+			PyExc_TypeError,
+			"%.200s() takes at most %zd positional arguments but %zd were given",
+			struct_type_name(type),
+			type->struct_field_count,
+			positional_count
+		);
+
+		return RESULT_ERROR;
+	}
+
+	for (Py_ssize_t i = 0; i < positional_count; ++i) {
+		*struct_slot(type, self, i) = Py_NewRef(PyTuple_GET_ITEM(arguments, i));
+	}
+
+	if (keywords == NULL) {
+		return RESULT_OK;
+	}
+
+	Py_ssize_t position = 0;
+	PyObject * name = NULL;
+	PyObject * value = NULL;
+
+	while (PyDict_Next(keywords, &position, &name, &value)) {
+		struct field_lookup const found = find_field(type, name);
+
+		switch (found.tag) {
+			case FIELD_LOOKUP_ERROR:
+				return RESULT_ERROR;
+			case FIELD_LOOKUP_MISSING:
+				PyErr_Format(
+					PyExc_TypeError,
+					"%.200s() got an unexpected keyword argument '%U'",
+					struct_type_name(type),
+					name
+				);
+
+				return RESULT_ERROR;
+			case FIELD_LOOKUP_FOUND:
+				break;
+		}
+
+		PyObject * * const slot = struct_slot(type, self, found.index);
+
+		if (*slot != NULL) {
+			/* The redundant half of a __getnewargs_ex__ that returns the same
+			 * field both positionally and by keyword; the positional wins. */
+			continue;
+		}
+
+		*slot = Py_NewRef(value);
+	}
+
+	return RESULT_OK;
+}
+
 PyObject * Struct_new(
 	PyTypeObject * const struct_class,
 	PyObject * const arguments,
 	PyObject * const keywords
 ) {
-	if (!defines_own_init((StructType *) struct_class)) {
-		Py_ssize_t const argument_count = (
-			PyTuple_GET_SIZE(arguments) +
-			(keywords != NULL ? PyDict_GET_SIZE(keywords) : 0)
-		);
+	StructType * const type = (StructType *) struct_class;
+	bool const body_init = defines_own_init(type);
+	Py_ssize_t const argument_count = (
+		PyTuple_GET_SIZE(arguments) +
+		(keywords != NULL ? PyDict_GET_SIZE(keywords) : 0)
+	);
+	bool declares = false;
+	bool declares_ex = false;
 
-		if (argument_count > 0) {
-			PyErr_Format(PyExc_TypeError, "%.200s() takes no arguments", struct_class->tp_name);
+	if (struct_probe_getnewargs(struct_class, &declares, &declares_ex) < 0) {
+		return NULL;
+	}
 
-			return NULL;
-		}
+	if (argument_count > 0 && !body_init && !declares) {
+		PyErr_Format(PyExc_TypeError, "%.200s() takes no arguments", struct_class->tp_name);
+
+		return NULL;
 	}
 
 	PY_MOVABLE(self, struct_class->tp_alloc(struct_class, 0));
@@ -109,7 +213,39 @@ PyObject * Struct_new(
 		return NULL;
 	}
 
-	StructType const * const type = (StructType *) struct_class;
+	if (declares && argument_count > 0 && (struct_reconstructing(struct_class) || !body_init)) {
+		if (bind_reconstruction(type, self, arguments, keywords) != RESULT_OK) {
+			return NULL;
+		}
+	}
+
+	/* A bare __new__ call on a getnewargs-declaring struct must not silently
+	 * build a half-built struct: the arguments are all it will ever get, since
+	 * no __setstate__ follows a direct new. A reduce reconstruction raises the
+	 * marker and is exempt -- its state completes the fields -- and so is a body
+	 * __new__, whose super().__new__(cls) is called empty and which fills the
+	 * fields itself. */
+	if (
+		declares &&
+		!body_init &&
+		!struct_reconstructing(struct_class) &&
+		type->struct_body_new == NULL
+	) {
+		Py_ssize_t const required_count = struct_required_count(type);
+
+		for (Py_ssize_t i = 0; i < required_count; ++i) {
+			if (*struct_slot(type, self, i) == NULL) {
+				PyErr_Format(
+					PyExc_TypeError,
+					"%.200s() missing required argument '%U'",
+					struct_class->tp_name,
+					PyTuple_GET_ITEM(type->struct_field_names, i)
+				);
+
+				return NULL;
+			}
+		}
+	}
 
 	return (
 		fill_defaults(type, self, struct_required_count(type)) == RESULT_OK ? py_move(&self) :
@@ -393,6 +529,90 @@ static enum result require_field(
 	Py_UNREACHABLE();
 }
 
+static PyObject * instance_dict_owned(PyObject * const self) {
+	PyObject * * const dict_slot = _PyObject_GetDictPtr(self);
+	PY_MOVABLE(dict, NULL);
+
+	STRUCT_BEGIN_CRITICAL_SECTION(self);
+	dict = Py_XNewRef(*dict_slot);
+
+	if (dict == NULL) {
+		dict = PyDict_New();
+
+		if (dict != NULL) {
+			*dict_slot = dict;
+			dict = Py_NewRef(dict);
+		}
+	}
+	STRUCT_END_CRITICAL_SECTION();
+
+	return py_move(&dict);
+}
+
+/* The existing instance dict, or NULL when the slot is empty. Unlike
+ * instance_dict_owned this never creates and stores one, so __getstate__
+ * stays observationally read-only: a struct with a null dict slot reports
+ * None for the third state element and the slot stays null. On a managed-dict
+ * build the pointer is read directly rather than through _PyObject_GetDictPtr,
+ * which would materialize and store an empty dict for an inline-values type. */
+static PyObject * instance_dict_ref(PyObject * const self) {
+	PY_MOVABLE(dict, NULL);
+
+	STRUCT_BEGIN_CRITICAL_SECTION(self);
+#if PY_VERSION_HEX >= 0x030B0000
+	if (Py_TYPE(self)->tp_flags & STRUCT_TPFLAGS_MANAGED_DICT) {
+#	ifdef Py_GIL_DISABLED
+		Py_ssize_t const offset = -((Py_ssize_t) sizeof(PyObject *));
+#	else
+		Py_ssize_t const offset = -3 * ((Py_ssize_t) sizeof(PyObject *));
+#	endif
+
+		dict = Py_XNewRef(*(PyObject * *) ((char *) self + offset));
+	} else
+#endif
+	{
+		PyObject * * const dict_slot = _PyObject_GetDictPtr(self);
+		dict = Py_XNewRef(dict_slot != NULL ? *dict_slot : NULL);
+	}
+	STRUCT_END_CRITICAL_SECTION();
+
+	if (dict != NULL) {
+		return py_move(&dict);
+	}
+
+	/* A managed-dict type with inline values holds instance attributes behind
+	 * a null dict pointer. _PyObject_GetDictPtr packs that inline-values area
+	 * into a dict on demand (3.13+) and stores it in the managed-dict slot, so
+	 * reading through it materializes the attributes. An empty materialization
+	 * is restored to the null slot so getstate stays read-only; the read and the
+	 * restore run under one acquisition so a concurrent writer cannot store
+	 * between the size check and the null restore. */
+#if PY_VERSION_HEX >= 0x030B0000
+	if (Py_TYPE(self)->tp_flags & STRUCT_TPFLAGS_INLINE_VALUES) {
+		PyObject * * const slot = _PyObject_GetDictPtr(self);
+		PyObject * materialized = NULL;
+
+		STRUCT_BEGIN_CRITICAL_SECTION(self);
+		materialized = slot != NULL ? *slot : NULL;
+
+		if (materialized != NULL && PyDict_GET_SIZE(materialized) == 0) {
+			*slot = NULL;
+			Py_DECREF(materialized);
+			materialized = NULL;
+		} else if (materialized != NULL) {
+			materialized = Py_NewRef(materialized);
+		}
+		STRUCT_END_CRITICAL_SECTION();
+
+		if (materialized != NULL) {
+			return materialized;
+		}
+	}
+#endif
+
+	return NULL;
+}
+
 PyObject * Struct_get_state(PyObject * const self, PyObject * const noargs) {
 	if (!is_struct(self)) {
 #if PY_VERSION_HEX >= 0x030B0000
@@ -404,7 +624,7 @@ PyObject * Struct_get_state(PyObject * const self, PyObject * const noargs) {
 
 		return PyObject_CallOneArg(method, self);
 #else
-		PY_MOVABLE(dict, struct_instance_dict_ref(self));
+		PY_MOVABLE(dict, instance_dict_ref(self));
 
 		if (dict == NULL) {
 			if (PyErr_Occurred()) {
@@ -428,11 +648,9 @@ PyObject * Struct_get_state(PyObject * const self, PyObject * const noargs) {
 
 	enum result collected = RESULT_OK;
 
-	STRUCT_BEGIN_CRITICAL_SECTION(self);
-
 	for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
 		PyObject * const name = PyTuple_GET_ITEM(type->struct_field_names, i);
-		PyObject * const value = *struct_slot(type, self, i);
+		PY_MOVABLE(value, struct_slot_ref(type, self, i));
 
 		if (value == NULL) {
 			if (PyList_Append(unset_names, name) < 0) {
@@ -445,8 +663,6 @@ PyObject * Struct_get_state(PyObject * const self, PyObject * const noargs) {
 		}
 	}
 
-	STRUCT_END_CRITICAL_SECTION();
-
 	if (collected != RESULT_OK) {
 		return NULL;
 	}
@@ -454,11 +670,7 @@ PyObject * Struct_get_state(PyObject * const self, PyObject * const noargs) {
 	PY_MOVABLE(instance_dict, NULL);
 
 	if (Py_TYPE(self)->tp_dictoffset != 0) {
-		PY_MOVABLE(dict, struct_instance_dict_ref(self));
-
-		if (dict == NULL && PyErr_Occurred()) {
-			return NULL;
-		}
+		PY_MOVABLE(dict, instance_dict_ref(self));
 
 		if (dict != NULL) {
 			instance_dict = PyDict_Copy(dict);
@@ -496,7 +708,7 @@ static enum result restore_unset(
 	return outcome;
 }
 
-static enum result validate_state(
+static enum result resolve_state(
 	StructType const * const type,
 	PyObject * const values,
 	PyObject * const unset_names,
@@ -605,6 +817,52 @@ error:
 	return RESULT_ERROR;
 }
 
+static enum result require_restore_complete(
+	StructType const * const type,
+	PyObject * const self,
+	Py_ssize_t const * const unset_indices,
+	Py_ssize_t const unset_count,
+	bool const declares_getnewargs
+) {
+	Py_ssize_t const required_count = struct_required_count(type);
+
+	/* A getnewargs reconstruction is complete only when every required field is
+	 * covered by its args and state together; a required field that stays unset
+	 * and is not explicitly named by the state is a half-built struct and must
+	 * not round-trip. A field the state names as unset is deliberately unset --
+	 * a del or a custom __setstate__ recompute -- and is preserved. A struct
+	 * that does not declare getnewargs keeps its partial states. */
+	for (Py_ssize_t i = 0; i < required_count; ++i) {
+		if (*struct_slot(type, self, i) != NULL) {
+			continue;
+		}
+
+		bool explicitly_unset = false;
+
+		for (Py_ssize_t u = 0; u < unset_count; ++u) {
+			if (unset_indices[u] == i) {
+				explicitly_unset = true;
+				break;
+			}
+		}
+
+		if (explicitly_unset || !declares_getnewargs) {
+			continue;
+		}
+
+		PyErr_Format(
+			PyExc_TypeError,
+			"%.200s() missing required argument '%U'",
+			struct_type_name(type),
+			PyTuple_GET_ITEM(type->struct_field_names, i)
+		);
+
+		return RESULT_ERROR;
+	}
+
+	return RESULT_OK;
+}
+
 PyObject * Struct_set_state(PyObject * const self, PyObject * const state) {
 	if (!is_struct(self)) {
 		if (state == Py_None) {
@@ -622,18 +880,8 @@ PyObject * Struct_set_state(PyObject * const self, PyObject * const state) {
 		if (dict != Py_None && !PyDict_Check(dict)) {
 			PyErr_Format(
 				PyExc_TypeError,
-				"__setstate__() dict element must be a dict or None, not %.200s",
-				Py_TYPE(dict)->tp_name
-			);
-
-			return NULL;
-		}
-
-		if (slots != NULL && slots != Py_None && !PyDict_Check(slots)) {
-			PyErr_Format(
-				PyExc_TypeError,
-				"__setstate__() slots element must be a dict, not %.200s",
-				Py_TYPE(slots)->tp_name
+				"__setstate__() argument 1 must be a dict, None, or (dict, slots) tuple, not %.200s",
+				Py_TYPE(state)->tp_name
 			);
 
 			return NULL;
@@ -660,6 +908,16 @@ PyObject * Struct_set_state(PyObject * const self, PyObject * const state) {
 		}
 
 		if (slots != NULL && slots != Py_None) {
+			if (!PyDict_Check(slots)) {
+				PyErr_Format(
+					PyExc_TypeError,
+					"__setstate__() slots element must be a dict, not %.200s",
+					Py_TYPE(slots)->tp_name
+				);
+
+				return NULL;
+			}
+
 			PY_OWNED(items, PyDict_Items(slots));
 
 			if (items == NULL) {
@@ -736,7 +994,7 @@ PyObject * Struct_set_state(PyObject * const self, PyObject * const state) {
 	PY_MOVABLE(value_snapshot, NULL);
 
 	if (
-		validate_state(
+		resolve_state(
 			type,
 			values,
 			unset_names,
@@ -749,13 +1007,52 @@ PyObject * Struct_set_state(PyObject * const self, PyObject * const state) {
 		return NULL;
 	}
 
+	Py_ssize_t const value_count = PyList_GET_SIZE(value_snapshot);
+	Py_ssize_t const unset_count = PyTuple_GET_SIZE(unset_names);
+	enum result outcome = RESULT_OK;
+
+	for (Py_ssize_t i = 0; i < value_count; ++i) {
+		if (
+			write_slot(type, self, values_indices[i], PyList_GET_ITEM(value_snapshot, i)) !=
+			RESULT_OK
+		) {
+			outcome = RESULT_ERROR;
+			break;
+		}
+	}
+
+	if (outcome == RESULT_OK) {
+		for (Py_ssize_t u = 0; u < unset_count; ++u) {
+			if (restore_unset(type, self, unset_indices[u]) != RESULT_OK) {
+				outcome = RESULT_ERROR;
+				break;
+			}
+		}
+	}
+
+	if (outcome == RESULT_OK) {
+		bool declares = false;
+		bool declares_ex = false;
+
+		if (struct_probe_getnewargs((PyTypeObject *) type, &declares, &declares_ex) < 0) {
+			outcome = RESULT_ERROR;
+		} else {
+			outcome = require_restore_complete(type, self, unset_indices, unset_count, declares);
+		}
+	}
+
+	PyMem_Free(values_indices);
+	PyMem_Free(unset_indices);
+
+	if (outcome != RESULT_OK) {
+		return NULL;
+	}
+
 	if (Py_TYPE(self)->tp_dictoffset != 0) {
 		if (instance_dict == Py_None) {
-			PY_MOVABLE(dict, struct_instance_dict_ref(self));
+			PY_MOVABLE(dict, instance_dict_ref(self));
 
 			if (dict == NULL && PyErr_Occurred()) {
-				PyMem_Free(values_indices);
-				PyMem_Free(unset_indices);
 				return NULL;
 			}
 
@@ -773,51 +1070,40 @@ PyObject * Struct_set_state(PyObject * const self, PyObject * const state) {
 				STRUCT_END_CRITICAL_SECTION();
 			}
 		} else {
-			PY_MOVABLE(dict, struct_instance_dict_ref(self));
+			PY_MOVABLE(dict, instance_dict_owned(self));
 
-			if (dict == NULL && PyErr_Occurred()) {
-				PyMem_Free(values_indices);
-				PyMem_Free(unset_indices);
+			if (dict == NULL) {
 				return NULL;
 			}
 
-			if (dict == NULL || instance_dict != dict) {
+			/* The clear and the swap both mutate the instance's dict storage, so
+			 * each runs under the instance's critical section (the same lock a
+			 * concurrent writer's attr store takes) -- otherwise a writer's store
+			 * landing between the read and the mutation is silently dropped. The
+			 * replacement is built up front and swapped only on full success, so a
+			 * failing merge leaves the instance untouched; the swap replaces the
+			 * dict object and strands external references, the accepted cost of
+			 * atomicity. The None branch clears in place. */
+			if (instance_dict != dict) {
 				PY_MOVABLE(fresh, PyDict_New());
 
 				if (fresh == NULL || PyDict_Update(fresh, instance_dict) < 0) {
-					PyMem_Free(values_indices);
-					PyMem_Free(unset_indices);
 					return NULL;
 				}
 
+				int swapped;
+
 				STRUCT_BEGIN_CRITICAL_SECTION(self);
-				PyObject_GenericSetDict(self, fresh, NULL);
+				swapped = PyObject_GenericSetDict(self, fresh, NULL);
 				STRUCT_END_CRITICAL_SECTION();
+
+				if (swapped < 0) {
+					return NULL;
+				}
 			}
 		}
 	}
 
-	for (Py_ssize_t i = 0; i < PyList_GET_SIZE(value_snapshot); ++i) {
-		if (
-			write_slot(type, self, values_indices[i], PyList_GET_ITEM(value_snapshot, i)) !=
-			RESULT_OK
-		) {
-			PyMem_Free(values_indices);
-			PyMem_Free(unset_indices);
-			return NULL;
-		}
-	}
-
-	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(unset_names); ++i) {
-		if (restore_unset(type, self, unset_indices[i]) != RESULT_OK) {
-			PyMem_Free(values_indices);
-			PyMem_Free(unset_indices);
-			return NULL;
-		}
-	}
-
-	PyMem_Free(values_indices);
-	PyMem_Free(unset_indices);
 	Py_RETURN_NONE;
 }
 
