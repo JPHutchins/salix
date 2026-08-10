@@ -11,6 +11,7 @@
 static int Struct_set_attribute(PyObject * self, PyObject * name, PyObject * value);
 static PyObject * Struct_copy(PyObject * self, PyObject * noargs);
 static PyObject * Struct_copy_delegate(PyObject * self);
+static PyObject * copy_reconstruct(PyObject * self, PyObject * reduced, PyObject * copy_module);
 static PyObject * Struct_get_field_names(PyObject * self, void * closure);
 static PyObject * Struct_get_defaults(PyObject * self, void * closure);
 static PyObject * Struct_get_fields_as_msgspec(PyObject * self, void * closure);
@@ -63,17 +64,24 @@ static PyObject * Struct_copy_delegate(PyObject * const self) {
 		reduced = PyObject_CallMethod(self, "__reduce_ex__", "i", 4);
 	}
 
-	if (reduced == NULL) {
-		return NULL;
-	}
+	return reduced != NULL ? copy_reconstruct(self, reduced, copy_module) : NULL;
+}
 
+/*
+ * The reduce branch of copy.copy: a string result means "copy the identity",
+ * otherwise the result is handed to copy._reconstruct the way copy.py's
+ * `*rv` is, so a non-tuple iterable is accepted and a non-iterable fails
+ * the same TypeError `*rv` would raise.
+ */
+static PyObject * copy_reconstruct(
+	PyObject * const self,
+	PyObject * const reduced,
+	PyObject * const copy_module
+) {
 	if (PyUnicode_Check(reduced)) {
 		return Py_NewRef(self);
 	}
 
-	/* The tuple is handed to copy._reconstruct the way copy.copy's reduce
-	 * branch hands `*rv` to it, so a non-tuple iterable is accepted and a
-	 * non-iterable fails the same TypeError `*rv` would raise. */
 	PY_OWNED(tuple, PySequence_Tuple(reduced));
 
 	if (tuple == NULL) {
@@ -168,6 +176,33 @@ static PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 		}
 
 		return PyObject_CallOneArg(method, self);
+	}
+
+	/* copy.py consults dispatch_table before __copy__, and the mixin's
+	 * method would shadow a user registration for a real struct; honor it
+	 * the same way the delegate does, with the same reduce-path handling. */
+	PY_OWNED(copy_module, PyImport_ImportModule("copy"));
+
+	if (copy_module == NULL) {
+		return NULL;
+	}
+
+	PY_OWNED(dispatch_table, PyObject_GetAttrString(copy_module, "dispatch_table"));
+
+	if (dispatch_table == NULL) {
+		return NULL;
+	}
+
+	PY_OWNED(copier, dict_value_ref(dispatch_table, (PyObject *) cls));
+
+	if (copier == NULL && PyErr_Occurred()) {
+		return NULL;
+	}
+
+	if (copier != NULL) {
+		PY_MOVABLE(reduced, PyObject_CallOneArg(copier, self));
+
+		return reduced != NULL ? copy_reconstruct(self, reduced, copy_module) : NULL;
 	}
 
 	PY_MOVABLE(copy, cls->tp_alloc(cls, 0));

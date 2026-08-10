@@ -209,6 +209,20 @@ def test_a_member_descriptor_co_base_copy_fails_like_copy_dot_py():
         copy.copy(RealStruct(1))
 
 
+def test_a_dispatch_table_copier_is_honored_for_a_real_struct():
+    def special_copy(instance):
+        return (type(instance), (999, "seven"), None)
+
+    copy.dispatch_table[Point] = special_copy
+
+    try:
+        copied = copy.copy(Point(1, "two"))
+
+        assert copied == Point(999, "seven")
+    finally:
+        del copy.dispatch_table[Point]
+
+
 def test_a_dispatch_table_copier_is_honored_for_an_impostor():
     def special_copy(instance):
         return (list, ([1, 2, 3],))
