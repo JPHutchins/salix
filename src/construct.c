@@ -504,26 +504,24 @@ static enum result validate_state(
 	PyObject * * const value_snapshot,
 	Py_ssize_t * * const unset_indices
 ) {
-	Py_ssize_t const value_count = PyDict_GET_SIZE(values);
 	Py_ssize_t const unset_count = PyTuple_GET_SIZE(unset_names);
-	Py_ssize_t * const resolved_values = PyMem_New(Py_ssize_t, value_count > 0 ? value_count : 1);
-	Py_ssize_t * const resolved_unset = PyMem_New(Py_ssize_t, unset_count > 0 ? unset_count : 1);
 	PY_OWNED(items, PyDict_Items(values));
 
-	if (resolved_values == NULL || resolved_unset == NULL || items == NULL) {
-		PyMem_Free(resolved_values);
-		PyMem_Free(resolved_unset);
+	if (items == NULL) {
 		PyErr_NoMemory();
-
 		return RESULT_ERROR;
 	}
 
 	Py_ssize_t const item_count = PyList_GET_SIZE(items);
+	Py_ssize_t * const resolved_values = PyMem_New(Py_ssize_t, item_count > 0 ? item_count : 1);
+	Py_ssize_t * const resolved_unset = PyMem_New(Py_ssize_t, unset_count > 0 ? unset_count : 1);
 	PY_MOVABLE(snapshot, PyList_New(item_count));
 
-	if (snapshot == NULL) {
+	if (resolved_values == NULL || resolved_unset == NULL || snapshot == NULL) {
 		PyMem_Free(resolved_values);
 		PyMem_Free(resolved_unset);
+		PyErr_NoMemory();
+
 		return RESULT_ERROR;
 	}
 
@@ -549,7 +547,7 @@ static enum result validate_state(
 		goto error;
 	}
 
-	for (Py_ssize_t v = 0; v < value_count; ++v) {
+	for (Py_ssize_t v = 0; v < item_count; ++v) {
 		set_flags[resolved_values[v]] = true;
 	}
 
@@ -762,9 +760,22 @@ PyObject * Struct_set_state(PyObject * const self, PyObject * const state) {
 			}
 
 			if (dict != NULL && dict != values) {
+				PY_MOVABLE(fresh, PyDict_New());
+
+				if (fresh == NULL) {
+					PyMem_Free(values_indices);
+					PyMem_Free(unset_indices);
+					return NULL;
+				}
+
+				PyObject * * const dict_slot = struct_dict_slot_ptr(self);
+
 				STRUCT_BEGIN_CRITICAL_SECTION(self);
-				PyDict_Clear(dict);
+				*dict_slot = fresh;
+				fresh = NULL;
 				STRUCT_END_CRITICAL_SECTION();
+
+				Py_DECREF(dict);
 			}
 		} else {
 			PY_MOVABLE(dict, struct_instance_dict_ref(self));
