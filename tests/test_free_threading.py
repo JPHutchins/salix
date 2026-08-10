@@ -272,7 +272,7 @@ def test_concurrent_getstate_while_another_thread_writes_the_instance_dict():
         for i in range(rounds):
             state = shared.__getstate__()
 
-            if "extra" in state[2]:
+            if state[2] is not None and "extra" in state[2]:
                 saw_dict_entry[0] = True
 
             if i % 1000 == 0:

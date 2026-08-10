@@ -69,6 +69,10 @@ class Dicted:
     pass
 
 
+class Impostor(Struct.__mro__[1], list):
+    pass
+
+
 class WithDict(Struct, Dicted, frozen=False):
     x: int
 
@@ -555,3 +559,13 @@ def test_protocols_0_and_1_are_deliberately_refused(protocol):
 
     with pytest.raises(TypeError):
         pickle.dumps(Plain(1, 2), protocol=protocol)
+
+
+def test_an_impostor_mixin_subclass_round_trips_through_object_pickling():
+    instance = Impostor()
+    instance.extra = "world"
+
+    restored = pickle.loads(pickle.dumps(instance))
+
+    assert type(restored) is type(instance)
+    assert restored.extra == "world"

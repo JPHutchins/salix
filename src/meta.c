@@ -137,7 +137,6 @@ static enum result reject_unless_planned(
 );
 static enum result install_post_init(StructType * struct_class);
 static PyObject * Struct_new_wrapper(PyObject * self, PyObject * arguments, PyObject * keywords);
-static bool is_struct_new_wrapper(PyObject * wrapper);
 static PyMethodDef struct_new_methoddef[];
 static enum result install_new_wrapper(StructType * struct_class);
 static PyObject * StructMeta_call(PyObject * self, PyObject * args, PyObject * keywords);
@@ -1188,6 +1187,16 @@ static PyObject * Struct_new_wrapper(
 		return NULL;
 	}
 
+	if (defines_own_init((StructType *) subtype) && PyTuple_GET_SIZE(arguments) > 1) {
+		PyErr_Format(
+			PyExc_TypeError,
+			"%.200s.__new__() takes no extra arguments for a struct with __init__",
+			((PyTypeObject *) self)->tp_name
+		);
+
+		return NULL;
+	}
+
 	PY_OWNED(rest, PyTuple_GetSlice(arguments, 1, PyTuple_GET_SIZE(arguments)));
 
 	if (rest == NULL) {
@@ -1209,13 +1218,6 @@ static PyMethodDef struct_new_methoddef[] = {
 	{.ml_name = NULL},
 };
 
-static bool is_struct_new_wrapper(PyObject * const wrapper) {
-	return (
-		PyCFunction_Check(wrapper) &&
-		PyCFunction_GET_FUNCTION(wrapper) == _PyCFunction_CAST(Struct_new_wrapper)
-	);
-}
-
 static enum result install_new_wrapper(StructType * const struct_class) {
 	PY_OWNED(new_name, PyUnicode_InternFromString("__new__"));
 
@@ -1234,7 +1236,7 @@ static enum result install_new_wrapper(StructType * const struct_class) {
 		return RESULT_ERROR;
 	}
 
-	if (defined.found && !is_struct_new_wrapper(declared)) {
+	if (defined.found) {
 		return RESULT_OK;
 	}
 

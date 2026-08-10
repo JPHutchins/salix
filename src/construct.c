@@ -395,13 +395,27 @@ static enum result require_field(
 
 PyObject * Struct_get_state(PyObject * const self, PyObject * const noargs) {
 	if (!is_struct(self)) {
-		PyErr_Format(
-			PyExc_AttributeError,
-			"__getstate__ is defined on structs, and %.200s is not one",
-			Py_TYPE(self)->tp_name
-		);
+#if PY_VERSION_HEX >= 0x030B0000
+		PY_OWNED(method, PyObject_GetAttrString((PyObject *) &PyBaseObject_Type, "__getstate__"));
 
-		return NULL;
+		if (method == NULL) {
+			return NULL;
+		}
+
+		return PyObject_CallOneArg(method, self);
+#else
+		PY_MOVABLE(dict, struct_instance_dict_ref(self));
+
+		if (dict == NULL) {
+			if (PyErr_Occurred()) {
+				return NULL;
+			}
+
+			Py_RETURN_NONE;
+		}
+
+		return dict;
+#endif
 	}
 
 	StructType const * const type = struct_type_of(self);
@@ -545,19 +559,66 @@ static enum result validate_state(
 
 PyObject * Struct_set_state(PyObject * const self, PyObject * const state) {
 	if (!is_struct(self)) {
-		PyErr_Format(
-			PyExc_AttributeError,
-			"__setstate__ is defined on structs, and %.200s is not one",
-			Py_TYPE(self)->tp_name
-		);
+		if (state == Py_None) {
+			Py_RETURN_NONE;
+		}
 
-		return NULL;
+		PyObject * dict = state;
+		PyObject * slots = NULL;
+
+		if (PyTuple_Check(state) && PyTuple_GET_SIZE(state) == 2) {
+			dict = PyTuple_GET_ITEM(state, 0);
+			slots = PyTuple_GET_ITEM(state, 1);
+		}
+
+		if (dict != Py_None && !PyDict_Check(dict)) {
+			PyErr_Format(
+				PyExc_TypeError,
+				"__setstate__() argument 1 must be a dict, None, or (dict, slots) tuple, not %.200s",
+				Py_TYPE(state)->tp_name
+			);
+
+			return NULL;
+		}
+
+		if (dict != Py_None) {
+			int swapped = PyObject_GenericSetDict(self, dict, NULL);
+
+			if (swapped < 0) {
+				return NULL;
+			}
+		}
+
+		if (slots != NULL) {
+			if (!PyDict_Check(slots)) {
+				PyErr_Format(
+					PyExc_TypeError,
+					"__setstate__() slots element must be a dict, not %.200s",
+					Py_TYPE(slots)->tp_name
+				);
+
+				return NULL;
+			}
+
+			Py_ssize_t position = 0;
+			PyObject * name = NULL;
+			PyObject * value = NULL;
+
+			while (PyDict_Next(slots, &position, &name, &value)) {
+				if (PyObject_SetAttr(self, name, value) < 0) {
+					return NULL;
+				}
+			}
+		}
+
+		Py_RETURN_NONE;
 	}
 
 	if (!PyTuple_Check(state)) {
 		PyErr_Format(
 			PyExc_TypeError,
-			"__setstate__() argument 1 must be a tuple, not %.200s",
+			"__setstate__() argument 1 must be the (values, unset_names, instance_dict) "
+			"3-tuple, not %.200s",
 			Py_TYPE(state)->tp_name
 		);
 
@@ -611,40 +672,38 @@ PyObject * Struct_set_state(PyObject * const self, PyObject * const state) {
 	}
 
 	if (Py_TYPE(self)->tp_dictoffset != 0) {
-		PY_MOVABLE(dict, struct_instance_dict_slot_ref(self));
-
-		if (dict == NULL) {
-			PyMem_Free(values_indices);
-			return NULL;
-		}
-
-		/* The replace is built up front and swapped only on full success, so a
-		 * failing merge (a key whose __hash__/__eq__ raises during the copy)
-		 * leaves the instance's dict untouched. The swap replaces the dict
-		 * object in the slot, stranding any external reference to the old one;
-		 * that is the accepted cost of atomicity. The None branch clears in
-		 * place. */
 		if (instance_dict == Py_None) {
-			STRUCT_BEGIN_CRITICAL_SECTION(self);
-			PyDict_Clear(dict);
-			STRUCT_END_CRITICAL_SECTION();
-		} else if (instance_dict != dict) {
-			PY_MOVABLE(fresh, PyDict_New());
+			PY_MOVABLE(dict, struct_instance_dict_ref(self));
 
-			if (fresh == NULL || PyDict_Update(fresh, instance_dict) < 0) {
+			if (dict == NULL && PyErr_Occurred()) {
 				PyMem_Free(values_indices);
 				return NULL;
 			}
 
-			int swapped;
+			if (dict != NULL && dict != values) {
+				STRUCT_BEGIN_CRITICAL_SECTION(self);
+				PyDict_Clear(dict);
+				STRUCT_END_CRITICAL_SECTION();
+			}
+		} else {
+			PY_MOVABLE(dict, struct_instance_dict_slot_ref(self));
 
-			STRUCT_BEGIN_CRITICAL_SECTION(self);
-			swapped = PyObject_GenericSetDict(self, fresh, NULL);
-			STRUCT_END_CRITICAL_SECTION();
-
-			if (swapped < 0) {
+			if (dict == NULL) {
 				PyMem_Free(values_indices);
 				return NULL;
+			}
+
+			if (instance_dict != dict) {
+				PY_MOVABLE(fresh, PyDict_New());
+
+				if (fresh == NULL || PyDict_Update(fresh, instance_dict) < 0) {
+					PyMem_Free(values_indices);
+					return NULL;
+				}
+
+				STRUCT_BEGIN_CRITICAL_SECTION(self);
+				PyObject_GenericSetDict(self, fresh, NULL);
+				STRUCT_END_CRITICAL_SECTION();
 			}
 		}
 	}
