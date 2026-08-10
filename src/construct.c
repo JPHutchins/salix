@@ -505,7 +505,7 @@ static enum result validate_state(
 	Py_ssize_t * * const unset_indices
 ) {
 	Py_ssize_t const unset_count = PyTuple_GET_SIZE(unset_names);
-	PY_OWNED(items, PyDict_Items(values));
+	PY_MOVABLE(items, PyDict_Items(values));
 
 	if (items == NULL) {
 		PyErr_NoMemory();
@@ -515,9 +515,8 @@ static enum result validate_state(
 	Py_ssize_t const item_count = PyList_GET_SIZE(items);
 	Py_ssize_t * const resolved_values = PyMem_New(Py_ssize_t, item_count > 0 ? item_count : 1);
 	Py_ssize_t * const resolved_unset = PyMem_New(Py_ssize_t, unset_count > 0 ? unset_count : 1);
-	PY_MOVABLE(snapshot, PyList_New(item_count));
 
-	if (resolved_values == NULL || resolved_unset == NULL || snapshot == NULL) {
+	if (resolved_values == NULL || resolved_unset == NULL) {
 		PyMem_Free(resolved_values);
 		PyMem_Free(resolved_unset);
 		PyErr_NoMemory();
@@ -527,73 +526,41 @@ static enum result validate_state(
 
 	for (Py_ssize_t i = 0; i < item_count; ++i) {
 		PyObject * const pair = PyList_GET_ITEM(items, i);
-		PyObject * const name = PyTuple_GET_ITEM(pair, 0);
-		PyObject * const value = PyTuple_GET_ITEM(pair, 1);
 
-		if (require_field(type, name, "__setstate__()", &resolved_values[i]) != RESULT_OK) {
+		if (
+			require_field(
+				type,
+				PyTuple_GET_ITEM(pair, 0),
+				"__setstate__()",
+				&resolved_values[i]
+			) !=
+			RESULT_OK
+		) {
 			goto error;
 		}
-
-		PyList_SET_ITEM(snapshot, i, Py_NewRef(value));
-	}
-
-	bool * const set_flags = PyMem_Calloc(
-		type->struct_field_count > 0 ? type->struct_field_count : 1,
-		sizeof(bool)
-	);
-
-	if (set_flags == NULL) {
-		PyErr_NoMemory();
-		goto error;
-	}
-
-	for (Py_ssize_t v = 0; v < item_count; ++v) {
-		set_flags[resolved_values[v]] = true;
-	}
-
-	bool * const unset_flags = PyMem_Calloc(
-		type->struct_field_count > 0 ? type->struct_field_count : 1,
-		sizeof(bool)
-	);
-
-	if (unset_flags == NULL) {
-		PyErr_NoMemory();
-		PyMem_Free(set_flags);
-		goto error;
 	}
 
 	for (Py_ssize_t u = 0; u < unset_count; ++u) {
 		PyObject * const unset_name = PyTuple_GET_ITEM(unset_names, u);
 
 		if (require_field(type, unset_name, "__setstate__()", &resolved_unset[u]) != RESULT_OK) {
-			PyMem_Free(set_flags);
-			PyMem_Free(unset_flags);
 			goto error;
 		}
 
-		Py_ssize_t const index = resolved_unset[u];
+		int const also_set = PyDict_Contains(values, unset_name);
 
-		if (set_flags[index]) {
+		if (also_set < 0) {
+			goto error;
+		}
+
+		if (also_set == 1) {
 			PyErr_Format(PyExc_TypeError, "field '%U' listed as both set and unset", unset_name);
-			PyMem_Free(set_flags);
-			PyMem_Free(unset_flags);
 			goto error;
 		}
-
-		if (unset_flags[index]) {
-			PyErr_Format(PyExc_TypeError, "field '%U' listed more than once as unset", unset_name);
-			PyMem_Free(set_flags);
-			PyMem_Free(unset_flags);
-			goto error;
-		}
-
-		unset_flags[index] = true;
 	}
 
-	PyMem_Free(set_flags);
-	PyMem_Free(unset_flags);
 	*values_indices = resolved_values;
-	*value_snapshot = py_move(&snapshot);
+	*value_snapshot = py_move(&items);
 	*unset_indices = resolved_unset;
 
 	return RESULT_OK;
@@ -750,58 +717,49 @@ PyObject * Struct_set_state(PyObject * const self, PyObject * const state) {
 	}
 
 	if (Py_TYPE(self)->tp_dictoffset != 0) {
-		if (instance_dict == Py_None) {
-			PY_MOVABLE(dict, struct_instance_dict_ref(self));
+		PY_MOVABLE(dict, struct_instance_dict_ref(self));
 
-			if (dict == NULL && PyErr_Occurred()) {
+		if (dict == NULL && PyErr_Occurred()) {
+			PyMem_Free(values_indices);
+			PyMem_Free(unset_indices);
+			return NULL;
+		}
+
+		bool const replaces = (
+			dict == NULL ||
+			(instance_dict == Py_None ? dict != values : instance_dict != dict)
+		);
+
+		if (replaces) {
+			PY_MOVABLE(fresh, PyDict_New());
+
+			if (
+				fresh == NULL ||
+				(instance_dict != Py_None && PyDict_Update(fresh, instance_dict) < 0)
+			) {
 				PyMem_Free(values_indices);
 				PyMem_Free(unset_indices);
 				return NULL;
 			}
 
-			if (dict != NULL && dict != values) {
-				PY_MOVABLE(fresh, PyDict_New());
+			int swapped;
 
-				if (fresh == NULL) {
-					PyMem_Free(values_indices);
-					PyMem_Free(unset_indices);
-					return NULL;
-				}
+			STRUCT_BEGIN_CRITICAL_SECTION(self);
+			swapped = PyObject_GenericSetDict(self, fresh, NULL);
+			STRUCT_END_CRITICAL_SECTION();
 
-				STRUCT_BEGIN_CRITICAL_SECTION(self);
-				PyObject_GenericSetDict(self, fresh, NULL);
-				STRUCT_END_CRITICAL_SECTION();
-			}
-		} else {
-			PY_MOVABLE(dict, struct_instance_dict_ref(self));
-
-			if (dict == NULL && PyErr_Occurred()) {
+			if (swapped < 0) {
 				PyMem_Free(values_indices);
 				PyMem_Free(unset_indices);
 				return NULL;
-			}
-
-			if (dict == NULL || instance_dict != dict) {
-				PY_MOVABLE(fresh, PyDict_New());
-
-				if (fresh == NULL || PyDict_Update(fresh, instance_dict) < 0) {
-					PyMem_Free(values_indices);
-					PyMem_Free(unset_indices);
-					return NULL;
-				}
-
-				STRUCT_BEGIN_CRITICAL_SECTION(self);
-				PyObject_GenericSetDict(self, fresh, NULL);
-				STRUCT_END_CRITICAL_SECTION();
 			}
 		}
 	}
 
 	for (Py_ssize_t i = 0; i < PyList_GET_SIZE(value_snapshot); ++i) {
-		if (
-			write_slot(type, self, values_indices[i], PyList_GET_ITEM(value_snapshot, i)) !=
-			RESULT_OK
-		) {
+		PyObject * const pair = PyList_GET_ITEM(value_snapshot, i);
+
+		if (write_slot(type, self, values_indices[i], PyTuple_GET_ITEM(pair, 1)) != RESULT_OK) {
 			PyMem_Free(values_indices);
 			PyMem_Free(unset_indices);
 			return NULL;
