@@ -276,8 +276,22 @@ def test_an_uncopyable_impostor_raises_copy_dot_error():
         __reduce_ex__ = None
         __reduce__ = None
 
-    with pytest.raises(copy.Error, match="un\\(shallow\\)copyable"):
+    # copy.py's message is `% cls`, which renders the class repr.
+    with pytest.raises(copy.Error, match=r"un\(shallow\)copyable object of type <class '.*Uncopyable'>"):
         copy.copy(Uncopyable())
+
+
+def test_a_falsy_reduce_ex_is_called_like_copy_dot_py():
+    class FalsyReduceEx(Struct.__mro__[1], list):
+        __reduce_ex__ = 0
+
+        def __reduce__(self):
+            return (list, ([7, 8],))
+
+    # copy.py gates __reduce_ex__ on `is not None`, so a falsy non-None is
+    # called (and fails); the truthiness gate is only on __reduce__.
+    with pytest.raises(TypeError):
+        copy.copy(FalsyReduceEx())
 
 
 def test_a_none_co_base_copy_is_treated_as_absent():

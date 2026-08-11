@@ -164,16 +164,10 @@ static PyObject * copy_dispatch_prologue(
 		return NULL;
 	}
 
-	/* copy.py's `if reductor:` treats a falsy entry as absent, and the
-	 * caller needs copy_module set either way, so a falsy entry clears the
-	 * copier and falls through. */
-	int const truthy = registered != NULL ? PyObject_IsTrue(registered) : 1;
-
-	if (truthy < 0) {
-		return NULL;
-	}
-
-	if (truthy == 0) {
+	/* copy.py's `if reductor is not None:` treats a None entry as absent,
+	 * and the caller needs copy_module set either way, so a None entry
+	 * clears the copier and falls through. */
+	if (registered == Py_None) {
 		Py_CLEAR(registered);
 	}
 
@@ -201,9 +195,10 @@ static PyObject * Struct_copy_delegate(PyObject * const self) {
 	if (copier != NULL) {
 		reduced = PyObject_CallOneArg(copier, self);
 	} else {
-		/* copy.py's reduce chain: __reduce_ex__ if present and truthy,
-		 * else __reduce__ likewise, else the same un(shallow)copyable
-		 * copy.Error. */
+		/* copy.py's reduce chain: __reduce_ex__ if present and not None
+		 * (identity, per copy.py), else __reduce__ likewise but gated on
+		 * truthiness (copy.py's own inconsistency), else the same
+		 * un(shallow)copyable copy.Error. */
 		PY_OWNED(reduce_ex, PyObject_GetAttrString(self, "__reduce_ex__"));
 
 		if (reduce_ex == NULL && PyErr_ExceptionMatches(PyExc_AttributeError)) {
@@ -214,13 +209,7 @@ static PyObject * Struct_copy_delegate(PyObject * const self) {
 			return NULL;
 		}
 
-		int const reduce_ex_truthy = reduce_ex != NULL ? PyObject_IsTrue(reduce_ex) : 0;
-
-		if (reduce_ex_truthy < 0) {
-			return NULL;
-		}
-
-		if (reduce_ex_truthy) {
+		if (reduce_ex != NULL && reduce_ex != Py_None) {
 			reduced = PyObject_CallFunction(reduce_ex, "i", 4);
 		} else {
 			PY_OWNED(reduce, PyObject_GetAttrString(self, "__reduce__"));
@@ -250,8 +239,8 @@ static PyObject * Struct_copy_delegate(PyObject * const self) {
 
 				PyErr_Format(
 					(PyObject *) error,
-					"un(shallow)copyable object of type %.200s",
-					Py_TYPE(self)->tp_name
+					"un(shallow)copyable object of type %R",
+					(PyObject *) Py_TYPE(self)
 				);
 				Py_DECREF(error);
 			}
