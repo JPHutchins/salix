@@ -16,13 +16,22 @@ static PyObject * copy_delegate(
 	PyObject * argument,
 	PyObject * memo,
 	char const * name,
-	char const * uncopyable
+	char const * uncopyable,
+	bool dispatch_truthy
 );
 static PyObject * copy_reconstruct(
 	PyObject * self,
 	PyObject * reduced,
 	PyObject * copy_module,
 	PyObject * memo
+);
+static PyObject * copy_dispatch_prologue(
+	PyObject * self,
+	char const * name,
+	PyObject * argument,
+	bool dispatch_truthy,
+	PyObject * * copy_module,
+	PyObject * * copier
 );
 static PyObject * deferred_co_base_copy(PyObject * self, PyObject * name);
 static PyObject * Struct_get_field_names(PyObject * self, void * closure);
@@ -176,12 +185,15 @@ static PyObject * deferred_co_base_copy(PyObject * const self, PyObject * const 
  * name, defer to a co-base method if one is defined -- the prologue calls it
  * with `argument`, the instance for __copy__ and the memo for __deepcopy__ --
  * and return a dispatch_table copier for the class if one is registered.
- * `copy_module` and `copier` are owned when returned non-NULL.
+ * `dispatch_truthy` selects the gate copy.py applies to the dispatch_table
+ * branch: identity for copy, truthiness for deepcopy. `copy_module` and
+ * `copier` are owned when returned non-NULL.
  */
 static PyObject * copy_dispatch_prologue(
 	PyObject * const self,
 	char const * const name,
 	PyObject * const argument,
+	bool const dispatch_truthy,
 	PyObject * * const copy_module,
 	PyObject * * const copier
 ) {
@@ -219,11 +231,22 @@ static PyObject * copy_dispatch_prologue(
 		return NULL;
 	}
 
-	/* copy.py's `if reductor is not None:` treats a None entry as absent,
-	 * and the caller needs copy_module set either way, so a None entry
-	 * clears the copier and falls through. */
+	/* copy.py gates the dispatch_table branch on identity for copy (`if
+	 * reductor is not None:`) and truthiness for deepcopy (`if reductor:`)
+	 * -- the one gate that differs between the operations -- and a None
+	 * entry reads as absent under either. */
 	if (registered == Py_None) {
 		Py_CLEAR(registered);
+	} else if (registered != NULL && dispatch_truthy) {
+		int const truthy = PyObject_IsTrue(registered);
+
+		if (truthy < 0) {
+			return NULL;
+		}
+
+		if (truthy == 0) {
+			Py_CLEAR(registered);
+		}
 	}
 
 	*copy_module = py_move(&module);
@@ -237,11 +260,15 @@ static PyObject * copy_delegate(
 	PyObject * const argument,
 	PyObject * const memo,
 	char const * const name,
-	char const * const uncopyable
+	char const * const uncopyable,
+	bool const dispatch_truthy
 ) {
 	PY_MOVABLE(copy_module, NULL);
 	PY_MOVABLE(copier, NULL);
-	PY_MOVABLE(deferred, copy_dispatch_prologue(self, name, argument, &copy_module, &copier));
+	PY_MOVABLE(
+		deferred,
+		copy_dispatch_prologue(self, name, argument, dispatch_truthy, &copy_module, &copier)
+	);
 
 	if (deferred != NULL) {
 		return py_move(&deferred);
@@ -363,14 +390,17 @@ static PyObject * copy_reconstruct(
 
 static PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 	if (!is_struct(self)) {
-		return copy_delegate(self, self, Py_None, "__copy__", "un(shallow)copyable");
+		return copy_delegate(self, self, Py_None, "__copy__", "un(shallow)copyable", false);
 	}
 
 	StructType * const type = struct_type_of(self);
 	PyTypeObject * const cls = &type->heap_type.ht_type;
 	PY_MOVABLE(copy_module, NULL);
 	PY_MOVABLE(copier, NULL);
-	PY_MOVABLE(deferred, copy_dispatch_prologue(self, "__copy__", self, &copy_module, &copier));
+	PY_MOVABLE(
+		deferred,
+		copy_dispatch_prologue(self, "__copy__", self, false, &copy_module, &copier)
+	);
 
 	if (deferred != NULL) {
 		return py_move(&deferred);
@@ -407,21 +437,43 @@ static PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 }
 
 static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) {
-	if (!is_struct(self)) {
-		return copy_delegate(self, memo, memo, "__deepcopy__", "un(deep)copyable");
-	}
-
 	if (!PyDict_Check(memo)) {
 		PyErr_SetString(PyExc_TypeError, "__deepcopy__() argument must be a dict");
 
 		return NULL;
 	}
 
+	/* copy.deepcopy's entry check, reproduced for a direct protocol call:
+	 * a memo that already holds the source returns the registered copy
+	 * without touching the dispatch, whatever it is. */
+	PY_OWNED(key, PyLong_FromVoidPtr(self));
+
+	if (key == NULL) {
+		return NULL;
+	}
+
+	PY_MOVABLE(seeded, dict_value_ref(memo, key));
+
+	if (seeded == NULL && PyErr_Occurred()) {
+		return NULL;
+	}
+
+	if (seeded != NULL) {
+		return py_move(&seeded);
+	}
+
+	if (!is_struct(self)) {
+		return copy_delegate(self, memo, memo, "__deepcopy__", "un(deep)copyable", true);
+	}
+
 	StructType * const type = struct_type_of(self);
 	PyTypeObject * const cls = &type->heap_type.ht_type;
 	PY_MOVABLE(copy_module, NULL);
 	PY_MOVABLE(copier, NULL);
-	PY_MOVABLE(deferred, copy_dispatch_prologue(self, "__deepcopy__", memo, &copy_module, &copier));
+	PY_MOVABLE(
+		deferred,
+		copy_dispatch_prologue(self, "__deepcopy__", memo, true, &copy_module, &copier)
+	);
 
 	if (deferred != NULL) {
 		return py_move(&deferred);
@@ -447,9 +499,7 @@ static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) 
 	 * field that references the source resolves to the shell instead of
 	 * re-entering deepcopy; the shell's own loop then fills that field with
 	 * the copy itself. */
-	PY_OWNED(key, PyLong_FromVoidPtr(self));
-
-	if (key == NULL || PyDict_SetItem(memo, key, copy) < 0) {
+	if (PyDict_SetItem(memo, key, copy) < 0) {
 		return NULL;
 	}
 
@@ -495,7 +545,16 @@ static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) 
 	}
 
 	if (dict != NULL) {
-		PY_MOVABLE(deep_dict, PyObject_CallFunctionObjArgs(deepcopy, dict, memo, NULL));
+		/* The snapshot is taken by PyDict_Copy, which runs in C under the
+		 * dict's own lock; copy.deepcopy then walks the snapshot, which no
+		 * concurrent writer can change size under. */
+		PY_OWNED(snapshot, PyDict_Copy(dict));
+
+		if (snapshot == NULL) {
+			return NULL;
+		}
+
+		PY_MOVABLE(deep_dict, PyObject_CallFunctionObjArgs(deepcopy, snapshot, memo, NULL));
 
 		if (deep_dict == NULL) {
 			return NULL;

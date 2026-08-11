@@ -427,7 +427,30 @@ def test_a_user_memo_can_presupply_the_copy():
 
     assert copied is stand_in
 
+    # The dunder honors a presupplied entry the same way copy.deepcopy's
+    # entry check does, so a direct protocol call matches its aliasing.
+    assert instance.__deepcopy__(memo) is stand_in
+
+
+def test_a_falsy_dispatch_table_entry_is_skipped_on_deepcopy():
+    copy.dispatch_table[Point] = 0
+
+    try:
+        copied = copy.deepcopy(Point(1, "two"))
+
+        # deepcopy gates the dispatch_table branch on truthiness (copy.py's
+        # `if reductor:`), where copy gates it on identity, so the falsy
+        # entry is skipped and the raw path runs instead of calling 0.
+        assert copied == Point(1, "two")
+    finally:
+        del copy.dispatch_table[Point]
+
 
 def test_a_non_dict_memo_is_refused():
     with pytest.raises(TypeError, match="must be a dict"):
         Point(1, "two").__deepcopy__(None)
+
+
+def test_a_non_dict_memo_is_refused_for_an_impostor_too():
+    with pytest.raises(TypeError, match="must be a dict"):
+        Impostor([1]).__deepcopy__(None)

@@ -303,9 +303,11 @@ def test_a_shared_struct_is_safe_to_deepcopy_while_another_thread_writes_it():
 
 def test_a_dict_bearing_struct_is_safe_to_deepcopy_while_another_thread_writes_its_dict():
     """The dict-branch deepcopy: the slot and the dict pointer are read
-    under one section, then copy.deepcopy copies the dict outside it. The
-    writer mutates the dict in place and writes the slot, so the race is the
-    deepcopy against both, which the dict's own lock and the section settle.
+    under one section, then the dict is snapshotted by PyDict_Copy (which
+    runs in C under the dict's own lock) and the snapshot is deep-copied
+    outside it. The writer changes the dict's size every round -- an insert
+    and a pop -- which would raise mid-iteration on a build that deep-copied
+    the live dict, and writes the slot; the snapshot settles both races.
     Survival is the assertion; every written value is an int, so a copy of
     garbage cannot pass by accident."""
 
@@ -324,6 +326,8 @@ def test_a_dict_bearing_struct_is_safe_to_deepcopy_while_another_thread_writes_i
         for i in range(rounds):
             shared.value = i
             shared.__dict__["extra"] = i
+            shared.__dict__[i % 256] = i
+            shared.__dict__.pop((i + 128) % 256, None)
 
     def read():
         for i in range(rounds):
@@ -331,7 +335,7 @@ def test_a_dict_bearing_struct_is_safe_to_deepcopy_while_another_thread_writes_i
 
             if i % 1000 == 0:
                 assert isinstance(copied.value, int)
-                assert isinstance(copied.__dict__["extra"], int)
+                assert all(isinstance(value, int) for value in copied.__dict__.values())
                 assert copied.__dict__ is not shared.__dict__
 
     run_in_roles((write, read))
