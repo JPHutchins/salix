@@ -833,26 +833,31 @@ static enum result drop_class_variables(PyObject * const namespace, PyObject * c
 }
 
 static enum result refuse_mixin_method_fields(PyObject * const all_names) {
-	PY_OWNED(name, PyUnicode_FromString("__copy__"));
+	char const * const mixin_methods[] = {"__copy__", "__deepcopy__"};
 
-	if (name == NULL) {
-		return RESULT_ERROR;
-	}
+	for (size_t i = 0; i < sizeof mixin_methods / sizeof *mixin_methods; ++i) {
+		PY_OWNED(name, PyUnicode_FromString(mixin_methods[i]));
 
-	int const present = PySequence_Contains(all_names, name);
+		if (name == NULL) {
+			return RESULT_ERROR;
+		}
 
-	if (present < 0) {
-		return RESULT_ERROR;
-	}
+		int const present = PySequence_Contains(all_names, name);
 
-	if (present == 1) {
-		PyErr_SetString(
-			PyExc_TypeError,
-			"__copy__ is a field, and the mixin defines a method of the same "
-			"name which the field's descriptor would shadow; rename the field"
-		);
+		if (present < 0) {
+			return RESULT_ERROR;
+		}
 
-		return RESULT_ERROR;
+		if (present == 1) {
+			PyErr_Format(
+				PyExc_TypeError,
+				"%U is a field, and the mixin defines a method of the same "
+				"name which the field's descriptor would shadow; rename the field",
+				name
+			);
+
+			return RESULT_ERROR;
+		}
 	}
 
 	return RESULT_OK;

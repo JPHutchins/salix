@@ -95,3 +95,7 @@ def set_field_takes_a_struct_a_name_and_any_value() -> None:
 
 def __copy___returns_the_concrete_struct_type() -> None:
     assert_type(Point(1, "two").__copy__(), Point)
+
+
+def __deepcopy___returns_the_concrete_struct_type() -> None:
+    assert_type(Point(1, "two").__deepcopy__({}), Point)

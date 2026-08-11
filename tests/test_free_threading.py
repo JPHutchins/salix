@@ -272,6 +272,71 @@ def test_a_shared_struct_is_safe_to_copy_while_another_thread_writes_it():
     run_in_roles((write,) + (read,) * (THREADS - 1))
 
 
+def test_a_shared_struct_is_safe_to_deepcopy_while_another_thread_writes_it():
+    """The deepcopy path reads the slots through the same single-section
+    snapshot the copy path uses, and the ints it deep-copies are atomic, so
+    `first >= second` pins the snapshot the same way. Survival is the
+    assertion."""
+
+    class Shared(Struct, frozen=False):
+        first: object
+        second: object
+
+    shared = Shared(0, 0)
+
+    rounds = ITERATIONS * 5
+
+    def write():
+        for i in range(rounds):
+            shared.first = i
+            shared.second = i
+
+    def read():
+        for i in range(rounds):
+            copied = copy.deepcopy(shared)
+
+            if i % 1000 == 0:
+                assert copied.first >= copied.second
+
+    run_in_roles((write,) + (read,) * (THREADS - 1))
+
+
+def test_a_dict_bearing_struct_is_safe_to_deepcopy_while_another_thread_writes_its_dict():
+    """The dict-branch deepcopy: the slot and the dict pointer are read
+    under one section, then copy.deepcopy copies the dict outside it. The
+    writer mutates the dict in place and writes the slot, so the race is the
+    deepcopy against both, which the dict's own lock and the section settle.
+    Survival is the assertion; every written value is an int, so a copy of
+    garbage cannot pass by accident."""
+
+    class Dicted:
+        pass
+
+    class Shared(Struct, Dicted, frozen=False):
+        value: object
+
+    shared = Shared(0)
+    shared.__dict__["extra"] = -1
+
+    rounds = ITERATIONS * 5
+
+    def write():
+        for i in range(rounds):
+            shared.value = i
+            shared.__dict__["extra"] = i
+
+    def read():
+        for i in range(rounds):
+            copied = copy.deepcopy(shared)
+
+            if i % 1000 == 0:
+                assert isinstance(copied.value, int)
+                assert isinstance(copied.__dict__["extra"], int)
+                assert copied.__dict__ is not shared.__dict__
+
+    run_in_roles((write, read))
+
+
 def test_a_dict_bearing_struct_is_safe_to_copy_while_another_thread_writes_its_dict():
     """The dict-copy branch: the slot and the dict pointer are read under
     one section, then the dict is copied outside it. The writer mutates the

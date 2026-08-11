@@ -406,3 +406,44 @@ def test_a_deferred_co_base_copy_does_not_leak_the_method():
         copy.copy(Real(1))
 
     assert sys.getrefcount(method) == before
+
+
+def test_deepcopy_takes_no_reference_from_the_source():
+    """The copy's slots hold deep copies, not the source's values, so the
+    source's values see their counts unmoved through the copy -- and the
+    transient references the snapshot takes are released when the deep
+    copies replace them."""
+
+    sentinel = Sentinel()
+    pair = Pair(sentinel, sentinel)
+    before = sys.getrefcount(sentinel)
+    copied = copy.deepcopy(pair)
+
+    assert sys.getrefcount(sentinel) == before
+    assert copied.first is not sentinel
+    assert copied.second is not sentinel
+
+    del copied
+
+    assert sys.getrefcount(sentinel) == before
+
+
+def test_a_deferred_co_base_deepcopy_does_not_leak_the_method():
+    """The deferral calls the co-base's __deepcopy__ with an owned reference,
+    and the scope exit releases it: a leak would keep the method alive one
+    reference per deepcopy."""
+
+    class HasDeepcopy:
+        def __deepcopy__(self, memo: dict):
+            return self
+
+    class Real(Struct, HasDeepcopy, frozen=False):
+        x: int
+
+    method = HasDeepcopy.__dict__["__deepcopy__"]
+    before = sys.getrefcount(method)
+
+    for _ in range(1000):
+        copy.deepcopy(Real(1))
+
+    assert sys.getrefcount(method) == before
