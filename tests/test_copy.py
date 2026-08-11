@@ -271,6 +271,15 @@ def test_an_impostor_with_reduce_ex_none_falls_back_to_reduce():
     assert copied == [1, 2, 3]
 
 
+def test_an_uncopyable_impostor_raises_copy_dot_error():
+    class Uncopyable(Struct.__mro__[1], list):
+        __reduce_ex__ = None
+        __reduce__ = None
+
+    with pytest.raises(copy.Error, match="un\\(shallow\\)copyable"):
+        copy.copy(Uncopyable())
+
+
 def test_a_none_co_base_copy_is_treated_as_absent():
     class NoneCopy:
         __copy__ = None

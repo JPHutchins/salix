@@ -153,6 +153,10 @@ static PyObject * copy_dispatch_prologue(
 		return NULL;
 	}
 
+	if (registered == Py_None) {
+		return NULL;
+	}
+
 	*copy_module = py_move(&module);
 	*copier = py_move(&registered);
 
@@ -206,11 +210,18 @@ static PyObject * Struct_copy_delegate(PyObject * const self) {
 			if (reduce != NULL && reduce != Py_None) {
 				reduced = PyObject_CallNoArgs(reduce);
 			} else {
+				PyObject * const error = PyObject_GetAttrString(copy_module, "Error");
+
+				if (error == NULL) {
+					return NULL;
+				}
+
 				PyErr_Format(
-					PyExc_TypeError,
+					(PyObject *) error,
 					"un(shallow)copyable object of type %.200s",
 					Py_TYPE(self)->tp_name
 				);
+				Py_DECREF(error);
 			}
 		}
 	}
