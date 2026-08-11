@@ -237,10 +237,18 @@ static PyObject * Struct_copy_delegate(PyObject * const self) {
 					return NULL;
 				}
 
+				PY_OWNED(type_name, PyObject_Str((PyObject *) Py_TYPE(self)));
+
+				if (type_name == NULL) {
+					Py_DECREF(error);
+
+					return NULL;
+				}
+
 				PyErr_Format(
 					(PyObject *) error,
-					"un(shallow)copyable object of type %R",
-					(PyObject *) Py_TYPE(self)
+					"un(shallow)copyable object of type %U",
+					type_name
 				);
 				Py_DECREF(error);
 			}
