@@ -1,6 +1,6 @@
 from typing import Any, Final
 
-from typing_extensions import dataclass_transform
+from typing_extensions import Self, dataclass_transform
 
 @dataclass_transform(frozen_default=True)
 class Struct:
@@ -8,6 +8,7 @@ class Struct:
     _struct_defaults_: Final[tuple[Any, ...]]
     __struct_fields__: Final[tuple[str, ...]]
     __struct_defaults__: Final[tuple[Any, ...]]
+    def __copy__(self) -> Self: ...
     def __init_subclass__(
         cls,
         *,
