@@ -81,8 +81,9 @@ static PyObject * deferred_co_base_copy(PyObject * const self, PyObject * const 
 		}
 
 		/* copy.py's getattr(cls, '__copy__', None) binds a classmethod to
-		 * the concrete class, and treats a descriptor __get__ AttributeError
-		 * as "no __copy__", falling through; both are reproduced here. */
+		 * the concrete class, treats a descriptor __get__ AttributeError as
+		 * "no __copy__", and treats None as "no __copy__" too; all three
+		 * are reproduced here. */
 		if (PyObject_TypeCheck(raw, &PyClassMethod_Type)) {
 			return PyObject_CallMethod(raw, "__get__", "OO", Py_None, (PyObject *) Py_TYPE(self));
 		}
@@ -95,13 +96,29 @@ static PyObject * deferred_co_base_copy(PyObject * const self, PyObject * const 
 			return NULL;
 		}
 
+		if (resolved == Py_None) {
+			Py_DECREF(resolved);
+
+			return NULL;
+		}
+
 		return resolved;
 	}
 
 	return NULL;
 }
 
-static PyObject * Struct_copy_delegate(PyObject * const self) {
+/*
+ * The dispatch prologue shared by the struct and impostor paths: intern the
+ * __copy__ name, defer to a co-base __copy__ if one is defined, and return
+ * a dispatch_table copier for the class if one is registered. `copy_module`
+ * and `copier` are owned when returned non-NULL.
+ */
+static PyObject * copy_dispatch_prologue(
+	PyObject * const self,
+	PyObject * * const copy_module,
+	PyObject * * const copier
+) {
 	PY_OWNED(copy_name, PyUnicode_InternFromString("__copy__"));
 
 	if (copy_name == NULL) {
@@ -118,46 +135,75 @@ static PyObject * Struct_copy_delegate(PyObject * const self) {
 		return PyObject_CallOneArg(deferred, self);
 	}
 
-	PY_OWNED(copy_module, PyImport_ImportModule("copy"));
+	PY_MOVABLE(module, PyImport_ImportModule("copy"));
 
-	if (copy_module == NULL) {
+	if (module == NULL) {
 		return NULL;
 	}
 
-	PY_OWNED(dispatch_table, PyObject_GetAttrString(copy_module, "dispatch_table"));
+	PY_OWNED(dispatch_table, PyObject_GetAttrString(module, "dispatch_table"));
 
 	if (dispatch_table == NULL) {
 		return NULL;
 	}
 
-	PY_MOVABLE(reduced, NULL);
-	PY_OWNED(copier, dict_value_ref(dispatch_table, (PyObject *) Py_TYPE(self)));
+	PY_MOVABLE(registered, dict_value_ref(dispatch_table, (PyObject *) Py_TYPE(self)));
 
-	if (copier == NULL && PyErr_Occurred()) {
+	if (registered == NULL && PyErr_Occurred()) {
 		return NULL;
 	}
+
+	*copy_module = py_move(&module);
+	*copier = py_move(&registered);
+
+	return NULL;
+}
+
+static PyObject * Struct_copy_delegate(PyObject * const self) {
+	PY_MOVABLE(copy_module, NULL);
+	PY_MOVABLE(copier, NULL);
+	PY_MOVABLE(deferred, copy_dispatch_prologue(self, &copy_module, &copier));
+
+	if (deferred != NULL) {
+		return py_move(&deferred);
+	}
+
+	if (PyErr_Occurred()) {
+		return NULL;
+	}
+
+	PY_MOVABLE(reduced, NULL);
 
 	if (copier != NULL) {
 		reduced = PyObject_CallOneArg(copier, self);
 	} else {
-		/* copy.py's reduce chain: __reduce_ex__ if present, else __reduce__,
-		 * and a class that sets either to None skips it. */
-		PY_OWNED(reduce_ex, optional_attribute(self, "__reduce_ex__"));
+		/* copy.py's reduce chain: __reduce_ex__ if present and not None,
+		 * else __reduce__ likewise, else the same un(shallow)copyable
+		 * TypeError. */
+		PY_OWNED(reduce_ex, PyObject_GetAttrString(self, "__reduce_ex__"));
+
+		if (reduce_ex == NULL && PyErr_ExceptionMatches(PyExc_AttributeError)) {
+			PyErr_Clear();
+		}
 
 		if (reduce_ex == NULL && PyErr_Occurred()) {
 			return NULL;
 		}
 
-		if (reduce_ex != NULL) {
+		if (reduce_ex != NULL && reduce_ex != Py_None) {
 			reduced = PyObject_CallFunction(reduce_ex, "i", 4);
 		} else {
-			PY_OWNED(reduce, optional_attribute(self, "__reduce__"));
+			PY_OWNED(reduce, PyObject_GetAttrString(self, "__reduce__"));
+
+			if (reduce == NULL && PyErr_ExceptionMatches(PyExc_AttributeError)) {
+				PyErr_Clear();
+			}
 
 			if (reduce == NULL && PyErr_Occurred()) {
 				return NULL;
 			}
 
-			if (reduce != NULL) {
+			if (reduce != NULL && reduce != Py_None) {
 				reduced = PyObject_CallNoArgs(reduce);
 			} else {
 				PyErr_Format(
@@ -223,41 +269,15 @@ static PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 
 	StructType * const type = struct_type_of(self);
 	PyTypeObject * const cls = &type->heap_type.ht_type;
-
-	PY_OWNED(copy_name, PyUnicode_InternFromString("__copy__"));
-
-	if (copy_name == NULL) {
-		return NULL;
-	}
-
-	PY_OWNED(deferred, deferred_co_base_copy(self, copy_name));
-
-	if (deferred == NULL && PyErr_Occurred()) {
-		return NULL;
-	}
+	PY_MOVABLE(copy_module, NULL);
+	PY_MOVABLE(copier, NULL);
+	PY_MOVABLE(deferred, copy_dispatch_prologue(self, &copy_module, &copier));
 
 	if (deferred != NULL) {
-		return PyObject_CallOneArg(deferred, self);
+		return py_move(&deferred);
 	}
 
-	/* copy.py consults dispatch_table after __copy__, and the mixin's
-	 * method would shadow a user registration for a real struct; honor it
-	 * the same way the delegate does, with the same reduce-path handling. */
-	PY_OWNED(copy_module, PyImport_ImportModule("copy"));
-
-	if (copy_module == NULL) {
-		return NULL;
-	}
-
-	PY_OWNED(dispatch_table, PyObject_GetAttrString(copy_module, "dispatch_table"));
-
-	if (dispatch_table == NULL) {
-		return NULL;
-	}
-
-	PY_OWNED(copier, dict_value_ref(dispatch_table, (PyObject *) cls));
-
-	if (copier == NULL && PyErr_Occurred()) {
+	if (PyErr_Occurred()) {
 		return NULL;
 	}
 

@@ -258,6 +258,32 @@ def test_an_impostor_delegates_to_a_co_base_copy():
     assert copied.was_copied is True
 
 
+def test_an_impostor_with_reduce_ex_none_falls_back_to_reduce():
+    class Special(Struct.__mro__[1], list):
+        __reduce_ex__ = None
+
+        def __reduce__(self):
+            return (list, ([1, 2, 3],))
+
+    copied = copy.copy(Special())
+
+    assert type(copied) is list
+    assert copied == [1, 2, 3]
+
+
+def test_a_none_co_base_copy_is_treated_as_absent():
+    class NoneCopy:
+        __copy__ = None
+
+    class RealStruct(Struct, NoneCopy, frozen=False):
+        x: int
+
+    copied = copy.copy(RealStruct(1))
+
+    assert type(copied) is RealStruct
+    assert copied.x == 1
+
+
 def test_a_dispatch_table_copier_is_honored_for_an_impostor():
     def special_copy(instance):
         return (list, ([1, 2, 3],))
