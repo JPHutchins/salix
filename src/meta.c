@@ -1235,11 +1235,6 @@ static Py_ssize_t * resolve_slot_offsets(
 	return offsets;
 }
 
-static struct member_lookup find_member(
-	PyMemberDef const * const members,
-	Py_ssize_t const member_count,
-	PyObject * const name
-);
 static Py_ssize_t * resolve_member_offsets(
 	StructType * const struct_class,
 	Py_ssize_t const * const slot_offsets,

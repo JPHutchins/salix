@@ -85,7 +85,18 @@ static PyObject * deferred_co_base_copy(PyObject * const self, PyObject * const 
 		 * "no __copy__", and treats None as "no __copy__" too; all three
 		 * are reproduced here. */
 		if (PyObject_TypeCheck(raw, &PyClassMethod_Type)) {
-			return PyObject_CallMethod(raw, "__get__", "OO", Py_None, (PyObject *) Py_TYPE(self));
+			PY_MOVABLE(
+				bound,
+				PyObject_CallMethod(raw, "__get__", "OO", Py_None, (PyObject *) Py_TYPE(self))
+			);
+
+			if (bound == NULL && PyErr_ExceptionMatches(PyExc_AttributeError)) {
+				PyErr_Clear();
+
+				return NULL;
+			}
+
+			return py_move(&bound);
 		}
 
 		PyObject * const resolved = PyObject_GetAttr(entry, name);
@@ -153,8 +164,17 @@ static PyObject * copy_dispatch_prologue(
 		return NULL;
 	}
 
-	if (registered == Py_None) {
+	/* copy.py's `if reductor:` treats a falsy entry as absent, and the
+	 * caller needs copy_module set either way, so a falsy entry clears the
+	 * copier and falls through. */
+	int const truthy = registered != NULL ? PyObject_IsTrue(registered) : 1;
+
+	if (truthy < 0) {
 		return NULL;
+	}
+
+	if (truthy == 0) {
+		Py_CLEAR(registered);
 	}
 
 	*copy_module = py_move(&module);
@@ -181,9 +201,9 @@ static PyObject * Struct_copy_delegate(PyObject * const self) {
 	if (copier != NULL) {
 		reduced = PyObject_CallOneArg(copier, self);
 	} else {
-		/* copy.py's reduce chain: __reduce_ex__ if present and not None,
+		/* copy.py's reduce chain: __reduce_ex__ if present and truthy,
 		 * else __reduce__ likewise, else the same un(shallow)copyable
-		 * TypeError. */
+		 * copy.Error. */
 		PY_OWNED(reduce_ex, PyObject_GetAttrString(self, "__reduce_ex__"));
 
 		if (reduce_ex == NULL && PyErr_ExceptionMatches(PyExc_AttributeError)) {
@@ -194,7 +214,13 @@ static PyObject * Struct_copy_delegate(PyObject * const self) {
 			return NULL;
 		}
 
-		if (reduce_ex != NULL && reduce_ex != Py_None) {
+		int const reduce_ex_truthy = reduce_ex != NULL ? PyObject_IsTrue(reduce_ex) : 0;
+
+		if (reduce_ex_truthy < 0) {
+			return NULL;
+		}
+
+		if (reduce_ex_truthy) {
 			reduced = PyObject_CallFunction(reduce_ex, "i", 4);
 		} else {
 			PY_OWNED(reduce, PyObject_GetAttrString(self, "__reduce__"));
@@ -207,7 +233,13 @@ static PyObject * Struct_copy_delegate(PyObject * const self) {
 				return NULL;
 			}
 
-			if (reduce != NULL && reduce != Py_None) {
+			int const reduce_truthy = reduce != NULL ? PyObject_IsTrue(reduce) : 0;
+
+			if (reduce_truthy < 0) {
+				return NULL;
+			}
+
+			if (reduce_truthy) {
 				reduced = PyObject_CallNoArgs(reduce);
 			} else {
 				PyObject * const error = PyObject_GetAttrString(copy_module, "Error");
