@@ -63,12 +63,10 @@ static PyMethodDef Struct_methods[] = {
 
 /*
  * A __copy__ or __deepcopy__ defined by a co-base sits after _StructMixin in
- * the MRO, so the mixin's method would shadow it for copy.py's getattr
- * lookup. This returns the first of them found outside the mixin's own dict,
- * resolved the way copy.py's lookup would: __copy__ through attribute lookup
- * on the defining class, __deepcopy__ through the instance descriptor
- * protocol. A descriptor __get__ AttributeError and None both mean "no
- * method"; NULL means none was found.
+ * the MRO, so the mixin's method would shadow it; copy.py resolves
+ * __deepcopy__ on the instance and __copy__ on the class, and each branch
+ * reproduces that lookup. A descriptor __get__ AttributeError and None both
+ * mean "no method"; NULL means none was found.
  */
 static PyObject * deferred_co_base_copy(PyObject * const self, PyObject * const name) {
 	PyTypeObject * const cls = Py_TYPE(self);
@@ -106,11 +104,6 @@ static PyObject * deferred_co_base_copy(PyObject * const self, PyObject * const 
 		PyObject * resolved;
 
 		if (PyUnicode_CompareWithASCIIString(name, "__deepcopy__") == 0) {
-			/* copy.py's getattr(x, '__deepcopy__', None) looks the method up
-			 * on the instance, so a descriptor is applied to the instance:
-			 * a plain function becomes a bound method, a classmethod binds
-			 * to the concrete class, and an unset member descriptor raises
-			 * the AttributeError getattr's default reads as "no method". */
 			PyTypeObject * const raw_type = Py_TYPE(raw);
 
 			if (raw_type->tp_descr_get == NULL) {
@@ -166,8 +159,6 @@ static PyObject * deferred_co_base_copy(PyObject * const self, PyObject * const 
 			resolved = value;
 		}
 
-		/* copy.py's `if copier:` (copy) and `if copier is not None`
-		 * (deepcopy) both read a None value as no method. */
 		if (resolved == Py_None) {
 			Py_DECREF(resolved);
 
@@ -181,13 +172,11 @@ static PyObject * deferred_co_base_copy(PyObject * const self, PyObject * const 
 }
 
 /*
- * The dispatch prologue shared by the struct and impostor paths: intern the
- * name, defer to a co-base method if one is defined -- the prologue calls it
- * with `argument`, the instance for __copy__ and the memo for __deepcopy__ --
- * and return a dispatch_table copier for the class if one is registered.
- * `dispatch_truthy` selects the gate copy.py applies to the dispatch_table
- * branch: identity for copy, truthiness for deepcopy. `copy_module` and
- * `copier` are owned when returned non-NULL.
+ * The dispatch prologue shared by the struct and impostor paths. `argument`
+ * is what the deferred method is called with, the instance for __copy__ and
+ * the memo for __deepcopy__; `dispatch_truthy` selects the gate copy.py
+ * applies to the dispatch_table branch, identity for copy and truthiness
+ * for deepcopy. `copy_module` and `copier` are owned when returned non-NULL.
  */
 static PyObject * copy_dispatch_prologue(
 	PyObject * const self,
@@ -231,10 +220,8 @@ static PyObject * copy_dispatch_prologue(
 		return NULL;
 	}
 
-	/* copy.py gates the dispatch_table branch on identity for copy (`if
-	 * reductor is not None:`) and truthiness for deepcopy (`if reductor:`)
-	 * -- the one gate that differs between the operations -- and a None
-	 * entry reads as absent under either. */
+	/* The one gate copy.py applies differently to the two operations: the
+	 * copy branch tests identity, the deepcopy branch tests truthiness. */
 	if (registered == Py_None) {
 		Py_CLEAR(registered);
 	} else if (registered != NULL && dispatch_truthy) {
@@ -344,10 +331,9 @@ static PyObject * copy_delegate(
 
 /*
  * The reduce branch of copy: a string result means "copy the identity",
- * otherwise the result is handed to copy._reconstruct the way copy.py's
- * `*rv` is -- with the memo copy.py would pass, None for copy and the
- * caller's for deepcopy -- so a non-tuple iterable is accepted and a
- * non-iterable fails the same TypeError `*rv` would raise.
+ * otherwise the result goes to copy._reconstruct the way copy.py's `*rv`
+ * does, with the memo copy.py would pass -- None for copy, the caller's
+ * for deepcopy.
  */
 static PyObject * copy_reconstruct(
 	PyObject * const self,
@@ -443,9 +429,8 @@ static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) 
 		return NULL;
 	}
 
-	/* copy.deepcopy's entry check, reproduced for a direct protocol call:
-	 * a memo that already holds the source returns the registered copy
-	 * without touching the dispatch, whatever it is. */
+	/* copy.deepcopy's entry check, reproduced so a direct protocol call
+	 * honors a seeded memo. */
 	PY_OWNED(key, PyLong_FromVoidPtr(self));
 
 	if (key == NULL) {
@@ -512,9 +497,8 @@ static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) 
 		return NULL;
 	}
 
-	/* The snapshot's shallow copies are transient: each is replaced by its
-	 * deep copy, made outside the section because copy.deepcopy runs
-	 * arbitrary Python. */
+	/* Each shallow copy is replaced by its deep copy, made outside the
+	 * section because copy.deepcopy runs arbitrary Python. */
 	for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
 		PyObject * const value = *struct_slot(type, copy, i);
 
@@ -545,9 +529,8 @@ static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) 
 	}
 
 	if (dict != NULL) {
-		/* The snapshot is taken by PyDict_Copy, which runs in C under the
-		 * dict's own lock; copy.deepcopy then walks the snapshot, which no
-		 * concurrent writer can change size under. */
+		/* PyDict_Copy runs under the dict's own lock, so the deepcopy walks
+		 * a snapshot no concurrent writer can change size under. */
 		PY_OWNED(snapshot, PyDict_Copy(dict));
 
 		if (snapshot == NULL) {
