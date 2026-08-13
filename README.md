@@ -18,27 +18,29 @@ Point(x=1.0, y=2.0)
 ## ClassVar and InitVar
 
 A field annotated `ClassVar[...]` or `InitVar[...]` is refused at class
-creation. The check is exact when the annotation reaches salix as an object;
-when it arrives as source text -- a quoted string, or an annotation that
-nothing evaluated -- the check is a spelling match, and the two paths differ
-at the edges:
+creation. The check walks the annotation's forms when it reaches salix as an
+object; when it arrives as source text — a quoted string, or a
+future-annotations string — the check is a spelling match, and the two paths
+differ at the edges:
 
 | annotation | object path | text path |
 | --- | --- | --- |
 | an alias of `ClassVar`, `CV[int]` | refused | accepted; the field swallows a positional |
 | a type of yours actually named `ClassVar` | accepted | refused |
-| `Annotated[int, ClassVar]` | accepted | refused, though the form is metadata |
+| `Annotated[int, ClassVar]` | accepted | refused, though the `ClassVar` there is metadata |
 | `Optional[Annotated[ClassVar[int], "m"]]` | refused | refused |
 
 3.14 evaluates resolvable annotations by default, so there the alias reaches
-the object path and is refused; the text path sees only what nothing can
-resolve.
+the object path and is refused; an annotation nothing can resolve arrives as
+an object too, and is accepted. Every row is pinned in
+`tests/test_classvar_paths.py`.
 
 ## Caching a computed value
 
-`functools.cached_property` caches into an instance `__dict__`, and a struct
-has none; a slotted frozen dataclass refuses it the same way. Two answers:
-`functools.cache` on the method, or a field that `__post_init__` fills:
+`functools.cached_property` caches into an instance `__dict__`; a struct has
+none unless a non-struct base carries one, and without one a slotted frozen
+dataclass refuses it the same way. Two answers: `functools.cache` on the
+method, or a field that `__post_init__` fills:
 
 ```python
 >>> import functools
@@ -66,10 +68,13 @@ has none; a slotted frozen dataclass refuses it the same way. Two answers:
 
 ```
 
-The method cache holds every instance it has seen -- one entry per mutation
-state, since structs hash by value -- and refuses when the instance is
-unhashable. A body-defined `__init__` replaces the constructor that runs
-`__post_init__`, so the field answer only works without one.
+The method cache keys on the value, not the instance: value-equal structs
+share one entry, and `set_field` after a hit misses — the cache then holds
+the old entry and the new one. The cache refuses an unhashable struct, which
+is one with `frozen=False` or a body-defined `__eq__`. Any `__init__`,
+defined or inherited, replaces the constructor that runs `__post_init__`, so
+the field answer only works without one. The claims are pinned in
+`tests/test_classvar_paths.py`.
 
 `salix/__init__.pyi` is the API. `src/salix.c` says what this is and is
 not. `tasks.py` is what runs. `uv run camas benchmark` says what it costs.
