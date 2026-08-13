@@ -13,7 +13,6 @@ from salix import Struct, set_field
     "annotation",
     [
         typing.ClassVar[int],
-        pytest.param(typing.ClassVar[int], id="an-alias-evaluates-to-the-form"),
         typing.Optional[typing.Annotated[typing.ClassVar[int], "m"]],  # noqa: UP045
     ],
 )
@@ -29,6 +28,28 @@ def test_the_object_path_refuses_class_var_forms(annotation):
 def test_the_text_path_refuses_class_var_forms(annotation):
     with pytest.raises(TypeError, match="ClassVar"):
         type("Probe", (Struct,), {"__annotations__": {"x": annotation}})
+
+
+def test_the_object_path_refuses_an_alias_of_the_form():
+    CV = typing.ClassVar
+
+    with pytest.raises(TypeError, match="ClassVar"):
+        type("Probe", (Struct,), {"__annotations__": {"x": CV[int]}})
+
+
+def test_a_plain_struct_instance_has_no_dict():
+    class Plain(Struct):
+        x: int
+
+    with pytest.raises(AttributeError):
+        _ = Plain(1).__dict__
+
+
+@pytest.mark.skipif(sys.version_info < (3, 14), reason="3.14 evaluates resolvable annotations")
+def test_a_resolvable_alias_is_evaluated_and_refused_on_3_14():
+    with pytest.raises(TypeError, match="ClassVar"):
+        class Aliased(Struct):
+            x: typing.ClassVar[int]
 
 
 def test_the_text_path_accepts_an_alias_and_the_field_swallows_a_positional():

@@ -73,15 +73,16 @@ Under the default eq=True the method cache keys on the value, not the
 instance: value-equal structs share one entry, and a `set_field` that
 changes the value misses — the cache then holds the old entry and the new
 one. With eq=False the struct hashes by identity — unless the body defines
-its own `__eq__`, which still makes it unhashable — and `set_field` after
+its own `__eq__` without a `__hash__`, which makes it unhashable, or its
+own `__hash__`, which replaces the identity hash — and `set_field` after
 a hit returns the stale cached value while the hash is unchanged; a body
 `__hash__` over field values changes the hash and the lookup misses. The
 cache refuses an unhashable struct — anything that makes `hash()` raise:
-under the default options that is `frozen=False`, a body-defined `__eq__`,
-a body `__hash__` that refuses, an unhashable field value, or equality
-inherited from a struct base that defines `__eq__`. An `__init__` that is
-not `object.__init__` — a body-written one, inherited or not — replaces
-the constructor that runs `__post_init__`, so the field answer only works
+a body `__eq__` without a body `__hash__`, a body `__hash__` that
+refuses, `frozen=False`, an unhashable field value, or equality inherited
+from a struct base that defines `__eq__`. An `__init__` that is not
+`object.__init__` — a body-written one, inherited or not — replaces the
+constructor that runs `__post_init__`, so the field answer only works
 without one. The table and the caching behaviors above are pinned in
 `tests/test_classvar_paths.py`.
 
