@@ -18,28 +18,31 @@ Point(x=1.0, y=2.0)
 ## ClassVar and InitVar
 
 A field annotated `ClassVar[...]` or `InitVar[...]` is refused at class
-creation, exactly when the annotation is an object. When the annotation
-reaches salix as source text (under `from __future__ import annotations`)
-the check is a spelling match, and the spellings it cannot see are:
+creation. The check is exact when the annotation reaches salix as an object;
+when it arrives as source text -- a quoted string, or an annotation that
+nothing evaluated -- the check is a spelling match, and the two paths differ
+at the edges:
 
-| annotation | what the spelling match does |
-| --- | --- |
-| an alias of `ClassVar`, `CV[int]` | accepted; the field swallows a positional |
-| a factory-local alias, 3.14 | accepted; the same symptom |
-| `Optional[Annotated[ClassVar[int], "m"]]` | the object path accepts, the text path refuses |
-| a type of yours actually named `ClassVar` | refused |
-| `Annotated[int, ClassVar]` | refused, though the form is metadata |
+| annotation | object path | text path |
+| --- | --- | --- |
+| an alias of `ClassVar`, `CV[int]` | refused | accepted; the field swallows a positional |
+| a type of yours actually named `ClassVar` | accepted | refused |
+| `Annotated[int, ClassVar]` | accepted | refused, though the form is metadata |
+| `Optional[Annotated[ClassVar[int], "m"]]` | refused | refused |
+
+3.14 evaluates resolvable annotations by default, so there the alias reaches
+the object path and is refused; the text path sees only what nothing can
+resolve.
 
 ## Caching a computed value
 
 `functools.cached_property` caches into an instance `__dict__`, and a struct
-has none; a slotted frozen dataclass refuses it the same way. Cache on the
-method instead -- the cache then holds every instance it has seen -- or fill
-a field from `__post_init__`:
+has none; a slotted frozen dataclass refuses it the same way. Two answers:
+`functools.cache` on the method, or a field that `__post_init__` fills:
 
 ```python
 >>> import functools
->>> from salix import set_field
+>>> from salix import Struct, set_field
 
 >>> class Computed(Struct):
 ...     x: int
@@ -62,6 +65,11 @@ a field from `__post_init__`:
 8
 
 ```
+
+The method cache holds every instance it has seen -- one entry per mutation
+state, since structs hash by value -- and refuses when the instance is
+unhashable. A body-defined `__init__` replaces the constructor that runs
+`__post_init__`, so the field answer only works without one.
 
 `salix/__init__.pyi` is the API. `src/salix.c` says what this is and is
 not. `tasks.py` is what runs. `uv run camas benchmark` says what it costs.
