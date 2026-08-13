@@ -1,114 +1,9 @@
 #include <Python.h>
 
 #include "construct.h"
-#include "owned.h"
-#include "result.h"
-#include "types.h"
+#include "../result.h"
 
-struct field_lookup {
-	enum { FIELD_LOOKUP_FOUND, FIELD_LOOKUP_MISSING, FIELD_LOOKUP_ERROR } tag;
-	Py_ssize_t index;
-};
-
-static void bind_positional(
-	StructType const * type,
-	PyObject * self,
-	PyObject * const * arguments,
-	Py_ssize_t positional_count
-);
-static enum result bind_keywords(
-	StructType const * type,
-	PyObject * self,
-	PyObject * const * arguments,
-	Py_ssize_t positional_count,
-	PyObject * keyword_names
-);
-static enum result fill_defaults(
-	StructType const * type,
-	PyObject * self,
-	Py_ssize_t positional_count
-);
-static struct field_lookup find_field(StructType const * type, PyObject * name);
-static enum result write_slot(
-	StructType const * type,
-	PyObject * self,
-	Py_ssize_t index,
-	PyObject * value
-);
-static enum result run_post_init(StructType const * type, PyObject * self);
-
-PyObject * Struct_vectorcall(
-	PyObject * const struct_class,
-	PyObject * const * const arguments,
-	size_t const argument_count_and_flags,
-	PyObject * const keyword_names
-) {
-	StructType * const type = (StructType *) struct_class;
-	Py_ssize_t const positional_count = PyVectorcall_NARGS(argument_count_and_flags);
-
-	if (positional_count > type->struct_field_count) {
-		PyErr_Format(
-			PyExc_TypeError,
-			"%.200s() takes at most %zd positional arguments but %zd were given",
-			struct_type_name(type),
-			type->struct_field_count,
-			positional_count
-		);
-
-		return NULL;
-	}
-
-	PyTypeObject * const python_class = &type->heap_type.ht_type;
-
-	PY_MOVABLE(self, python_class->tp_alloc(python_class, 0));
-
-	if (self == NULL) {
-		return NULL;
-	}
-
-	bind_positional(type, self, arguments, positional_count);
-
-	if (
-		bind_keywords(type, self, arguments, positional_count, keyword_names) != RESULT_OK ||
-		fill_defaults(type, self, positional_count) != RESULT_OK ||
-		run_post_init(type, self) != RESULT_OK
-	) {
-		return NULL;
-	}
-
-	return py_move(&self);
-}
-
-PyObject * Struct_new(
-	PyTypeObject * const struct_class,
-	PyObject * const arguments,
-	PyObject * const keywords
-) {
-	PY_MOVABLE(self, struct_class->tp_alloc(struct_class, 0));
-
-	if (self == NULL) {
-		return NULL;
-	}
-
-	StructType const * const type = (StructType *) struct_class;
-
-	return (
-		fill_defaults(type, self, struct_required_count(type)) == RESULT_OK ? py_move(&self) :
-		NULL
-	);
-}
-
-static enum result run_post_init(StructType const * const type, PyObject * const self) {
-	if (type->struct_post_init == NULL) {
-		return RESULT_OK;
-	}
-
-	PY_OWNED(returned, PyObject_CallOneArg(type->struct_post_init, self));
-
-	return returned != NULL ? RESULT_OK : RESULT_ERROR;
-}
-
-static void bind_positional(
+void bind_positional(
 	StructType const * const type,
 	PyObject * const self,
 	PyObject * const * const arguments,
@@ -119,7 +14,7 @@ static void bind_positional(
 	}
 }
 
-static enum result bind_keywords(
+enum result bind_keywords(
 	StructType const * const type,
 	PyObject * const self,
 	PyObject * const * const arguments,
@@ -167,7 +62,7 @@ static enum result bind_keywords(
 	return RESULT_OK;
 }
 
-static enum result fill_defaults(
+enum result fill_defaults(
 	StructType const * const type,
 	PyObject * const self,
 	Py_ssize_t const positional_count
@@ -206,100 +101,6 @@ static enum result fill_defaults(
 	return RESULT_OK;
 }
 
-/* A list of statements rather than a static array of {type, constructor}: on
- * Windows a `PyTypeObject` is imported from python3.dll, and the address of a
- * dllimport symbol is not a compile-time constant, so the array version
- * compiles everywhere except the platform half the wheels are cross-built for.
- */
-typedef PyObject * (*default_copier)(PyObject * declared);
-
-static PyObject * copy_list(PyObject * const declared) {
-	return PyList_GetSlice(declared, 0, PyList_GET_SIZE(declared));
-}
-
-static default_copier copies_default(PyTypeObject const * const kind) {
-	if (kind == &PyList_Type) {
-		return copy_list;
-	}
-
-	if (kind == &PyDict_Type) {
-		return PyDict_Copy;
-	}
-
-	if (kind == &PySet_Type) {
-		return PySet_New;
-	}
-
-	if (kind == &PyByteArray_Type) {
-		return PyByteArray_FromObject;
-	}
-
-	return NULL;
-}
-
-bool struct_copies_default(PyTypeObject const * const kind) {
-	return copies_default(kind) != NULL;
-}
-
-PyObject * struct_default_copy(PyObject * const declared) {
-	default_copier const copy = copies_default(Py_TYPE(declared));
-
-	return copy != NULL ? copy(declared) : Py_NewRef(declared);
-}
-
-PyObject * Struct_set_field(PyObject * const module, PyObject * const arguments) {
-	PyObject * self = NULL;
-	PyObject * name = NULL;
-	PyObject * value = NULL;
-
-	if (!PyArg_UnpackTuple(arguments, "set_field", 3, 3, &self, &name, &value)) {
-		return NULL;
-	}
-
-	if (!is_struct(self)) {
-		PyErr_Format(
-			PyExc_TypeError,
-			"set_field() expects a struct, not %.200s",
-			Py_TYPE(self)->tp_name
-		);
-
-		return NULL;
-	}
-
-	if (!PyUnicode_Check(name)) {
-		PyErr_Format(
-			PyExc_TypeError,
-			"set_field() field name must be str, not %.200s",
-			Py_TYPE(name)->tp_name
-		);
-
-		return NULL;
-	}
-
-	StructType * const type = struct_type_of(self);
-	struct field_lookup const found = find_field(type, name);
-
-	switch (found.tag) {
-		case FIELD_LOOKUP_ERROR:
-			return NULL;
-		case FIELD_LOOKUP_MISSING:
-			PyErr_Format(
-				PyExc_AttributeError,
-				"%.200s has no field '%U'",
-				struct_type_name(type),
-				name
-			);
-
-			return NULL;
-		case FIELD_LOOKUP_FOUND:
-			if (write_slot(type, self, found.index, value) != RESULT_OK) {
-				return NULL;
-			}
-	}
-
-	Py_RETURN_NONE;
-}
-
 /*
  * Through CPython's own member setter rather than a store of our own, so the
  * free-threading guarantee is inherited here exactly as it is for `self.x = v`.
@@ -311,7 +112,7 @@ PyObject * Struct_set_field(PyObject * const module, PyObject * const arguments)
  * The offset is the one type.__new__ gave this field, so the descriptor here
  * describes a slot that already exists rather than looking one up.
  */
-static enum result write_slot(
+enum result write_slot(
 	StructType const * const type,
 	PyObject * const self,
 	Py_ssize_t const index,
@@ -333,7 +134,7 @@ static enum result write_slot(
 	return PyMember_SetOne((char *) self, &slot, value) == 0 ? RESULT_OK : RESULT_ERROR;
 }
 
-static struct field_lookup find_field(StructType const * const type, PyObject * const name) {
+struct field_lookup find_field(StructType const * const type, PyObject * const name) {
 	for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
 		if (name == PyTuple_GET_ITEM(type->struct_field_names, i)) {
 			return (struct field_lookup){.tag = FIELD_LOOKUP_FOUND, .index = i};
@@ -357,7 +158,7 @@ static struct field_lookup find_field(StructType const * const type, PyObject * 
 
 #ifdef TESTING
 
-#	include "testing.h"
+#	include "../testing.h"
 
 static PyObject * two_field_instance(void) {
 	return testing_evaluate("class P(Struct):\n    alpha: int\n    beta: int\nresult = P(1, 2)\n");
