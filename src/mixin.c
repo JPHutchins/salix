@@ -65,19 +65,23 @@ static PyMethodDef Struct_methods[] = {
  * A __copy__ or __deepcopy__ defined by a co-base sits after _StructMixin in
  * the MRO, so the mixin's method would shadow it; copy.py resolves
  * __deepcopy__ on the instance and __copy__ on the class, and each branch
- * reproduces that lookup. A descriptor __get__ AttributeError and None both
- * mean "no method"; NULL means none was found.
+ * reproduces that lookup. The scan starts after the mixin: a method before it
+ * was already found by getattr and called by copy.py, and a rebind of the
+ * mixin's own method would otherwise re-enter it forever. A descriptor
+ * __get__ AttributeError and None both mean "no method"; NULL means none was
+ * found.
  */
 static PyObject * deferred_co_base_copy(PyObject * const self, PyObject * const name) {
 	PyTypeObject * const cls = Py_TYPE(self);
 	PyObject * const mro = cls->tp_mro;
+	Py_ssize_t mixin = 0;
 
-	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); ++i) {
+	while (PyTuple_GET_ITEM(mro, mixin) != (PyObject *) &StructMixin_Type) {
+		mixin += 1;
+	}
+
+	for (Py_ssize_t i = mixin + 1; i < PyTuple_GET_SIZE(mro); i += 1) {
 		PyObject * const entry = PyTuple_GET_ITEM(mro, i);
-
-		if (entry == (PyObject *) &StructMixin_Type) {
-			continue;
-		}
 
 		PY_OWNED(entry_dict, struct_type_dict((PyTypeObject *) entry));
 
@@ -422,6 +426,12 @@ static PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 	return py_move(&copy);
 }
 
+static PyObject * memo_failure(PyObject * const memo, PyObject * const key) {
+	PyDict_DelItem(memo, key);
+
+	return NULL;
+}
+
 static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) {
 	if (!PyDict_Check(memo)) {
 		PyErr_SetString(PyExc_TypeError, "__deepcopy__() argument must be a dict");
@@ -448,7 +458,16 @@ static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) 
 	}
 
 	if (!is_struct(self)) {
-		return copy_delegate(self, memo, memo, "__deepcopy__", "un(deep)copyable", true);
+		PY_MOVABLE(
+			delegated,
+			copy_delegate(self, memo, memo, "__deepcopy__", "un(deep)copyable", true)
+		);
+
+		if (delegated == NULL || PyDict_SetItem(memo, key, delegated) < 0) {
+			return NULL;
+		}
+
+		return py_move(&delegated);
 	}
 
 	StructType * const type = struct_type_of(self);
@@ -461,6 +480,10 @@ static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) 
 	);
 
 	if (deferred != NULL) {
+		if (PyDict_SetItem(memo, key, deferred) < 0) {
+			return NULL;
+		}
+
 		return py_move(&deferred);
 	}
 
@@ -471,7 +494,17 @@ static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) 
 	if (copier != NULL) {
 		PY_MOVABLE(reduced, PyObject_CallOneArg(copier, self));
 
-		return reduced != NULL ? copy_reconstruct(self, reduced, copy_module, memo) : NULL;
+		if (reduced == NULL) {
+			return NULL;
+		}
+
+		PY_MOVABLE(reconstructed, copy_reconstruct(self, reduced, copy_module, memo));
+
+		if (reconstructed == NULL || PyDict_SetItem(memo, key, reconstructed) < 0) {
+			return NULL;
+		}
+
+		return py_move(&reconstructed);
 	}
 
 	PY_MOVABLE(copy, cls->tp_alloc(cls, 0));
@@ -494,26 +527,26 @@ static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) 
 	PY_OWNED(deepcopy, PyObject_GetAttrString(copy_module, "deepcopy"));
 
 	if (deepcopy == NULL) {
-		return NULL;
+		return memo_failure(memo, key);
 	}
 
 	/* Each shallow copy is replaced by its deep copy, made outside the
 	 * section because copy.deepcopy runs arbitrary Python. */
-	for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
+	for (Py_ssize_t i = 0; i < type->struct_field_count; i += 1) {
 		PyObject * const value = *struct_slot(type, copy, i);
 
 		if (value != NULL) {
 			PY_MOVABLE(deep, PyObject_CallFunctionObjArgs(deepcopy, value, memo, NULL));
 
 			if (deep == NULL) {
-				return NULL;
+				return memo_failure(memo, key);
 			}
 
 			Py_SETREF(*struct_slot(type, copy, i), py_move(&deep));
 		}
 	}
 
-	for (Py_ssize_t i = 0; i < type->struct_member_count; ++i) {
+	for (Py_ssize_t i = 0; i < type->struct_member_count; i += 1) {
 		Py_ssize_t const offset = type->struct_member_offsets[i];
 		PyObject * const value = *(PyObject * *) ((char *) copy + offset);
 
@@ -521,7 +554,7 @@ static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) 
 			PY_MOVABLE(deep, PyObject_CallFunctionObjArgs(deepcopy, value, memo, NULL));
 
 			if (deep == NULL) {
-				return NULL;
+				return memo_failure(memo, key);
 			}
 
 			Py_SETREF(*((PyObject * *) ((char *) copy + offset)), py_move(&deep));
@@ -534,17 +567,17 @@ static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) 
 		PY_OWNED(snapshot, PyDict_Copy(dict));
 
 		if (snapshot == NULL) {
-			return NULL;
+			return memo_failure(memo, key);
 		}
 
 		PY_MOVABLE(deep_dict, PyObject_CallFunctionObjArgs(deepcopy, snapshot, memo, NULL));
 
 		if (deep_dict == NULL) {
-			return NULL;
+			return memo_failure(memo, key);
 		}
 
 		if (PyObject_GenericSetDict(copy, deep_dict, NULL) < 0) {
-			return NULL;
+			return memo_failure(memo, key);
 		}
 	}
 

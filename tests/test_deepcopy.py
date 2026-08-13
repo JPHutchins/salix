@@ -454,3 +454,52 @@ def test_a_non_dict_memo_is_refused():
 def test_a_non_dict_memo_is_refused_for_an_impostor_too():
     with pytest.raises(TypeError, match="must be a dict"):
         Impostor([1]).__deepcopy__(None)
+
+
+def test_a_rebound_mixin_deepcopy_does_not_reenter_forever():
+    class Pin(Struct):
+        x: int
+        __deepcopy__ = Struct.__deepcopy__
+
+    # The body's rebind of the mixin's own method is found by getattr and
+    # called; the deferral must not then re-find it in the class's dict.
+    copied = copy.deepcopy(Pin(1))
+
+    assert type(copied) is Pin
+    assert copied == Pin(1)
+
+
+def test_a_direct_protocol_call_registers_the_deferred_result():
+    class HasDeepcopy:
+        def __deepcopy__(self, memo: dict) -> "HasDeepcopy":
+            copied = HasDeepcopy()
+            copied.was_copied = True
+
+            return copied
+
+    class RealStruct(Struct, HasDeepcopy, frozen=False):
+        x: int
+
+    instance = RealStruct(1)
+    memo = {}
+    result = instance.__deepcopy__(memo)
+
+    assert memo[id(instance)] is result
+
+
+def test_a_failed_deepcopy_leaves_no_partial_shell_in_the_memo():
+    class Uncopyable:
+        def __deepcopy__(self, memo: dict):
+            raise ValueError("no")
+
+    class Holder(Struct):
+        first: object
+        second: object = None
+
+    instance = Holder(Uncopyable())
+    memo = {}
+
+    with pytest.raises(ValueError, match="no"):
+        copy.deepcopy(instance, memo)
+
+    assert id(instance) not in memo
