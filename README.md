@@ -31,10 +31,10 @@ the check is a spelling match, and the two paths differ at the edges:
 | `Optional[Annotated[ClassVar[int], "m"]]` | refused | refused |
 
 3.14 evaluates resolvable annotations by default, so there the alias reaches
-the object path and is refused; a name nothing can resolve — bare or
-compound — arrives as an object too, and is accepted, while an annotation
-whose evaluation raises AttributeError still fails the class. Every row is
-pinned in `tests/test_classvar_paths.py`.
+the object path and is refused; a name whose root cannot be resolved
+arrives as an object too, and is accepted, while any other evaluation
+error still fails the class. Every row is pinned in
+`tests/test_classvar_paths.py`.
 
 ## Caching a computed value
 
@@ -72,8 +72,9 @@ method, or a field that `__post_init__` fills:
 Under the default eq=True the method cache keys on the value, not the
 instance: value-equal structs share one entry, and a `set_field` that
 changes the value misses — the cache then holds the old entry and the new
-one. With eq=False the struct hashes by identity, and `set_field` after a
-hit returns the stale cached value while the hash is unchanged; a body
+one. With eq=False the struct hashes by identity — unless the body defines
+its own `__eq__`, which still makes it unhashable — and `set_field` after
+a hit returns the stale cached value while the hash is unchanged; a body
 `__hash__` over field values changes the hash and the lookup misses. The
 cache refuses an unhashable struct — anything that makes `hash()` raise:
 under the default options that is `frozen=False`, a body-defined `__eq__`,

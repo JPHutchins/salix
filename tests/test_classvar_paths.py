@@ -13,6 +13,7 @@ from salix import Struct, set_field
     "annotation",
     [
         typing.ClassVar[int],
+        pytest.param(typing.ClassVar[int], id="an-alias-evaluates-to-the-form"),
         typing.Optional[typing.Annotated[typing.ClassVar[int], "m"]],  # noqa: UP045
     ],
 )
@@ -69,6 +70,24 @@ def test_an_unresolvable_annotation_arrives_as_an_object_and_is_accepted():
 
     assert not isinstance(annotation, str)
     assert WithNope._struct_fields_ == ("x",)
+
+
+@pytest.mark.skipif(sys.version_info < (3, 14), reason="3.14 evaluates resolvable annotations")
+def test_a_compound_name_with_an_unresolvable_root_is_accepted():
+    class WithCompound(Struct):
+        x: Nope.attr  # noqa: F821
+
+    assert WithCompound._struct_fields_ == ("x",)
+
+
+@pytest.mark.skipif(sys.version_info < (3, 14), reason="3.14 evaluates resolvable annotations")
+def test_an_attribute_error_annotation_still_fails_the_class():
+    class Nope:
+        pass
+
+    with pytest.raises(AttributeError):
+        class WithAttrError(Struct):
+            x: Nope.missing
 
 
 def test_value_equal_instances_share_one_cache_entry():
@@ -208,6 +227,42 @@ def test_a_value_returning_body_hash_is_hashable_under_the_default_options():
             return self.x
 
     assert hash(ValueHash(3)) == 3
+
+
+def test_a_field_hash_misses_after_set_field_under_eq_false():
+    class FieldHash(Struct, eq=False):
+        x: int
+
+        def __hash__(self) -> int:
+            return self.x
+
+        @functools.cache  # noqa: B019 -- the miss is the point
+        def slow(self) -> int:
+            return self.x * 2
+
+    instance = FieldHash(1)
+
+    assert instance.slow() == 2
+
+    set_field(instance, "x", 5)
+
+    assert instance.slow() == 10
+
+
+def test_a_struct_base_body_init_displaces_post_init():
+    class Parent(Struct):
+        x: int
+
+        def __init__(self, x: int) -> None:
+            set_field(self, "x", x)
+
+    class Child(Parent):
+        double: int = 0
+
+        def __post_init__(self) -> None:
+            set_field(self, "double", self.x * 2)
+
+    assert Child(4).double == 0
 
 
 def test_equality_inherited_from_a_struct_base_makes_the_subclass_unhashable():
