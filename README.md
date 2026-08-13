@@ -27,7 +27,7 @@ the check is a spelling match, and the two paths differ at the edges:
 | --- | --- | --- |
 | an alias of `ClassVar`, `CV[int]` | refused | accepted; the field swallows a positional |
 | a type of yours actually named `ClassVar` | accepted | refused |
-| `Annotated[int, ClassVar]` | accepted | refused, though the `ClassVar` there is metadata |
+| `Annotated[int, ClassVar]` | accepted, 3.11+ | refused, though the `ClassVar` there is metadata |
 | `Optional[Annotated[ClassVar[int], "m"]]` | refused | refused |
 
 3.14 evaluates resolvable annotations by default, so there the alias reaches
@@ -38,7 +38,7 @@ an object too, and is accepted. Every row is pinned in
 ## Caching a computed value
 
 `functools.cached_property` caches into an instance `__dict__`; a struct has
-none unless a non-struct base carries one, and without one a slotted frozen
+none unless a non-struct base carries one, and without one a slotted
 dataclass refuses it the same way. Two answers: `functools.cache` on the
 method, or a field that `__post_init__` fills:
 
@@ -72,11 +72,13 @@ Under the default eq=True the method cache keys on the value, not the
 instance: value-equal structs share one entry, and `set_field` after a hit
 misses — the cache then holds the old entry and the new one. With eq=False
 the struct hashes by identity instead, and `set_field` after a hit returns
-the stale cached value. The cache refuses an unhashable struct — under
-eq=True that is one with `frozen=False` or a body-defined `__eq__`. Any
-`__init__`, defined or inherited, replaces the constructor that runs
-`__post_init__`, so the field answer only works without one. The claims are
-pinned in `tests/test_classvar_paths.py`.
+the stale cached value — unless the body defines its own `__eq__`, which
+still makes it unhashable. The cache refuses an unhashable struct — under
+eq=True that is one with `frozen=False`, a body-defined `__eq__`, or an
+unhashable field value. An `__init__` that is not `object.__init__` —
+defined in the body or inherited from a non-struct base — replaces the
+constructor that runs `__post_init__`, so the field answer only works
+without one. The claims are pinned in `tests/test_classvar_paths.py`.
 
 `salix/__init__.pyi` is the API. `src/salix.c` says what this is and is
 not. `tasks.py` is what runs. `uv run camas benchmark` says what it costs.

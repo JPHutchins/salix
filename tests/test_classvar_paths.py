@@ -149,6 +149,7 @@ def test_eq_false_hashes_by_identity_and_the_cache_returns_stale_values():
     instance = Identity(1)
 
     assert instance.slow() == 2
+    assert hash(Identity(1)) != hash(Identity(1))
 
     set_field(instance, "x", 5)
 
@@ -159,7 +160,26 @@ def test_eq_false_mutable_structs_are_hashable():
     class MutableIdentity(Struct, eq=False, frozen=False):
         x: int
 
-    assert isinstance(hash(MutableIdentity(1)), int)
+    assert hash(MutableIdentity(1)) != hash(MutableIdentity(1))
+
+
+def test_a_body_defined_eq_still_makes_an_eq_false_struct_unhashable():
+    class BodyEq(Struct, eq=False):  # noqa: PLW1641 -- the unhashability is the point
+        x: int
+
+        def __eq__(self, other: object) -> bool:
+            return True
+
+    with pytest.raises(TypeError, match="unhashable"):
+        hash(BodyEq(1))
+
+
+def test_an_unhashable_field_value_makes_the_struct_unhashable():
+    class Holding(Struct):
+        items: list
+
+    with pytest.raises(TypeError, match="unhashable"):
+        hash(Holding([1]))
 
 
 def test_cached_property_works_when_a_co_base_carries_a_dict():
