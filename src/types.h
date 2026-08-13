@@ -19,7 +19,7 @@ enum { SLOT_MEMBER_TYPE = T_OBJECT_EX };
 enum { SLOT_MEMBER_TYPE = Py_T_OBJECT_EX };
 #endif
 
-typedef struct {
+typedef struct StructType {
 	PyHeapTypeObject heap_type;
 
 	PyObject * struct_field_names;
