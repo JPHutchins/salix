@@ -1,20 +1,10 @@
 #include <Python.h>
-#include <stdbool.h>
 #include <stddef.h>
 #include <string.h>
 
-#include "../construct.h"
-#include "../fields.h"
 #include "meta.h"
-#include "../mixin.h"
-#include "../options.h"
-#include "../owned.h"
 #include "../result.h"
 #include "../types.h"
-
-#ifndef Py_TPFLAGS_HAVE_VECTORCALL
-#	define Py_TPFLAGS_HAVE_VECTORCALL _Py_TPFLAGS_HAVE_VECTORCALL
-#endif
 
 static int StructMeta_traverse(PyObject * self, visitproc visit, void * arg);
 static int StructMeta_clear(PyObject * self);

@@ -1,10 +1,7 @@
 #include <Python.h>
 #include <stdbool.h>
 #include <stddef.h>
-#include <string.h>
 
-#include "../construct.h"
-#include "../fields.h"
 #include "meta.h"
 #include "../mixin.h"
 #include "../options.h"
@@ -220,40 +217,6 @@ struct binding_plan binding_plan(
 	return plan;
 }
 
-bool settled_by_the_plan(char const * const name, struct binding_plan const plan) {
-	if (
-		strcmp(name, "__eq__") == 0 ||
-		strcmp(name, "__lt__") == 0 ||
-		strcmp(name, "__le__") == 0 ||
-		strcmp(name, "__gt__") == 0 ||
-		strcmp(name, "__ge__") == 0
-	) {
-		return plan.rebind_comparison;
-	}
-
-	if (strcmp(name, "__ne__") == 0) {
-		return plan.rebind_not_equal || plan.answered_by_body;
-	}
-
-	if (
-		strcmp(name, "__init__") == 0 ||
-		strcmp(name, "__post_init__") == 0 ||
-		strcmp(name, "__new__") == 0
-	) {
-		return false;
-	}
-
-	if (strcmp(name, "__repr__") == 0) {
-		return plan.rebind_representation;
-	}
-
-	if (strcmp(name, "__setattr__") == 0 || strcmp(name, "__delattr__") == 0) {
-		return plan.rebind_mutability;
-	}
-
-	return plan.hash == HASH_BIND || plan.hash == HASH_NONE;
-}
-
 static enum result apply_options(
 	PyObject * const namespace,
 	struct options const options,
@@ -263,18 +226,6 @@ static enum result apply_options(
 	bool const inherits_body_eq,
 	bool const derive_not_equal
 ) {
-	static char const * const comparison[] = {
-		"__eq__",
-		"__lt__",
-		"__le__",
-		"__gt__",
-		"__ge__",
-		NULL,
-	};
-	static char const * const not_equal[] = {"__ne__", NULL};
-	static char const * const representation[] = {"__repr__", NULL};
-	static char const * const mutability[] = {"__setattr__", "__delattr__", NULL};
-	static char const * const hash_name[] = {"__hash__", NULL};
 	struct binding_plan const plan = binding_plan(
 		options,
 		inherited,
@@ -288,27 +239,30 @@ static enum result apply_options(
 	if (
 		plan.answered_by_body &&
 		PyDict_GetItemString(namespace, "__ne__") == NULL &&
-		rebind(namespace, not_equal, false) != RESULT_OK
+		rebind(namespace, rebind_not_equal, false) != RESULT_OK
 	) {
 		return RESULT_ERROR;
 	}
 
-	if (plan.rebind_comparison && rebind(namespace, comparison, options.eq) != RESULT_OK) {
+	if (plan.rebind_comparison && rebind(namespace, rebind_comparison, options.eq) != RESULT_OK) {
 		return RESULT_ERROR;
 	}
 
-	if (plan.rebind_not_equal && rebind(namespace, not_equal, options.eq) != RESULT_OK) {
+	if (plan.rebind_not_equal && rebind(namespace, rebind_not_equal, options.eq) != RESULT_OK) {
 		return RESULT_ERROR;
 	}
 
 	if (
 		plan.rebind_representation &&
-		rebind(namespace, representation, options.repr) != RESULT_OK
+		rebind(namespace, rebind_representation, options.repr) != RESULT_OK
 	) {
 		return RESULT_ERROR;
 	}
 
-	if (plan.rebind_mutability && rebind(namespace, mutability, options.frozen) != RESULT_OK) {
+	if (
+		plan.rebind_mutability &&
+		rebind(namespace, rebind_mutability, options.frozen) != RESULT_OK
+	) {
 		return RESULT_ERROR;
 	}
 
@@ -323,7 +277,7 @@ static enum result apply_options(
 
 			break;
 		case HASH_BIND:
-			if (rebind(namespace, hash_name, options.eq) != RESULT_OK) {
+			if (rebind(namespace, rebind_hash, options.eq) != RESULT_OK) {
 				return RESULT_ERROR;
 			}
 

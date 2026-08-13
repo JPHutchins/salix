@@ -1,15 +1,11 @@
 #include <Python.h>
 #include <stdbool.h>
 #include <stddef.h>
-#include <string.h>
 
-#include "../construct.h"
-#include "../fields.h"
 #include "meta.h"
 #include "../mixin.h"
 #include "../options.h"
 #include "../owned.h"
-#include "../result.h"
 #include "../types.h"
 
 struct definition {

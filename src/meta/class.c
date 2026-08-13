@@ -50,8 +50,10 @@ static enum result restore_stripped(
 	StructType * struct_class,
 	PyObject * original_namespace,
 	PyObject * class_dict,
-	char const * const * names
+	char const * const * const * tables
 );
+static bool table_names(char const * const * names, char const * name);
+static bool settled_by_the_plan(char const * name, struct binding_plan plan);
 static enum result refuse_unplanned(StructType const * struct_class);
 static enum result install_post_init(StructType * struct_class);
 static bool defines_own_init(StructType const * struct_class);
@@ -67,6 +69,64 @@ static Py_ssize_t * resolve_member_offsets(
 	Py_ssize_t field_count,
 	Py_ssize_t * member_count
 );
+
+char const * const rebind_comparison[] = {
+	"__eq__",
+	"__lt__",
+	"__le__",
+	"__gt__",
+	"__ge__",
+	NULL,
+};
+char const * const rebind_not_equal[] = {"__ne__", NULL};
+char const * const rebind_representation[] = {"__repr__", NULL};
+char const * const rebind_mutability[] = {"__setattr__", "__delattr__", NULL};
+char const * const rebind_hash[] = {"__hash__", NULL};
+char const * const rebind_never[] = {"__init__", "__post_init__", "__new__", NULL};
+
+static char const * const * const settle_tables[] = {
+	rebind_comparison,
+	rebind_not_equal,
+	rebind_representation,
+	rebind_mutability,
+	rebind_hash,
+	rebind_never,
+	NULL,
+};
+
+static bool table_names(char const * const * const names, char const * const name) {
+	for (char const * const * entry = names; *entry != NULL; entry += 1) {
+		if (strcmp(*entry, name) == 0) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+static bool settled_by_the_plan(char const * const name, struct binding_plan const plan) {
+	if (table_names(rebind_comparison, name)) {
+		return plan.rebind_comparison;
+	}
+
+	if (table_names(rebind_not_equal, name)) {
+		return plan.rebind_not_equal || plan.answered_by_body;
+	}
+
+	if (table_names(rebind_representation, name)) {
+		return plan.rebind_representation;
+	}
+
+	if (table_names(rebind_mutability, name)) {
+		return plan.rebind_mutability;
+	}
+
+	if (table_names(rebind_never, name)) {
+		return false;
+	}
+
+	return plan.hash == HASH_BIND || plan.hash == HASH_NONE;
+}
 
 PyObject * build_struct_class(
 	PyTypeObject * const metatype,
@@ -302,34 +362,6 @@ static enum result settle_planned(
 	bool const inherits_body_eq,
 	bool const derive_not_equal
 ) {
-	static char const * const comparison[] = {
-		"__eq__",
-		"__lt__",
-		"__le__",
-		"__gt__",
-		"__ge__",
-		NULL,
-	};
-	static char const * const not_equal[] = {"__ne__", NULL};
-	static char const * const representation[] = {"__repr__", NULL};
-	static char const * const mutability[] = {"__setattr__", "__delattr__", NULL};
-	static char const * const hash_name[] = {"__hash__", NULL};
-	static char const * const body_dunders[] = {
-		"__eq__",
-		"__ne__",
-		"__lt__",
-		"__le__",
-		"__gt__",
-		"__ge__",
-		"__repr__",
-		"__setattr__",
-		"__delattr__",
-		"__hash__",
-		"__init__",
-		"__post_init__",
-		"__new__",
-		NULL,
-	};
 	PY_OWNED(planned, PyList_AsTuple(plan->all_names));
 
 	if (planned == NULL) {
@@ -394,30 +426,36 @@ static enum result settle_planned(
 		PyDict_GetItemString(original_namespace, "__hash__") != NULL
 	);
 
-	for (char const * const * name = body_dunders; *name != NULL; name += 1) {
-		if (
-			PyDict_GetItemString(class_dict, *name) != NULL &&
-			PyDict_GetItemString(original_namespace, *name) == NULL &&
-			!settled_by_the_plan(*name, bindings)
-		) {
-			return refuse_unplanned(struct_class);
+	for (char const * const * const * tables = settle_tables; *tables != NULL; tables += 1) {
+		for (char const * const * name = *tables; *name != NULL; name += 1) {
+			if (
+				PyDict_GetItemString(class_dict, *name) != NULL &&
+				PyDict_GetItemString(original_namespace, *name) == NULL &&
+				!settled_by_the_plan(*name, bindings)
+			) {
+				return refuse_unplanned(struct_class);
+			}
 		}
 	}
 
-	if (restore_stripped(struct_class, original_namespace, class_dict, body_dunders) != RESULT_OK) {
+	if (
+		restore_stripped(struct_class, original_namespace, class_dict, settle_tables) !=
+		RESULT_OK
+	) {
 		return RESULT_ERROR;
 	}
 
 	if (
 		bindings.rebind_comparison &&
-		settle_rebind(struct_class, original_namespace, comparison, options.eq) != RESULT_OK
+		settle_rebind(struct_class, original_namespace, rebind_comparison, options.eq) !=
+			RESULT_OK
 	) {
 		return RESULT_ERROR;
 	}
 
 	if (
 		bindings.rebind_not_equal &&
-		settle_rebind(struct_class, original_namespace, not_equal, options.eq) != RESULT_OK
+		settle_rebind(struct_class, original_namespace, rebind_not_equal, options.eq) != RESULT_OK
 	) {
 		return RESULT_ERROR;
 	}
@@ -439,14 +477,16 @@ static enum result settle_planned(
 
 	if (
 		bindings.rebind_representation &&
-		settle_rebind(struct_class, original_namespace, representation, options.repr) != RESULT_OK
+		settle_rebind(struct_class, original_namespace, rebind_representation, options.repr) !=
+			RESULT_OK
 	) {
 		return RESULT_ERROR;
 	}
 
 	if (
 		bindings.rebind_mutability &&
-		settle_rebind(struct_class, original_namespace, mutability, options.frozen) != RESULT_OK
+		settle_rebind(struct_class, original_namespace, rebind_mutability, options.frozen) !=
+			RESULT_OK
 	) {
 		return RESULT_ERROR;
 	}
@@ -469,7 +509,7 @@ static enum result settle_planned(
 		}
 		case HASH_BIND:
 			if (
-				settle_rebind(struct_class, original_namespace, hash_name, options.eq) !=
+				settle_rebind(struct_class, original_namespace, rebind_hash, options.eq) !=
 				RESULT_OK
 			) {
 				return RESULT_ERROR;
@@ -520,22 +560,24 @@ static enum result restore_stripped(
 	StructType * const struct_class,
 	PyObject * const original_namespace,
 	PyObject * const class_dict,
-	char const * const * const names
+	char const * const * const * const tables
 ) {
-	for (char const * const * name = names; *name != NULL; name += 1) {
-		PyObject * const body_value = PyDict_GetItemString(original_namespace, *name);
+	for (char const * const * const * table = tables; *table != NULL; table += 1) {
+		for (char const * const * name = *table; *name != NULL; name += 1) {
+			PyObject * const body_value = PyDict_GetItemString(original_namespace, *name);
 
-		if (body_value == NULL || PyDict_GetItemString(class_dict, *name) == body_value) {
-			continue;
-		}
+			if (body_value == NULL || PyDict_GetItemString(class_dict, *name) == body_value) {
+				continue;
+			}
 
-		PY_OWNED(unicode_name, PyUnicode_FromString(*name));
+			PY_OWNED(unicode_name, PyUnicode_FromString(*name));
 
-		if (
-			unicode_name == NULL ||
-			PyType_Type.tp_setattro((PyObject *) struct_class, unicode_name, body_value) < 0
-		) {
-			return RESULT_ERROR;
+			if (
+				unicode_name == NULL ||
+				PyType_Type.tp_setattro((PyObject *) struct_class, unicode_name, body_value) < 0
+			) {
+				return RESULT_ERROR;
+			}
 		}
 	}
 
