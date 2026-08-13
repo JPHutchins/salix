@@ -426,6 +426,9 @@ class TestAMetaclassSubclass:
         assert instance.y == 2
         assert built.__hash__ is None
 
+        with pytest.raises(TypeError, match="unhashable"):
+            hash(instance)
+
     def test_a_delegate_can_turn_eq_off(self):
         class Base(Struct, metaclass=Forwarding):
             x: int
@@ -682,6 +685,79 @@ class TestAMetaclassSubclass:
         built = META("Built", (Base,), namespace)
 
         assert (built(1, 7) != built(1, 8)) is False
+
+    def test_a_delegate_that_strips_new_is_settled(self):
+        """The fresh build keeps a body __new__ in the class dict (dispatch
+        never consults it), so a delegate that strips it is restored.
+        """
+
+        class Stripping(META):
+            def __new__(metacls, name, bases, namespace, **keywords):
+                if name == "Base":
+                    return super().__new__(metacls, name, bases, namespace, **keywords)
+
+                namespace.pop("__new__", None)
+
+                return super().__new__(metacls, name, bases, namespace, **keywords)
+
+        def body_new(cls, *args):
+            return super(cls, cls).__new__(cls, *args)
+
+        class Base(Struct, metaclass=Stripping):
+            x: int
+
+        namespace = {"__annotations__": {"y": int}, "__new__": body_new}
+        built = META("Built", (Base,), namespace)
+
+        assert "__new__" in built.__dict__
+
+    def test_a_delegate_that_injects_new_is_refused(self):
+        """A __new__ the delegate adds while the body defined none would
+        change construction, so the settle refuses.
+        """
+
+        class Injecting(META):
+            def __new__(metacls, name, bases, namespace, **keywords):
+                if name == "Base":
+                    return super().__new__(metacls, name, bases, namespace, **keywords)
+
+                namespace["__new__"] = lambda cls, *args: None
+
+                return super().__new__(metacls, name, bases, namespace, **keywords)
+
+        class Base(Struct, metaclass=Injecting):
+            x: int
+
+        with pytest.raises(TypeError, match="did not plan"):
+            META("Built", (Base,), {"__annotations__": {"y": int}})
+
+    def test_a_delegate_that_adds_a_non_struct_base_is_refused(self):
+        """The identity gate compares the bases tuple, not just the layout
+        base; an extra base would route construction through its __init__.
+        """
+
+        calls = []
+
+        class Substituting(META):
+            def __new__(metacls, name, bases, namespace, **keywords):
+                calls.append(1)
+
+                if len(calls) <= 2:
+                    return super().__new__(metacls, name, bases, namespace, **keywords)
+
+                return Built
+
+        class Base(Struct, metaclass=Substituting):
+            x: int
+
+        class InitBase:
+            pass
+
+        class Built(Base, InitBase):
+            y: int = 99
+
+        with pytest.raises(TypeError, match="did not plan"):
+            META("Built", (Base,), {"__annotations__": {"y": int}})
 
     def test_a_delegate_returning_same_count_defaults_is_corrected_not_accepted(self):
         """A lying-around class can match the plan's name, fields, and default

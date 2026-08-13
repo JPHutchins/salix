@@ -835,7 +835,11 @@ static bool settled_by_the_plan(char const * const name, struct binding_plan con
 		return plan.rebind_not_equal || plan.answered_by_body;
 	}
 
-	if (strcmp(name, "__init__") == 0 || strcmp(name, "__post_init__") == 0) {
+	if (
+		strcmp(name, "__init__") == 0 ||
+		strcmp(name, "__post_init__") == 0 ||
+		strcmp(name, "__new__") == 0
+	) {
 		return false;
 	}
 
@@ -1305,6 +1309,7 @@ static enum result settle_planned(
 		"__hash__",
 		"__init__",
 		"__post_init__",
+		"__new__",
 		NULL,
 	};
 	PY_OWNED(planned, PyList_AsTuple(plan->all_names));
@@ -1336,9 +1341,20 @@ static enum result settle_planned(
 		return RESULT_ERROR;
 	}
 
+	int const same_bases = PyObject_RichCompareBool(
+		((PyTypeObject *) struct_class)->tp_bases,
+		bases,
+		Py_EQ
+	);
+
+	if (same_bases < 0) {
+		return RESULT_ERROR;
+	}
+
 	if (
 		same_fields == 0 ||
 		same_name == 0 ||
+		same_bases == 0 ||
 		find_struct_base(((PyTypeObject *) struct_class)->tp_bases) != base
 	) {
 		return refuse_unplanned(struct_class);
@@ -1580,7 +1596,7 @@ static enum result install_post_init(StructType * const struct_class) {
 		return RESULT_ERROR;
 	}
 
-	struct_class->struct_post_init = hook;
+	Py_XSETREF(struct_class->struct_post_init, hook);
 
 	return RESULT_OK;
 }
