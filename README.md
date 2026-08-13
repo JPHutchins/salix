@@ -18,10 +18,10 @@ Point(x=1.0, y=2.0)
 ## ClassVar and InitVar
 
 A field annotated `ClassVar[...]` or `InitVar[...]` is refused at class
-creation. The check walks the annotation's forms when it reaches salix as an
-object; when it arrives as source text — a quoted string, or a
-future-annotations string — the check is a spelling match, and the two paths
-differ at the edges:
+creation when the annotation reaches the check as one of those forms. The
+check walks the annotation's forms when it arrives as an object; when it
+arrives as source text — a quoted string, or a future-annotations string —
+the check is a spelling match, and the two paths differ at the edges:
 
 | annotation | object path | text path |
 | --- | --- | --- |
@@ -68,13 +68,15 @@ method, or a field that `__post_init__` fills:
 
 ```
 
-The method cache keys on the value, not the instance: value-equal structs
-share one entry, and `set_field` after a hit misses — the cache then holds
-the old entry and the new one. The cache refuses an unhashable struct, which
-is one with `frozen=False` or a body-defined `__eq__`. Any `__init__`,
-defined or inherited, replaces the constructor that runs `__post_init__`, so
-the field answer only works without one. The claims are pinned in
-`tests/test_classvar_paths.py`.
+Under the default eq=True the method cache keys on the value, not the
+instance: value-equal structs share one entry, and `set_field` after a hit
+misses — the cache then holds the old entry and the new one. With eq=False
+the struct hashes by identity instead, and `set_field` after a hit returns
+the stale cached value. The cache refuses an unhashable struct — under
+eq=True that is one with `frozen=False` or a body-defined `__eq__`. Any
+`__init__`, defined or inherited, replaces the constructor that runs
+`__post_init__`, so the field answer only works without one. The claims are
+pinned in `tests/test_classvar_paths.py`.
 
 `salix/__init__.pyi` is the API. `src/salix.c` says what this is and is
 not. `tasks.py` is what runs. `uv run camas benchmark` says what it costs.

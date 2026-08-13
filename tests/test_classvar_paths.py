@@ -9,83 +9,69 @@ import pytest
 from salix import Struct, set_field
 
 
-def build(namespace):
-    """The class, or the TypeError that refused it."""
-
-    try:
-        return type("Probe", (Struct,), namespace), None
-    except TypeError as exc:
-        return None, exc
-
-
-def test_an_alias_is_refused_on_the_object_path():
-    cls, error = build({"__annotations__": {"x": typing.ClassVar[int]}})
-
-    assert cls is None
-    assert error is not None
+@pytest.mark.parametrize(
+    "annotation",
+    [
+        typing.ClassVar[int],
+        typing.Optional[typing.Annotated[typing.ClassVar[int], "m"]],  # noqa: UP045
+    ],
+)
+def test_the_object_path_refuses_class_var_forms(annotation):
+    with pytest.raises(TypeError, match="ClassVar"):
+        type("Probe", (Struct,), {"__annotations__": {"x": annotation}})
 
 
-def test_an_alias_is_accepted_on_the_text_path():
-    cls, error = build({"__annotations__": {"x": "CV[int]"}})
+@pytest.mark.parametrize(
+    "annotation",
+    ["ClassVar", "Annotated[int, ClassVar]", "Optional[Annotated[ClassVar[int], m]]"],
+)
+def test_the_text_path_refuses_class_var_forms(annotation):
+    with pytest.raises(TypeError, match="ClassVar"):
+        type("Probe", (Struct,), {"__annotations__": {"x": annotation}})
 
-    assert error is None
+
+def test_the_text_path_accepts_an_alias_and_the_field_swallows_a_positional():
+    cls = type("Probe", (Struct,), {"__annotations__": {"x": "CV[int]"}})
+
     assert cls._struct_fields_ == ("x",)
+    assert cls(7).x == 7
 
 
-def test_a_type_named_class_var_is_accepted_on_the_object_path():
+def test_the_object_path_accepts_a_type_named_class_var():
     class ClassVar:
         pass
 
-    cls, error = build({"__annotations__": {"x": ClassVar}})
+    cls = type("Probe", (Struct,), {"__annotations__": {"x": ClassVar}})
 
-    assert error is None
     assert cls._struct_fields_ == ("x",)
 
 
-def test_a_type_named_class_var_is_refused_on_the_text_path():
-    cls, error = build({"__annotations__": {"x": "ClassVar"}})
-
-    assert cls is None
-    assert error is not None
-
-
-def test_annotated_metadata_is_accepted_on_the_object_path():
-    cls, error = build({"__annotations__": {"x": typing.Annotated[int, typing.ClassVar]}})
-
-    assert error is None
-    assert cls._struct_fields_ == ("x",)
-
-
-def test_annotated_metadata_is_refused_on_the_text_path():
-    cls, error = build({"__annotations__": {"x": "Annotated[int, ClassVar]"}})
-
-    assert cls is None
-    assert error is not None
-
-
-def test_optional_annotated_is_refused_on_both_paths():
-    cls, error = build(
-        {
-            "__annotations__": {
-                "x": typing.Optional[typing.Annotated[typing.ClassVar[int], "m"]]  # noqa: UP045
-            }
-        }
+@pytest.mark.skipif(
+    sys.version_info < (3, 11),
+    reason="typing refuses a bare special form as an Annotated argument before 3.11",
+)
+def test_the_object_path_accepts_annotated_metadata():
+    cls = type(
+        "Probe",
+        (Struct,),
+        {"__annotations__": {"x": typing.Annotated[int, typing.ClassVar]}},
     )
 
-    assert cls is None
-    assert error is not None
-
-    cls, error = build({"__annotations__": {"x": "Optional[Annotated[ClassVar[int], m]]"}})
-
-    assert cls is None
-    assert error is not None
+    assert cls._struct_fields_ == ("x",)
 
 
 @pytest.mark.skipif(sys.version_info < (3, 14), reason="3.14 evaluates resolvable annotations")
 def test_an_unresolvable_annotation_arrives_as_an_object_and_is_accepted():
+    import annotationlib
+
     class WithNope(Struct):
         x: Nope  # noqa: F821
 
+    annotation = annotationlib.get_annotations(
+        WithNope, format=annotationlib.Format.FORWARDREF
+    )["x"]
+
+    assert not isinstance(annotation, str)
     assert WithNope._struct_fields_ == ("x",)
 
 
@@ -135,6 +121,45 @@ def test_an_unhashable_struct_refuses_the_cache():
 
     with pytest.raises(TypeError, match="unhashable"):
         Mutable(1).slow()
+
+
+def test_a_body_defined_eq_is_unhashable_and_the_cache_refuses():
+    class BodyEq(Struct):  # noqa: PLW1641 -- the unhashability is the point
+        x: int
+
+        def __eq__(self, other: object) -> bool:
+            return True
+
+        @functools.cache  # noqa: B019 -- the refusal is the point
+        def slow(self) -> int:
+            return self.x
+
+    with pytest.raises(TypeError, match="unhashable"):
+        BodyEq(1).slow()
+
+
+def test_eq_false_hashes_by_identity_and_the_cache_returns_stale_values():
+    class Identity(Struct, eq=False):
+        x: int
+
+        @functools.cache  # noqa: B019 -- the stale hit is the point
+        def slow(self) -> int:
+            return self.x * 2
+
+    instance = Identity(1)
+
+    assert instance.slow() == 2
+
+    set_field(instance, "x", 5)
+
+    assert instance.slow() == 2
+
+
+def test_eq_false_mutable_structs_are_hashable():
+    class MutableIdentity(Struct, eq=False, frozen=False):
+        x: int
+
+    assert isinstance(hash(MutableIdentity(1)), int)
 
 
 def test_cached_property_works_when_a_co_base_carries_a_dict():
