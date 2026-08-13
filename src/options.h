@@ -12,17 +12,6 @@ struct options {
 	bool weakref;
 };
 
-static inline bool options_agree(struct options const left, struct options const right) {
-	return (
-		left.frozen == right.frozen &&
-		left.eq == right.eq &&
-		left.order == right.order &&
-		left.repr == right.repr &&
-		left.match_args == right.match_args &&
-		left.weakref == right.weakref
-	);
-}
-
 struct options_request {
 	enum { OPTIONS_RESOLVED, OPTIONS_REJECTED } tag;
 	struct options options;

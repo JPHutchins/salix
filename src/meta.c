@@ -54,6 +54,8 @@ static struct options inherited_options(PyObject * bases, StructType const * beh
 static bool any_struct_base_is_mutable(PyObject * bases);
 static bool has_weakref_slot(StructType const * base);
 static bool any_base_has_weakref_slot(PyObject * bases);
+static bool weakref_expected(struct options options, PyObject * bases);
+static bool weakref_slot_is_new(struct options options, PyObject * bases);
 static struct options base_options(StructType const * base);
 static PyObject * build_class_namespace(
 	PyObject * original_namespace,
@@ -122,6 +124,7 @@ static enum result install_fields(
 static enum result settle_planned(
 	StructType * struct_class,
 	StructType const * base,
+	PyObject * bases,
 	PyObject * name,
 	struct field_plan const * plan,
 	PyObject * original_namespace,
@@ -288,9 +291,7 @@ static PyObject * build_struct_class(
 
 	if (
 		metatype == &StructMeta_Type &&
-		request.options.weakref &&
-		!inherited.weakref &&
-		!any_base_has_weakref_slot(bases) &&
+		weakref_slot_is_new(request.options, bases) &&
 		winning_metatype(metatype, bases)->tp_new != StructMeta_new
 	) {
 		PyErr_SetString(
@@ -371,6 +372,7 @@ static PyObject * build_struct_class(
 			settle_planned(
 				struct_class,
 				base,
+				bases,
 				name,
 				&plan,
 				original_namespace,
@@ -613,6 +615,14 @@ static bool any_base_has_weakref_slot(PyObject * const bases) {
 	return false;
 }
 
+static bool weakref_expected(struct options const options, PyObject * const bases) {
+	return options.weakref || any_base_has_weakref_slot(bases);
+}
+
+static bool weakref_slot_is_new(struct options const options, PyObject * const bases) {
+	return options.weakref && !any_base_has_weakref_slot(bases);
+}
+
 static PyObject * build_class_namespace(
 	PyObject * const original_namespace,
 	PyObject * const all_names,
@@ -770,6 +780,7 @@ enum hash_binding {
 };
 
 struct binding_plan {
+	bool answered_by_body;
 	bool rebind_comparison;
 	bool rebind_not_equal;
 	bool rebind_representation;
@@ -788,6 +799,7 @@ static struct binding_plan binding_plan(
 	bool const body_defines_hash
 ) {
 	struct binding_plan plan = {
+		.answered_by_body = body_defines_eq || derive_not_equal,
 		.rebind_comparison = options.eq != inherited.eq,
 		.rebind_not_equal = options.eq != inherited.eq && !(body_defines_eq || derive_not_equal),
 		.rebind_representation = options.repr != inherited.repr,
@@ -808,6 +820,32 @@ static struct binding_plan binding_plan(
 	return plan;
 }
 
+static bool settled_by_the_plan(char const * const name, struct binding_plan const plan) {
+	if (
+		strcmp(name, "__eq__") == 0 ||
+		strcmp(name, "__lt__") == 0 ||
+		strcmp(name, "__le__") == 0 ||
+		strcmp(name, "__gt__") == 0 ||
+		strcmp(name, "__ge__") == 0
+	) {
+		return plan.rebind_comparison;
+	}
+
+	if (strcmp(name, "__ne__") == 0) {
+		return plan.rebind_not_equal || plan.answered_by_body;
+	}
+
+	if (strcmp(name, "__repr__") == 0) {
+		return plan.rebind_representation;
+	}
+
+	if (strcmp(name, "__setattr__") == 0 || strcmp(name, "__delattr__") == 0) {
+		return plan.rebind_mutability;
+	}
+
+	return plan.hash == HASH_BIND || plan.hash == HASH_NONE;
+}
+
 static enum result apply_options(
 	PyObject * const namespace,
 	struct options const options,
@@ -819,7 +857,6 @@ static enum result apply_options(
 ) {
 	static char const * const comparison[] = {
 		"__eq__",
-		"__ne__",
 		"__lt__",
 		"__le__",
 		"__gt__",
@@ -840,11 +877,19 @@ static enum result apply_options(
 		PyDict_GetItemString(namespace, "__hash__") != NULL
 	);
 
-	if ((body_defines_eq || derive_not_equal) && rebind(namespace, not_equal, false) != RESULT_OK) {
+	if (
+		plan.answered_by_body &&
+		PyDict_GetItemString(namespace, "__ne__") == NULL &&
+		rebind(namespace, not_equal, false) != RESULT_OK
+	) {
 		return RESULT_ERROR;
 	}
 
 	if (plan.rebind_comparison && rebind(namespace, comparison, options.eq) != RESULT_OK) {
+		return RESULT_ERROR;
+	}
+
+	if (plan.rebind_not_equal && rebind(namespace, not_equal, options.eq) != RESULT_OK) {
 		return RESULT_ERROR;
 	}
 
@@ -1220,6 +1265,7 @@ static enum result refuse_unplanned(StructType const * const struct_class) {
 static enum result settle_planned(
 	StructType * const struct_class,
 	StructType const * const base,
+	PyObject * const bases,
 	PyObject * const name,
 	struct field_plan const * const plan,
 	PyObject * const original_namespace,
@@ -1292,17 +1338,10 @@ static enum result settle_planned(
 		return refuse_unplanned(struct_class);
 	}
 
-	if (options.weakref && ((PyTypeObject *) struct_class)->tp_weaklistoffset == 0) {
+	bool const carries_slot = ((PyTypeObject *) struct_class)->tp_weaklistoffset != 0;
+
+	if (carries_slot != weakref_expected(options, bases)) {
 		return refuse_unplanned(struct_class);
-	}
-
-	Py_SETREF(struct_class->struct_defaults, Py_NewRef(plan->defaults));
-	struct_class->struct_default_count = PyTuple_GET_SIZE(plan->defaults);
-	struct_class->struct_options = options;
-	struct_class->struct_resolves_body_eq = body_defines_eq || inherits_body_eq;
-
-	if (restore_stripped(struct_class, original_namespace, class_dict, body_dunders) != RESULT_OK) {
-		return RESULT_ERROR;
 	}
 
 	struct binding_plan const bindings = binding_plan(
@@ -1314,6 +1353,20 @@ static enum result settle_planned(
 		derive_not_equal,
 		PyDict_GetItemString(original_namespace, "__hash__") != NULL
 	);
+
+	for (char const * const * name = body_dunders; *name != NULL; name += 1) {
+		if (
+			PyDict_GetItemString(class_dict, *name) != NULL &&
+			PyDict_GetItemString(original_namespace, *name) == NULL &&
+			!settled_by_the_plan(*name, bindings)
+		) {
+			return refuse_unplanned(struct_class);
+		}
+	}
+
+	if (restore_stripped(struct_class, original_namespace, class_dict, body_dunders) != RESULT_OK) {
+		return RESULT_ERROR;
+	}
 
 	if (
 		bindings.rebind_comparison &&
@@ -1329,10 +1382,7 @@ static enum result settle_planned(
 		return RESULT_ERROR;
 	}
 
-	if (
-		(body_defines_eq || derive_not_equal) &&
-		PyDict_GetItemString(class_dict, "__ne__") == NULL
-	) {
+	if (bindings.answered_by_body && PyDict_GetItemString(class_dict, "__ne__") == NULL) {
 		/* bind_not_equal's answered case on a live class: the fresh build
 		 * binds object's __ne__ when the body answered equality itself. */
 		PY_OWNED(object_ne, PyObject_GetAttrString((PyObject *) &PyBaseObject_Type, "__ne__"));
@@ -1410,6 +1460,11 @@ static enum result settle_planned(
 			}
 		}
 	}
+
+	Py_SETREF(struct_class->struct_defaults, Py_NewRef(plan->defaults));
+	struct_class->struct_default_count = PyTuple_GET_SIZE(plan->defaults);
+	struct_class->struct_options = options;
+	struct_class->struct_resolves_body_eq = body_defines_eq || inherits_body_eq;
 
 	return RESULT_OK;
 }

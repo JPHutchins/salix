@@ -560,6 +560,52 @@ class TestAMetaclassSubclass:
         assert built(1, 7) == built(1, 8)
         assert hash(built(1, 7)) == hash(1)
 
+    def test_a_delegate_that_injects_a_dunder_is_refused(self):
+        """A dunder the delegate adds while the plan binds nothing for it
+        would behave differently from the fresh build, so the settle refuses
+        rather than silently keep it.
+        """
+
+        class Injecting(META):
+            def __new__(metacls, name, bases, namespace, **keywords):
+                if name == "Base":
+                    return super().__new__(metacls, name, bases, namespace, **keywords)
+
+                namespace["__eq__"] = lambda self, other: True
+
+                return super().__new__(metacls, name, bases, namespace, **keywords)
+
+        class Base(Struct, metaclass=Injecting):
+            x: int
+
+        with pytest.raises(TypeError, match="did not plan"):
+            META("Built", (Base,), {"__annotations__": {"y": int}})
+
+    def test_a_delegate_returning_a_weakref_slotted_class_is_refused(self):
+        """A lying-around class built with weakref=True carries a slot the
+        fresh build of this call would not, so the settle refuses it.
+        """
+
+        calls = []
+
+        class Substituting(META):
+            def __new__(metacls, name, bases, namespace, **keywords):
+                calls.append(1)
+
+                if len(calls) <= 2:
+                    return super().__new__(metacls, name, bases, namespace, **keywords)
+
+                return Built
+
+        class Base(Struct, metaclass=Substituting):
+            x: int
+
+        class Built(Base, weakref=True):
+            y: int = 99
+
+        with pytest.raises(TypeError, match="did not plan"):
+            META("Built", (Base,), {"__annotations__": {"y": int}})
+
     def test_a_delegate_returning_same_count_defaults_is_corrected_not_accepted(self):
         """A lying-around class can match the plan's name, fields, and default
         count while carrying different default values; the settle installs the
