@@ -2,12 +2,12 @@ from pathlib import Path
 
 from camas import Claude, Config, Parallel, Project, Sequential, Task, by_suffix
 
-C_SOURCES = by_suffix((".c", ".h"), default=tuple(sorted(str(p) for p in Path("src").glob("*.[ch]"))))
+C_SOURCES = by_suffix((".c", ".h"), default=tuple(sorted(str(p) for p in Path("src").rglob("*.[ch]"))))
 
 # Analysis takes translation units; a header is reached through the unit that
 # includes it, and compiling one alone is an error under -Werror.
 C_TRANSLATION_UNITS = by_suffix(
-    (".c",), default=tuple(sorted(str(p) for p in Path("src").glob("*.c")))
+    (".c",), default=tuple(sorted(str(p) for p in Path("src").rglob("*.c")))
 )
 NIX_SOURCES = by_suffix(
     (".nix",),

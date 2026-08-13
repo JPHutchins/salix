@@ -2,6 +2,7 @@
 
 #include "construct.h"
 #include "../result.h"
+#include "../types.h"
 
 /* A list of statements rather than a static array of {type, constructor}: on
  * Windows a `PyTypeObject` is imported from python3.dll, and the address of a
