@@ -200,6 +200,16 @@ def test_a_body_hash_wins_over_the_identity_hash_under_eq_false():
     assert hash(SevenHash(1)) == 7
 
 
+def test_a_value_returning_body_hash_is_hashable_under_the_default_options():
+    class ValueHash(Struct):
+        x: int
+
+        def __hash__(self) -> int:
+            return self.x
+
+    assert hash(ValueHash(3)) == 3
+
+
 def test_equality_inherited_from_a_struct_base_makes_the_subclass_unhashable():
     class EqStruct(Struct):  # noqa: PLW1641 -- the inherited unhashability is the point
         x: int
