@@ -202,6 +202,22 @@ def test_a_co_base_deepcopy_is_deferred_to():
     assert copied.was_copied is True
 
 
+def test_an_identity_co_base_deepcopy_result_is_not_memoized_like_copy_dot_py():
+    class Identity:
+        def __deepcopy__(self, memo: dict) -> "Identity":
+            return self
+
+    class RealStruct(Struct, Identity, frozen=False):
+        x: int
+
+    instance = RealStruct(1)
+    memo = {}
+    copied = copy.deepcopy(instance, memo)
+
+    assert copied is instance
+    assert id(instance) not in memo
+
+
 def test_a_one_argument_classmethod_co_base_deepcopy_fails_like_copy_dot_py():
     class CM:
         @classmethod
@@ -289,6 +305,23 @@ def test_a_dispatch_table_copier_is_honored_for_a_real_struct():
         del copy.dispatch_table[Point]
 
 
+def test_an_identity_dispatch_table_result_is_not_memoized_like_copy_dot_py():
+    def identity_copier(instance):
+        return "identity"
+
+    copy.dispatch_table[Point] = identity_copier
+
+    try:
+        instance = Point(1, "two")
+        memo = {}
+        copied = copy.deepcopy(instance, memo)
+
+        assert copied is instance
+        assert id(instance) not in memo
+    finally:
+        del copy.dispatch_table[Point]
+
+
 def test_a_dispatch_table_copier_is_honored_for_an_impostor():
     def special_deepcopy(instance):
         return (list, ([1, 2, 3],))
@@ -332,6 +365,21 @@ def test_an_impostor_with_reduce_ex_none_falls_back_to_reduce():
 
     assert type(copied) is list
     assert copied == [1, 2, 3]
+
+
+def test_an_impostor_string_reduce_result_is_not_memoized_like_copy_dot_py():
+    class StringReduce(Struct.__mro__[1], list):
+        __reduce_ex__ = None
+
+        def __reduce__(self):
+            return "identity"
+
+    instance = StringReduce()
+    memo = {}
+    copied = copy.deepcopy(instance, memo)
+
+    assert copied is instance
+    assert id(instance) not in memo
 
 
 def test_an_uncopyable_impostor_raises_copy_dot_error():
@@ -503,3 +551,16 @@ def test_a_failed_deepcopy_leaves_no_partial_shell_in_the_memo():
         copy.deepcopy(instance, memo)
 
     assert id(instance) not in memo
+
+
+def test_a_field_that_clears_the_memo_still_raises_its_own_exception():
+    class Saboteur:
+        def __deepcopy__(self, memo: dict):
+            memo.clear()
+            raise ValueError("the field's own error")
+
+    class Holder(Struct):
+        field: Saboteur
+
+    with pytest.raises(ValueError, match="the field's own error"):
+        copy.deepcopy(Holder(Saboteur()))

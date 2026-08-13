@@ -76,8 +76,15 @@ static PyObject * deferred_co_base_copy(PyObject * const self, PyObject * const 
 	PyObject * const mro = cls->tp_mro;
 	Py_ssize_t mixin = 0;
 
-	while (PyTuple_GET_ITEM(mro, mixin) != (PyObject *) &StructMixin_Type) {
+	while (
+		mixin < PyTuple_GET_SIZE(mro) &&
+		PyTuple_GET_ITEM(mro, mixin) != (PyObject *) &StructMixin_Type
+	) {
 		mixin += 1;
+	}
+
+	if (mixin == PyTuple_GET_SIZE(mro)) {
+		return NULL;
 	}
 
 	for (Py_ssize_t i = mixin + 1; i < PyTuple_GET_SIZE(mro); i += 1) {
@@ -427,7 +434,15 @@ static PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 }
 
 static PyObject * memo_failure(PyObject * const memo, PyObject * const key) {
-	PyDict_DelItem(memo, key);
+	PyObject * error_type = NULL, *error_value = NULL, *traceback = NULL;
+
+	PyErr_Fetch(&error_type, &error_value, &traceback);
+
+	if (PyDict_DelItem(memo, key) < 0) {
+		PyErr_Clear();
+	}
+
+	PyErr_Restore(error_type, error_value, traceback);
 
 	return NULL;
 }
@@ -463,7 +478,7 @@ static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) 
 			copy_delegate(self, memo, memo, "__deepcopy__", "un(deep)copyable", true)
 		);
 
-		if (delegated == NULL || PyDict_SetItem(memo, key, delegated) < 0) {
+		if (delegated == NULL || (delegated != self && PyDict_SetItem(memo, key, delegated) < 0)) {
 			return NULL;
 		}
 
@@ -480,7 +495,7 @@ static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) 
 	);
 
 	if (deferred != NULL) {
-		if (PyDict_SetItem(memo, key, deferred) < 0) {
+		if (deferred != self && PyDict_SetItem(memo, key, deferred) < 0) {
 			return NULL;
 		}
 
@@ -500,7 +515,10 @@ static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) 
 
 		PY_MOVABLE(reconstructed, copy_reconstruct(self, reduced, copy_module, memo));
 
-		if (reconstructed == NULL || PyDict_SetItem(memo, key, reconstructed) < 0) {
+		if (
+			reconstructed == NULL ||
+			(reconstructed != self && PyDict_SetItem(memo, key, reconstructed) < 0)
+		) {
 			return NULL;
 		}
 
