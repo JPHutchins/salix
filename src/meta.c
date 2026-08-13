@@ -54,6 +54,8 @@ static struct options inherited_options(PyObject * bases, StructType const * beh
 static bool any_struct_base_is_mutable(PyObject * bases);
 static bool has_weakref_slot(StructType const * base);
 static bool any_base_has_weakref_slot(PyObject * bases);
+static bool weakref_expected(struct options options, PyObject * bases);
+static bool weakref_slot_is_new(struct options options, PyObject * bases);
 static struct options base_options(StructType const * base);
 static PyObject * build_class_namespace(
 	PyObject * original_namespace,
@@ -84,13 +86,6 @@ static enum result apply_options(
 	bool derive_not_equal
 );
 static enum result rebind(PyObject * namespace, char const * const * names, bool from_mixin);
-static enum result bind_not_equal(PyObject * namespace, bool answered_by_a_body);
-static enum result bind_hash(
-	PyObject * namespace,
-	struct options options,
-	bool body_defines_eq,
-	bool inherits_body_eq
-);
 static enum result drop_class_variables(PyObject * namespace, PyObject * all_names);
 static enum result refuse_colliding_methods(
 	PyObject * original_namespace,
@@ -126,11 +121,33 @@ static enum result install_fields(
 	struct options options,
 	bool resolves_body_eq
 );
-static enum result reject_unless_planned(
-	StructType const * struct_class,
+static enum result settle_planned(
+	StructType * struct_class,
+	StructType const * base,
+	PyObject * bases,
+	PyObject * name,
 	struct field_plan const * plan,
-	struct options options
+	PyObject * original_namespace,
+	struct options options,
+	struct options inherited,
+	bool frozen_across_bases,
+	bool body_defines_eq,
+	bool inherits_body_eq,
+	bool derive_not_equal
 );
+static enum result settle_rebind(
+	StructType * struct_class,
+	PyObject * original_namespace,
+	char const * const * names,
+	bool from_mixin
+);
+static enum result restore_stripped(
+	StructType * struct_class,
+	PyObject * original_namespace,
+	PyObject * class_dict,
+	char const * const * names
+);
+static enum result refuse_unplanned(StructType const * struct_class);
 static enum result install_post_init(StructType * struct_class);
 static bool defines_own_init(StructType const * struct_class);
 static PyObject * StructMeta_call(PyObject * self, PyObject * args, PyObject * keywords);
@@ -272,6 +289,20 @@ static PyObject * build_struct_class(
 		return NULL;
 	}
 
+	if (
+		metatype == &StructMeta_Type &&
+		weakref_slot_is_new(request.options, bases) &&
+		winning_metatype(metatype, bases)->tp_new != StructMeta_new
+	) {
+		PyErr_SetString(
+			PyExc_TypeError,
+			"weakref=True cannot cross a metaclass __new__ that hands the build "
+			"off: the re-entered call cannot add the weakref slot"
+		);
+
+		return NULL;
+	}
+
 	struct field_plan plan = field_plan_build(base, original_namespace);
 
 	if (field_plan_failed(&plan)) {
@@ -284,7 +315,7 @@ static PyObject * build_struct_class(
 		refuse_displaced_slots(
 				original_namespace,
 				plan.all_names,
-				request.options.weakref || any_base_has_weakref_slot(bases)
+				weakref_expected(request.options, bases)
 			) !=
 			RESULT_OK
 	) {
@@ -307,6 +338,7 @@ static PyObject * build_struct_class(
 	}
 
 	bool const inherits_body_eq = inherited_equality.from_a_body;
+	bool const frozen_across_bases = request.options.frozen && any_struct_base_is_mutable(bases);
 
 	PY_OWNED(
 		namespace,
@@ -317,7 +349,7 @@ static PyObject * build_struct_class(
 			request.options,
 			base,
 			inherited,
-			request.options.frozen && any_struct_base_is_mutable(bases),
+			frozen_across_bases,
 			body_defines_eq,
 			inherits_body_eq,
 			inherited_equality.needs_derived_not_equal
@@ -337,7 +369,20 @@ static PyObject * build_struct_class(
 				request.options,
 				body_defines_eq || inherits_body_eq
 			) :
-			reject_unless_planned(struct_class, &plan, request.options)
+			settle_planned(
+				struct_class,
+				base,
+				bases,
+				name,
+				&plan,
+				original_namespace,
+				request.options,
+				inherited,
+				frozen_across_bases,
+				body_defines_eq,
+				inherits_body_eq,
+				inherited_equality.needs_derived_not_equal
+			)
 		);
 
 		if (settled != RESULT_OK) {
@@ -570,6 +615,14 @@ static bool any_base_has_weakref_slot(PyObject * const bases) {
 	return false;
 }
 
+static bool weakref_expected(struct options const options, PyObject * const bases) {
+	return options.weakref || any_base_has_weakref_slot(bases);
+}
+
+static bool weakref_slot_is_new(struct options const options, PyObject * const bases) {
+	return options.weakref && !any_base_has_weakref_slot(bases);
+}
+
 static PyObject * build_class_namespace(
 	PyObject * const original_namespace,
 	PyObject * const all_names,
@@ -719,6 +772,88 @@ static enum result set_match_args(
 	);
 }
 
+enum hash_binding {
+	HASH_BODY_DEFINED,
+	HASH_INHERITED_EQ,
+	HASH_NONE,
+	HASH_BIND,
+};
+
+struct binding_plan {
+	bool answered_by_body;
+	bool rebind_comparison;
+	bool rebind_not_equal;
+	bool rebind_representation;
+	bool rebind_mutability;
+	enum hash_binding hash;
+	bool match_args_wanted;
+};
+
+static struct binding_plan binding_plan(
+	struct options const options,
+	struct options const inherited,
+	bool const frozen_across_bases,
+	bool const body_defines_eq,
+	bool const inherits_body_eq,
+	bool const derive_not_equal,
+	bool const body_defines_hash
+) {
+	struct binding_plan plan = {
+		.answered_by_body = body_defines_eq || derive_not_equal,
+		.rebind_comparison = options.eq != inherited.eq,
+		.rebind_not_equal = options.eq != inherited.eq && !(body_defines_eq || derive_not_equal),
+		.rebind_representation = options.repr != inherited.repr,
+		.rebind_mutability = options.frozen != inherited.frozen || frozen_across_bases,
+		.match_args_wanted = options.match_args,
+	};
+
+	if (body_defines_hash) {
+		plan.hash = HASH_BODY_DEFINED;
+	} else if (inherits_body_eq) {
+		plan.hash = HASH_INHERITED_EQ;
+	} else if (body_defines_eq || (options.eq && !options.frozen)) {
+		plan.hash = HASH_NONE;
+	} else {
+		plan.hash = HASH_BIND;
+	}
+
+	return plan;
+}
+
+static bool settled_by_the_plan(char const * const name, struct binding_plan const plan) {
+	if (
+		strcmp(name, "__eq__") == 0 ||
+		strcmp(name, "__lt__") == 0 ||
+		strcmp(name, "__le__") == 0 ||
+		strcmp(name, "__gt__") == 0 ||
+		strcmp(name, "__ge__") == 0
+	) {
+		return plan.rebind_comparison;
+	}
+
+	if (strcmp(name, "__ne__") == 0) {
+		return plan.rebind_not_equal || plan.answered_by_body;
+	}
+
+	if (
+		strcmp(name, "__init__") == 0 ||
+		strcmp(name, "__post_init__") == 0 ||
+		strcmp(name, "__new__") == 0
+	) {
+		return false;
+	}
+
+	if (strcmp(name, "__repr__") == 0) {
+		return plan.rebind_representation;
+	}
+
+	if (strcmp(name, "__setattr__") == 0 || strcmp(name, "__delattr__") == 0) {
+		return plan.rebind_mutability;
+	}
+
+	return plan.hash == HASH_BIND || plan.hash == HASH_NONE;
+}
+
 static enum result apply_options(
 	PyObject * const namespace,
 	struct options const options,
@@ -730,39 +865,72 @@ static enum result apply_options(
 ) {
 	static char const * const comparison[] = {
 		"__eq__",
-		"__ne__",
 		"__lt__",
 		"__le__",
 		"__gt__",
 		"__ge__",
 		NULL,
 	};
+	static char const * const not_equal[] = {"__ne__", NULL};
 	static char const * const representation[] = {"__repr__", NULL};
 	static char const * const mutability[] = {"__setattr__", "__delattr__", NULL};
+	static char const * const hash_name[] = {"__hash__", NULL};
+	struct binding_plan const plan = binding_plan(
+		options,
+		inherited,
+		frozen_across_bases,
+		body_defines_eq,
+		inherits_body_eq,
+		derive_not_equal,
+		PyDict_GetItemString(namespace, "__hash__") != NULL
+	);
 
-	if (bind_not_equal(namespace, body_defines_eq || derive_not_equal) != RESULT_OK) {
+	if (
+		plan.answered_by_body &&
+		PyDict_GetItemString(namespace, "__ne__") == NULL &&
+		rebind(namespace, not_equal, false) != RESULT_OK
+	) {
 		return RESULT_ERROR;
 	}
 
-	if (options.eq != inherited.eq && rebind(namespace, comparison, options.eq) != RESULT_OK) {
+	if (plan.rebind_comparison && rebind(namespace, comparison, options.eq) != RESULT_OK) {
+		return RESULT_ERROR;
+	}
+
+	if (plan.rebind_not_equal && rebind(namespace, not_equal, options.eq) != RESULT_OK) {
 		return RESULT_ERROR;
 	}
 
 	if (
-		options.repr != inherited.repr &&
+		plan.rebind_representation &&
 		rebind(namespace, representation, options.repr) != RESULT_OK
 	) {
 		return RESULT_ERROR;
 	}
 
-	if (
-		(options.frozen != inherited.frozen || frozen_across_bases) &&
-		rebind(namespace, mutability, options.frozen) != RESULT_OK
-	) {
+	if (plan.rebind_mutability && rebind(namespace, mutability, options.frozen) != RESULT_OK) {
 		return RESULT_ERROR;
 	}
 
-	return bind_hash(namespace, options, body_defines_eq, inherits_body_eq);
+	switch (plan.hash) {
+		case HASH_BODY_DEFINED:
+		case HASH_INHERITED_EQ:
+			break;
+		case HASH_NONE:
+			if (PyDict_SetItemString(namespace, "__hash__", Py_None) != 0) {
+				return RESULT_ERROR;
+			}
+
+			break;
+		case HASH_BIND:
+			if (rebind(namespace, hash_name, options.eq) != RESULT_OK) {
+				return RESULT_ERROR;
+			}
+
+			break;
+	}
+
+	return RESULT_OK;
 }
 
 static enum result rebind(
@@ -788,35 +956,6 @@ static enum result rebind(
 	}
 
 	return RESULT_OK;
-}
-
-static enum result bind_not_equal(PyObject * const namespace, bool const answered_by_a_body) {
-	static char const * const not_equal[] = {"__ne__", NULL};
-
-	return answered_by_a_body ? rebind(namespace, not_equal, false) : RESULT_OK;
-}
-
-static enum result bind_hash(
-	PyObject * const namespace,
-	struct options const options,
-	bool const body_defines_eq,
-	bool const inherits_body_eq
-) {
-	if (PyDict_GetItemString(namespace, "__hash__") != NULL) {
-		return RESULT_OK;
-	}
-
-	if (inherits_body_eq) {
-		return RESULT_OK;
-	}
-
-	if (body_defines_eq || (options.eq && !options.frozen)) {
-		return PyDict_SetItemString(namespace, "__hash__", Py_None) == 0 ? RESULT_OK : RESULT_ERROR;
-	}
-
-	static char const * const hash_name[] = {"__hash__", NULL};
-
-	return rebind(namespace, hash_name, options.eq);
 }
 
 static enum result drop_class_variables(PyObject * const namespace, PyObject * const all_names) {
@@ -1088,11 +1227,91 @@ static PyTypeObject * winning_metatype(PyTypeObject * const requested, PyObject 
 	return winner;
 }
 
-static enum result reject_unless_planned(
-	StructType const * const struct_class,
-	struct field_plan const * const plan,
-	struct options const options
+static enum result settle_rebind(
+	StructType * const struct_class,
+	PyObject * const original_namespace,
+	char const * const * const names,
+	bool const from_mixin
 ) {
+	PyObject * const source = (
+		from_mixin ? (PyObject *) &StructMixin_Type :
+		(PyObject *) &PyBaseObject_Type
+	);
+
+	for (char const * const * name = names; *name != NULL; name += 1) {
+		if (PyDict_GetItemString(original_namespace, *name) != NULL) {
+			continue;
+		}
+
+		PY_OWNED(bound, PyObject_GetAttrString(source, *name));
+		PY_OWNED(unicode_name, PyUnicode_FromString(*name));
+
+		if (
+			bound == NULL ||
+			unicode_name == NULL ||
+			PyType_Type.tp_setattro((PyObject *) struct_class, unicode_name, bound) < 0
+		) {
+			return RESULT_ERROR;
+		}
+	}
+
+	return RESULT_OK;
+}
+
+static enum result refuse_unplanned(StructType const * const struct_class) {
+	PyErr_Format(
+		PyExc_TypeError,
+		"%.200s.__new__ returned a struct class this call did not plan: its "
+		"metaclass is re-entered without the keywords or the class body's "
+		"defaults, so what it built is not what was asked for",
+		Py_TYPE(struct_class)->tp_name
+	);
+
+	return RESULT_ERROR;
+}
+
+static enum result settle_planned(
+	StructType * const struct_class,
+	StructType const * const base,
+	PyObject * const bases,
+	PyObject * const name,
+	struct field_plan const * const plan,
+	PyObject * const original_namespace,
+	struct options const options,
+	struct options const inherited,
+	bool const frozen_across_bases,
+	bool const body_defines_eq,
+	bool const inherits_body_eq,
+	bool const derive_not_equal
+) {
+	static char const * const comparison[] = {
+		"__eq__",
+		"__lt__",
+		"__le__",
+		"__gt__",
+		"__ge__",
+		NULL,
+	};
+	static char const * const not_equal[] = {"__ne__", NULL};
+	static char const * const representation[] = {"__repr__", NULL};
+	static char const * const mutability[] = {"__setattr__", "__delattr__", NULL};
+	static char const * const hash_name[] = {"__hash__", NULL};
+	static char const * const body_dunders[] = {
+		"__eq__",
+		"__ne__",
+		"__lt__",
+		"__le__",
+		"__gt__",
+		"__ge__",
+		"__repr__",
+		"__setattr__",
+		"__delattr__",
+		"__hash__",
+		"__init__",
+		"__post_init__",
+		"__new__",
+		NULL,
+	};
 	PY_OWNED(planned, PyList_AsTuple(plan->all_names));
 
 	if (planned == NULL) {
@@ -1106,23 +1325,203 @@ static enum result reject_unless_planned(
 		return RESULT_ERROR;
 	}
 
-	if (
-		same_fields == 1 &&
-		struct_class->struct_default_count == PyTuple_GET_SIZE(plan->defaults) &&
-		options_agree(struct_class->struct_options, options)
-	) {
-		return RESULT_OK;
+	PY_OWNED(class_dict, struct_type_dict(&struct_class->heap_type.ht_type));
+
+	if (class_dict == NULL) {
+		return RESULT_ERROR;
 	}
 
-	PyErr_Format(
-		PyExc_TypeError,
-		"%.200s.__new__ returned a struct class this call did not plan: its "
-		"metaclass is re-entered without the keywords or the class body's "
-		"defaults, so what it built is not what was asked for",
-		Py_TYPE(struct_class)->tp_name
+	PyObject * const built_name = (PyObject *) struct_class->heap_type.ht_name;
+	int const same_name = (
+		built_name != NULL ? PyObject_RichCompareBool(built_name, name, Py_EQ) :
+		0
 	);
 
-	return RESULT_ERROR;
+	if (same_name < 0) {
+		return RESULT_ERROR;
+	}
+
+	int const same_bases = PyObject_RichCompareBool(
+		((PyTypeObject *) struct_class)->tp_bases,
+		bases,
+		Py_EQ
+	);
+
+	if (same_bases < 0) {
+		return RESULT_ERROR;
+	}
+
+	if (
+		same_fields == 0 ||
+		same_name == 0 ||
+		same_bases == 0 ||
+		find_struct_base(((PyTypeObject *) struct_class)->tp_bases) != base
+	) {
+		return refuse_unplanned(struct_class);
+	}
+
+	bool const carries_slot = ((PyTypeObject *) struct_class)->tp_weaklistoffset != 0;
+
+	if (carries_slot != weakref_expected(options, bases)) {
+		return refuse_unplanned(struct_class);
+	}
+
+	struct binding_plan const bindings = binding_plan(
+		options,
+		inherited,
+		frozen_across_bases,
+		body_defines_eq,
+		inherits_body_eq,
+		derive_not_equal,
+		PyDict_GetItemString(original_namespace, "__hash__") != NULL
+	);
+
+	for (char const * const * name = body_dunders; *name != NULL; name += 1) {
+		if (
+			PyDict_GetItemString(class_dict, *name) != NULL &&
+			PyDict_GetItemString(original_namespace, *name) == NULL &&
+			!settled_by_the_plan(*name, bindings)
+		) {
+			return refuse_unplanned(struct_class);
+		}
+	}
+
+	if (restore_stripped(struct_class, original_namespace, class_dict, body_dunders) != RESULT_OK) {
+		return RESULT_ERROR;
+	}
+
+	if (
+		bindings.rebind_comparison &&
+		settle_rebind(struct_class, original_namespace, comparison, options.eq) != RESULT_OK
+	) {
+		return RESULT_ERROR;
+	}
+
+	if (
+		bindings.rebind_not_equal &&
+		settle_rebind(struct_class, original_namespace, not_equal, options.eq) != RESULT_OK
+	) {
+		return RESULT_ERROR;
+	}
+
+	if (bindings.answered_by_body && PyDict_GetItemString(original_namespace, "__ne__") == NULL) {
+		/* bind_not_equal's answered case on a live class: the fresh build
+		 * binds object's __ne__ when the body answered equality itself. */
+		PY_OWNED(object_ne, PyObject_GetAttrString((PyObject *) &PyBaseObject_Type, "__ne__"));
+		PY_OWNED(ne_name, PyUnicode_FromString("__ne__"));
+
+		if (
+			object_ne == NULL ||
+			ne_name == NULL ||
+			PyType_Type.tp_setattro((PyObject *) struct_class, ne_name, object_ne) < 0
+		) {
+			return RESULT_ERROR;
+		}
+	}
+
+	if (
+		bindings.rebind_representation &&
+		settle_rebind(struct_class, original_namespace, representation, options.repr) != RESULT_OK
+	) {
+		return RESULT_ERROR;
+	}
+
+	if (
+		bindings.rebind_mutability &&
+		settle_rebind(struct_class, original_namespace, mutability, options.frozen) != RESULT_OK
+	) {
+		return RESULT_ERROR;
+	}
+
+	switch (bindings.hash) {
+		case HASH_BODY_DEFINED:
+		case HASH_INHERITED_EQ:
+			break;
+		case HASH_NONE: {
+			PY_OWNED(hash_name_obj, PyUnicode_FromString("__hash__"));
+
+			if (
+				hash_name_obj == NULL ||
+				PyType_Type.tp_setattro((PyObject *) struct_class, hash_name_obj, Py_None) < 0
+			) {
+				return RESULT_ERROR;
+			}
+
+			break;
+		}
+		case HASH_BIND:
+			if (
+				settle_rebind(struct_class, original_namespace, hash_name, options.eq) !=
+				RESULT_OK
+			) {
+				return RESULT_ERROR;
+			}
+
+			break;
+	}
+
+	if (bindings.match_args_wanted) {
+		if (PyDict_SetItemString(class_dict, "__match_args__", planned) < 0) {
+			return RESULT_ERROR;
+		}
+	} else {
+		PyObject * const body_match_args = PyDict_GetItemString(
+			original_namespace,
+			"__match_args__"
+		);
+
+		if (body_match_args != NULL) {
+			if (PyDict_SetItemString(class_dict, "__match_args__", body_match_args) < 0) {
+				return RESULT_ERROR;
+			}
+		} else if (PyDict_DelItemString(class_dict, "__match_args__") < 0) {
+			if (PyErr_ExceptionMatches(PyExc_KeyError)) {
+				PyErr_Clear();
+			} else {
+				return RESULT_ERROR;
+			}
+		}
+	}
+
+	Py_SETREF(struct_class->struct_defaults, Py_NewRef(plan->defaults));
+	struct_class->struct_default_count = PyTuple_GET_SIZE(plan->defaults);
+	struct_class->struct_options = options;
+	struct_class->struct_resolves_body_eq = body_defines_eq || inherits_body_eq;
+
+	if (defines_own_init(struct_class)) {
+		struct_class->heap_type.ht_type.tp_new = Struct_new;
+		struct_class->heap_type.ht_type.tp_vectorcall = NULL;
+	} else {
+		struct_class->heap_type.ht_type.tp_vectorcall = Struct_vectorcall;
+	}
+
+	return install_post_init(struct_class);
+}
+
+static enum result restore_stripped(
+	StructType * const struct_class,
+	PyObject * const original_namespace,
+	PyObject * const class_dict,
+	char const * const * const names
+) {
+	for (char const * const * name = names; *name != NULL; name += 1) {
+		PyObject * const body_value = PyDict_GetItemString(original_namespace, *name);
+
+		if (body_value == NULL || PyDict_GetItemString(class_dict, *name) == body_value) {
+			continue;
+		}
+
+		PY_OWNED(unicode_name, PyUnicode_FromString(*name));
+
+		if (
+			unicode_name == NULL ||
+			PyType_Type.tp_setattro((PyObject *) struct_class, unicode_name, body_value) < 0
+		) {
+			return RESULT_ERROR;
+		}
+	}
+
+	return RESULT_OK;
 }
 
 static enum result install_fields(
@@ -1197,7 +1596,7 @@ static enum result install_post_init(StructType * const struct_class) {
 		return RESULT_ERROR;
 	}
 
-	struct_class->struct_post_init = hook;
+	Py_XSETREF(struct_class->struct_post_init, hook);
 
 	return RESULT_OK;
 }

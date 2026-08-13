@@ -1,4 +1,5 @@
 import collections.abc
+import weakref
 
 import pytest
 
@@ -7,6 +8,11 @@ from salix import Struct
 
 MIXIN = Struct.__mro__[1]
 META = type(Struct)
+
+
+class Forwarding(META):
+    def __new__(metacls, name, bases, namespace, **keywords):
+        return super().__new__(metacls, name, bases, namespace, **keywords)
 
 # Both spellings of both, in one place: two literals drifted apart is a test
 # that silently stops covering a name.
@@ -331,37 +337,56 @@ class TestAMetaclassSubclass:
 
         assert built(1).y == 42
 
-    def test_a_delegate_that_writes_its_own_new_is_refused_not_mis_planned(self):
-        """The half of #55 that is answerable here: the class the delegate hands
-        back is checked against what this call planned, and a mismatch is an
-        error rather than a class that quietly is not the one asked for.
-
-        The class statement is not affected, and the test below this one says
-        so: there the winner is the requested metatype, so nothing is handed
-        off and the keywords and the body's defaults are still in hand.
+    def test_a_delegate_returning_a_foreign_class_is_refused(self):
+        """The class the delegate hands back is settled only when it is the
+        class this call describes; a class the delegate found lying around
+        keeps the refusal, so the caller never receives one whose fields are
+        not what was asked for.
         """
 
-        class Forwarding(META):
-            def __new__(metacls, name, bases, namespace, **keywords):
-                return super().__new__(metacls, name, bases, namespace, **keywords)
+        calls = []
 
-        class Base(Struct, metaclass=Forwarding):
+        class Wrong(META):
+            def __new__(metacls, name, bases, namespace, **keywords):
+                calls.append(1)
+
+                if len(calls) == 1:
+                    return super().__new__(metacls, name, bases, namespace, **keywords)
+
+                return Base
+
+        class Base(Struct, metaclass=Wrong):
             x: int
 
-        namespace = {"__annotations__": {"y": int}, "y": 42}
+        with pytest.raises(TypeError, match="did not plan"):
+            META("Built", (Base,), {"__annotations__": {"y": int}})
+
+    def test_a_delegate_that_renames_the_class_is_refused(self):
+        """The fields and the base can both match and the class still not be
+        the one this call describes, so the name is part of the check.
+        """
+
+        class Renaming(META):
+            def __new__(metacls, name, bases, namespace, **keywords):
+                return super().__new__(
+                    metacls,
+                    "Seeded" if name == "Seeded" else "Fake",
+                    bases,
+                    namespace,
+                    **keywords
+                )
+
+        class Seeded(Struct, metaclass=Renaming):
+            x: int
 
         with pytest.raises(TypeError, match="did not plan"):
-            META("Built", (Base,), namespace, order=True)
+            META("Built", (Seeded,), {"__annotations__": {"y": int}})
 
     def test_the_class_statement_reaches_none_of_that(self):
         """The hand-off only happens for an explicit metaclass call over a base
         whose metatype wins. Written out, because the refusal above would be a
         serious regression if it reached the ordinary spelling.
         """
-
-        class Forwarding(META):
-            def __new__(metacls, name, bases, namespace, **keywords):
-                return super().__new__(metacls, name, bases, namespace, **keywords)
 
         class Base(Struct, metaclass=Forwarding):
             x: int
@@ -373,22 +398,13 @@ class TestAMetaclassSubclass:
         assert Statement(1).y == 42
         assert Statement(1) < Statement(1, 43)
 
-    @pytest.mark.xfail(strict=True, reason="#55")
     def test_both_survive_a_delegate_that_writes_its_own_new(self):
-        """What the two above do not cover. They pass because the winner's
-        tp_new is StructMeta_new, so create_class builds as the winner and the
-        keywords and the untransformed namespace are still in hand. A Python
-        __new__ -- even one that only forwards -- makes type_new hand the build
-        to it instead, with no keywords and a namespace drop_class_variables has
-        already taken the defaults out of.
-
-        Refused rather than mis-planned since the guard above, which is not the
-        same as fixed: what #55 wants is for this call to work.
+        """A Python __new__ -- even one that only forwards -- makes type_new
+        hand the build to it with no keywords and a namespace
+        drop_class_variables has already taken the defaults out of. The class
+        the delegate built is the one this call planned, so the call's own
+        options and defaults are applied to it.
         """
-
-        class Forwarding(META):
-            def __new__(metacls, name, bases, namespace, **keywords):
-                return super().__new__(metacls, name, bases, namespace, **keywords)
 
         class Base(Struct, metaclass=Forwarding):
             x: int
@@ -398,6 +414,392 @@ class TestAMetaclassSubclass:
 
         assert built(1).y == 42
         assert built(1) < built(1, 43)
+
+    def test_a_delegate_can_turn_frozen_off(self):
+        class Base(Struct, metaclass=Forwarding):
+            pass
+
+        built = META("Built", (Base,), {"__annotations__": {"y": int}}, frozen=False)
+        instance = built(1)
+        instance.y = 2
+
+        assert instance.y == 2
+        assert built.__hash__ is None
+
+        with pytest.raises(TypeError, match="unhashable"):
+            hash(instance)
+
+    def test_a_delegate_can_turn_eq_off(self):
+        class Base(Struct, metaclass=Forwarding):
+            x: int
+
+        built = META("Built", (Base,), {"__annotations__": {"y": int}}, eq=False)
+
+        assert built(1, 2) != built(1, 2)
+
+        with pytest.raises(TypeError, match="not supported between instances"):
+            _ = built(1, 2) < built(1, 2)
+
+    def test_a_delegate_can_turn_repr_off(self):
+        class Base(Struct, metaclass=Forwarding):
+            x: int
+
+        built = META("Built", (Base,), {"__annotations__": {"y": int}}, repr=False)
+        instance = built(1, 2)
+
+        assert repr(instance) == object.__repr__(instance)
+
+    def test_a_delegate_can_turn_match_args_off(self):
+        class Base(Struct, metaclass=Forwarding):
+            x: int
+
+        built = META("Built", (Base,), {"__annotations__": {"y": int}}, match_args=False)
+
+        assert "__match_args__" not in built.__dict__
+
+    def test_a_body_match_args_survives_the_delegate_when_turned_off(self):
+        """The fresh build only ever adds __match_args__ when wanted, so a
+        body-defined one survives match_args=False; the settle restores it
+        where the re-entered build has overwritten it.
+        """
+
+        class Base(Struct, metaclass=Forwarding):
+            x: int
+
+        namespace = {"__annotations__": {"y": int}, "__match_args__": ("first",)}
+        built = META("Built", (Base,), namespace, match_args=False)
+
+        assert built.__match_args__ == ("first",)
+
+    def test_a_weakref_base_keeps_its_slot_when_the_delegate_turns_weakref_off(self):
+        """weakref=False is metadata; the fresh path also inherits the base's
+        slot, so the settle accepts the class as-is.
+        """
+
+        class Base(Struct, metaclass=Forwarding, weakref=True):
+            x: int
+
+        built = META("Built", (Base,), {"__annotations__": {"y": int}}, weakref=False)
+        instance = built(1, 2)
+
+        assert weakref.ref(instance)() is instance
+
+    def test_a_delegate_cannot_add_a_weakref_slot_the_call_planned(self):
+        """The re-entered build cannot add the weakref slot, so the refusal
+        says so instead of dying in the inner call's displaced-slot check.
+        """
+
+        class Base(Struct, metaclass=Forwarding):
+            x: int
+
+        with pytest.raises(TypeError, match="cannot cross"):
+            META("Built", (Base,), {"__annotations__": {"y": int}}, weakref=True)
+
+    def test_a_delegate_that_strips_the_dunders_is_settled(self):
+        """A delegate that removes the dunders from the namespace leaves the
+        built class with the mixin's C slots, which ignore dict writes; the
+        settle rebinds through the type so the slots follow.
+        """
+
+        class Stripping(META):
+            def __new__(metacls, name, bases, namespace, **keywords):
+                for dunder in (
+                    "__eq__",
+                    "__ne__",
+                    "__lt__",
+                    "__le__",
+                    "__gt__",
+                    "__ge__",
+                    "__repr__",
+                    "__setattr__",
+                    "__delattr__",
+                    "__hash__",
+                ):
+                    namespace.pop(dunder, None)
+
+                return super().__new__(metacls, name, bases, namespace, **keywords)
+
+        class Base(Struct, metaclass=Stripping):
+            pass
+
+        built = META("Built", (Base,), {"__annotations__": {"y": int}}, frozen=False, eq=False, repr=False)
+        instance = built(1)
+        instance.y = 2
+
+        assert instance.y == 2
+        assert built(1) != built(1)
+        assert repr(instance) == object.__repr__(instance)
+        assert hash(instance) == object.__hash__(instance)
+
+    def test_a_delegate_that_strips_a_body_dunder_restores_it(self):
+        """The fresh build keeps a body-defined dunder; a delegate that strips
+        it leaves the built class without it, and the settle restores the
+        body's own definition.
+        """
+
+        class Stripping(META):
+            def __new__(metacls, name, bases, namespace, **keywords):
+                namespace.pop("__eq__", None)
+                namespace.pop("__hash__", None)
+
+                return super().__new__(metacls, name, bases, namespace, **keywords)
+
+        def by_x(self, other):
+            return self.x == other.x
+
+        def hash_x(self):
+            return hash(self.x)
+
+        class Base(Struct, metaclass=Stripping):
+            x: int
+
+        namespace = {
+            "__annotations__": {"y": int},
+            "__eq__": by_x,
+            "__hash__": hash_x,
+        }
+        built = META("Built", (Base,), namespace)
+
+        assert built(1, 7) == built(1, 8)
+        assert hash(built(1, 7)) == hash(1)
+
+    def test_a_delegate_that_injects_a_dunder_is_refused(self):
+        """A dunder the delegate adds while the plan binds nothing for it
+        would behave differently from the fresh build, so the settle refuses
+        rather than silently keep it.
+        """
+
+        class Injecting(META):
+            def __new__(metacls, name, bases, namespace, **keywords):
+                if name == "Base":
+                    return super().__new__(metacls, name, bases, namespace, **keywords)
+
+                namespace["__eq__"] = lambda self, other: True
+
+                return super().__new__(metacls, name, bases, namespace, **keywords)
+
+        class Base(Struct, metaclass=Injecting):
+            x: int
+
+        with pytest.raises(TypeError, match="did not plan"):
+            META("Built", (Base,), {"__annotations__": {"y": int}})
+
+    def test_a_delegate_returning_a_weakref_slotted_class_is_refused(self):
+        """A lying-around class built with weakref=True carries a slot the
+        fresh build of this call would not, so the settle refuses it.
+        """
+
+        calls = []
+
+        class Substituting(META):
+            def __new__(metacls, name, bases, namespace, **keywords):
+                calls.append(1)
+
+                if len(calls) <= 2:
+                    return super().__new__(metacls, name, bases, namespace, **keywords)
+
+                return Built
+
+        class Base(Struct, metaclass=Substituting):
+            x: int
+
+        class Built(Base, weakref=True):
+            y: int = 99
+
+        with pytest.raises(TypeError, match="did not plan"):
+            META("Built", (Base,), {"__annotations__": {"y": int}})
+
+    def test_a_delegate_that_strips_init_is_settled(self):
+        """install_fields' construction decision is re-applied: the body's
+        __init__ is restored so tp_new routes through it (a body __init__
+        displaces the constructor that would run __post_init__, exactly as
+        a fresh build behaves).
+        """
+
+        class Stripping(META):
+            def __new__(metacls, name, bases, namespace, **keywords):
+                if name == "Base":
+                    return super().__new__(metacls, name, bases, namespace, **keywords)
+
+                namespace.pop("__init__", None)
+
+                return super().__new__(metacls, name, bases, namespace, **keywords)
+
+        class Base(Struct, metaclass=Stripping):
+            x: int
+
+        namespace = {
+            "__annotations__": {"y": int},
+            "__init__": lambda self, y: salix.set_field(self, "y", y + 100),
+        }
+        built = META("Built", (Base,), namespace)
+
+        assert built(1).y == 101
+
+    def test_a_delegate_that_strips_post_init_is_settled(self):
+        """install_fields' post_init decision is re-applied: the body's hook
+        is restored and runs.
+        """
+
+        class Stripping(META):
+            def __new__(metacls, name, bases, namespace, **keywords):
+                if name == "Base":
+                    return super().__new__(metacls, name, bases, namespace, **keywords)
+
+                namespace.pop("__post_init__", None)
+
+                return super().__new__(metacls, name, bases, namespace, **keywords)
+
+        class Base(Struct, metaclass=Stripping):
+            x: int
+
+        namespace = {
+            "__annotations__": {"y": int},
+            "__post_init__": lambda self: salix.set_field(self, "y", self.y * 2),
+        }
+        built = META("Built", (Base,), namespace)
+
+        assert built(0, 4).y == 8
+
+    def test_a_delegate_that_injects_ne_when_the_body_answers_eq_is_overwritten(self):
+        """The answered arm binds object's __ne__ whenever the body did not
+        define one, overwriting whatever the delegate injected.
+        """
+
+        class Injecting(META):
+            def __new__(metacls, name, bases, namespace, **keywords):
+                if name == "Base":
+                    return super().__new__(metacls, name, bases, namespace, **keywords)
+
+                namespace["__ne__"] = lambda self, other: True
+
+                return super().__new__(metacls, name, bases, namespace, **keywords)
+
+        def by_x(self, other):
+            return self.x == other.x
+
+        class Base(Struct, metaclass=Injecting):
+            x: int
+
+        namespace = {"__annotations__": {"y": int}, "__eq__": by_x}
+        built = META("Built", (Base,), namespace)
+
+        assert (built(1, 7) != built(1, 8)) is False
+
+    def test_a_delegate_that_strips_new_is_settled(self):
+        """The fresh build keeps a body __new__ in the class dict (dispatch
+        never consults it), so a delegate that strips it is restored.
+        """
+
+        class Stripping(META):
+            def __new__(metacls, name, bases, namespace, **keywords):
+                if name == "Base":
+                    return super().__new__(metacls, name, bases, namespace, **keywords)
+
+                namespace.pop("__new__", None)
+
+                return super().__new__(metacls, name, bases, namespace, **keywords)
+
+        def body_new(cls, *args):
+            return super(cls, cls).__new__(cls, *args)
+
+        class Base(Struct, metaclass=Stripping):
+            x: int
+
+        namespace = {"__annotations__": {"y": int}, "__new__": body_new}
+        built = META("Built", (Base,), namespace)
+
+        assert "__new__" in built.__dict__
+
+    def test_a_delegate_that_injects_new_is_refused(self):
+        """A __new__ the delegate adds while the body defined none would
+        change construction, so the settle refuses.
+        """
+
+        class Injecting(META):
+            def __new__(metacls, name, bases, namespace, **keywords):
+                if name == "Base":
+                    return super().__new__(metacls, name, bases, namespace, **keywords)
+
+                namespace["__new__"] = lambda cls, *args: None
+
+                return super().__new__(metacls, name, bases, namespace, **keywords)
+
+        class Base(Struct, metaclass=Injecting):
+            x: int
+
+        with pytest.raises(TypeError, match="did not plan"):
+            META("Built", (Base,), {"__annotations__": {"y": int}})
+
+    def test_a_delegate_that_adds_a_non_struct_base_is_refused(self):
+        """The identity gate compares the bases tuple, not just the layout
+        base; an extra base would route construction through its __init__.
+        """
+
+        calls = []
+
+        class Substituting(META):
+            def __new__(metacls, name, bases, namespace, **keywords):
+                calls.append(1)
+
+                if len(calls) <= 2:
+                    return super().__new__(metacls, name, bases, namespace, **keywords)
+
+                return Built
+
+        class Base(Struct, metaclass=Substituting):
+            x: int
+
+        class InitBase:
+            pass
+
+        class Built(Base, InitBase):
+            y: int = 99
+
+        with pytest.raises(TypeError, match="did not plan"):
+            META("Built", (Base,), {"__annotations__": {"y": int}})
+
+    def test_a_delegate_returning_same_count_defaults_is_corrected_not_accepted(self):
+        """A lying-around class can match the plan's name, fields, and default
+        count while carrying different default values; the settle installs the
+        call's own defaults rather than accepting the class silently.
+        """
+
+        calls = []
+
+        class Substituting(META):
+            def __new__(metacls, name, bases, namespace, **keywords):
+                calls.append(1)
+
+                if len(calls) <= 2:
+                    return super().__new__(metacls, name, bases, namespace, **keywords)
+
+                return Built
+
+        class Base(Struct, metaclass=Substituting):
+            x: int
+
+        class Built(Base):
+            y: int = 99
+
+        namespace = {"__annotations__": {"y": int}, "y": 42}
+        built = META("Built", (Base,), namespace)
+
+        assert built(1).y == 42
+
+    def test_a_body_qualname_does_not_upset_the_settle(self):
+        """The name check reads ht_name; a body-set __qualname__ is legal and
+        the fresh path accepts it.
+        """
+
+        class Base(Struct, metaclass=Forwarding):
+            x: int
+
+        namespace = {"__annotations__": {"y": int}, "__qualname__": "Wrapped.Built"}
+        built = META("Built", (Base,), namespace)
+
+        assert built.__qualname__ == "Wrapped.Built"
+        assert built(1, 2).y == 2
 
     @pytest.mark.parametrize("produced", ["not a type", bytearray(8192), 0])
     def test_one_that_returns_a_non_type_is_refused(self, produced):
