@@ -46,10 +46,6 @@ def test_the_object_path_accepts_a_type_named_class_var():
     assert cls._struct_fields_ == ("x",)
 
 
-@pytest.mark.skipif(
-    sys.version_info < (3, 11),
-    reason="typing refuses a bare special form as an Annotated argument before 3.11",
-)
 def test_the_object_path_accepts_annotated_metadata():
     cls = type(
         "Probe",
@@ -147,9 +143,10 @@ def test_eq_false_hashes_by_identity_and_the_cache_returns_stale_values():
             return self.x * 2
 
     instance = Identity(1)
+    other = Identity(1)
 
     assert instance.slow() == 2
-    assert hash(Identity(1)) != hash(Identity(1))
+    assert hash(instance) != hash(other)
 
     set_field(instance, "x", 5)
 
@@ -160,7 +157,10 @@ def test_eq_false_mutable_structs_are_hashable():
     class MutableIdentity(Struct, eq=False, frozen=False):
         x: int
 
-    assert hash(MutableIdentity(1)) != hash(MutableIdentity(1))
+    first = MutableIdentity(1)
+    second = MutableIdentity(1)
+
+    assert hash(first) != hash(second)
 
 
 def test_a_body_defined_eq_still_makes_an_eq_false_struct_unhashable():
@@ -172,6 +172,46 @@ def test_a_body_defined_eq_still_makes_an_eq_false_struct_unhashable():
 
     with pytest.raises(TypeError, match="unhashable"):
         hash(BodyEq(1))
+
+
+def test_a_body_hash_none_makes_the_struct_unhashable_under_both_eq_options():
+    class NoHash(Struct):
+        x: int
+        __hash__ = None  # type: ignore[assignment]
+
+    with pytest.raises(TypeError, match="unhashable"):
+        hash(NoHash(1))
+
+    class NoHashEqFalse(Struct, eq=False):
+        x: int
+        __hash__ = None  # type: ignore[assignment]
+
+    with pytest.raises(TypeError, match="unhashable"):
+        hash(NoHashEqFalse(1))
+
+
+def test_a_body_hash_wins_over_the_identity_hash_under_eq_false():
+    class SevenHash(Struct, eq=False):
+        x: int
+
+        def __hash__(self) -> int:
+            return 7
+
+    assert hash(SevenHash(1)) == 7
+
+
+def test_equality_inherited_from_a_struct_base_makes_the_subclass_unhashable():
+    class EqStruct(Struct):  # noqa: PLW1641 -- the inherited unhashability is the point
+        x: int
+
+        def __eq__(self, other: object) -> bool:
+            return True
+
+    class Child(EqStruct):
+        y: int
+
+    with pytest.raises(TypeError, match="unhashable"):
+        hash(Child(1, 2))
 
 
 def test_an_unhashable_field_value_makes_the_struct_unhashable():

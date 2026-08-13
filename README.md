@@ -27,12 +27,13 @@ the check is a spelling match, and the two paths differ at the edges:
 | --- | --- | --- |
 | an alias of `ClassVar`, `CV[int]` | refused | accepted; the field swallows a positional |
 | a type of yours actually named `ClassVar` | accepted | refused |
-| `Annotated[int, ClassVar]` | accepted, 3.11+ | refused, though the `ClassVar` there is metadata |
+| `Annotated[int, ClassVar]` | accepted | refused, though the `ClassVar` there is metadata |
 | `Optional[Annotated[ClassVar[int], "m"]]` | refused | refused |
 
 3.14 evaluates resolvable annotations by default, so there the alias reaches
-the object path and is refused; an annotation nothing can resolve arrives as
-an object too, and is accepted. Every row is pinned in
+the object path and is refused; a bare name nothing can resolve arrives as an
+object too, and is accepted, while an annotation whose evaluation fails any
+other way still fails the class. Every row is pinned in
 `tests/test_classvar_paths.py`.
 
 ## Caching a computed value
@@ -69,16 +70,18 @@ method, or a field that `__post_init__` fills:
 ```
 
 Under the default eq=True the method cache keys on the value, not the
-instance: value-equal structs share one entry, and `set_field` after a hit
-misses — the cache then holds the old entry and the new one. With eq=False
-the struct hashes by identity instead, and `set_field` after a hit returns
-the stale cached value — unless the body defines its own `__eq__`, which
-still makes it unhashable. The cache refuses an unhashable struct — under
-eq=True that is one with `frozen=False`, a body-defined `__eq__`, or an
-unhashable field value. An `__init__` that is not `object.__init__` —
-defined in the body or inherited from a non-struct base — replaces the
-constructor that runs `__post_init__`, so the field answer only works
-without one. The claims are pinned in `tests/test_classvar_paths.py`.
+instance: value-equal structs share one entry, and a `set_field` that
+changes the value misses — the cache then holds the old entry and the new
+one. With eq=False the struct hashes by identity instead, and `set_field`
+after a hit returns the stale cached value — unless the body defines its
+own `__eq__` or `__hash__`. The cache refuses an unhashable struct —
+anything that makes `hash()` raise: under the default options that is
+`frozen=False`, a body-defined `__eq__` or `__hash__`, an unhashable field
+value, or equality inherited from a struct base that defines `__eq__`. An
+`__init__` that is not `object.__init__` — defined in the body or inherited
+from any base — replaces the constructor that runs `__post_init__`, so the
+field answer only works without one. The table and the caching behaviors
+above are pinned in `tests/test_classvar_paths.py`.
 
 `salix/__init__.pyi` is the API. `src/salix.c` says what this is and is
 not. `tasks.py` is what runs. `uv run camas benchmark` says what it costs.
