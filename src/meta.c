@@ -287,6 +287,22 @@ static PyObject * build_struct_class(
 		return NULL;
 	}
 
+	if (
+		metatype == &StructMeta_Type &&
+		request.options.weakref &&
+		!inherited.weakref &&
+		!any_base_has_weakref_slot(bases) &&
+		winning_metatype(metatype, bases)->tp_new != StructMeta_new
+	) {
+		PyErr_SetString(
+			PyExc_TypeError,
+			"weakref=True cannot cross a metaclass __new__ that hands the build "
+			"off: the re-entered call cannot add the weakref slot"
+		);
+
+		return NULL;
+	}
+
 	struct field_plan plan = field_plan_build(base, original_namespace);
 
 	if (field_plan_failed(&plan)) {
@@ -1126,11 +1142,6 @@ static enum result settle_rebind(
 		from_mixin ? (PyObject *) &StructMixin_Type :
 		(PyObject *) &PyBaseObject_Type
 	);
-	PY_OWNED(class_dict, struct_type_dict(&struct_class->heap_type.ht_type));
-
-	if (class_dict == NULL) {
-		return RESULT_ERROR;
-	}
 
 	for (char const * const * name = names; *name != NULL; name += 1) {
 		if (PyDict_GetItemString(original_namespace, *name) != NULL) {
@@ -1138,8 +1149,13 @@ static enum result settle_rebind(
 		}
 
 		PY_OWNED(bound, PyObject_GetAttrString(source, *name));
+		PY_OWNED(unicode_name, PyUnicode_FromString(*name));
 
-		if (bound == NULL || PyDict_SetItemString(class_dict, *name, bound) < 0) {
+		if (
+			bound == NULL ||
+			unicode_name == NULL ||
+			PyType_Type.tp_setattro((PyObject *) struct_class, unicode_name, bound) < 0
+		) {
 			return RESULT_ERROR;
 		}
 	}
@@ -1203,10 +1219,7 @@ static enum result settle_planned(
 		return RESULT_ERROR;
 	}
 
-	PyObject * const built_name = (
-		struct_class->heap_type.ht_qualname != NULL ? (PyObject *) struct_class->heap_type.ht_qualname :
-		(PyObject *) struct_class->heap_type.ht_name
-	);
+	PyObject * const built_name = (PyObject *) struct_class->heap_type.ht_name;
 	int const same_name = (
 		built_name != NULL ? PyObject_RichCompareBool(built_name, name, Py_EQ) :
 		0
@@ -1231,7 +1244,7 @@ static enum result settle_planned(
 		return RESULT_OK;
 	}
 
-	if (options.weakref != inherited.weakref) {
+	if (options.weakref && ((PyTypeObject *) struct_class)->tp_weaklistoffset == 0) {
 		return refuse_unplanned(struct_class);
 	}
 
@@ -1279,7 +1292,12 @@ static enum result settle_planned(
 		PyDict_GetItemString(original_namespace, "__hash__") == NULL
 	) {
 		if (body_defines_eq || (options.eq && !options.frozen)) {
-			if (PyDict_SetItemString(class_dict, "__hash__", Py_None) < 0) {
+			PY_OWNED(unhashable, PyUnicode_FromString("__hash__"));
+
+			if (
+				unhashable == NULL ||
+				PyType_Type.tp_setattro((PyObject *) struct_class, unhashable, Py_None) < 0
+			) {
 				return RESULT_ERROR;
 			}
 		} else if (
@@ -1295,11 +1313,22 @@ static enum result settle_planned(
 			if (PyDict_SetItemString(class_dict, "__match_args__", planned) < 0) {
 				return RESULT_ERROR;
 			}
-		} else if (PyDict_DelItemString(class_dict, "__match_args__") < 0) {
-			if (PyErr_ExceptionMatches(PyExc_KeyError)) {
-				PyErr_Clear();
-			} else {
-				return RESULT_ERROR;
+		} else {
+			PyObject * const body_match_args = PyDict_GetItemString(
+				original_namespace,
+				"__match_args__"
+			);
+
+			if (body_match_args != NULL) {
+				if (PyDict_SetItemString(class_dict, "__match_args__", body_match_args) < 0) {
+					return RESULT_ERROR;
+				}
+			} else if (PyDict_DelItemString(class_dict, "__match_args__") < 0) {
+				if (PyErr_ExceptionMatches(PyExc_KeyError)) {
+					PyErr_Clear();
+				} else {
+					return RESULT_ERROR;
+				}
 			}
 		}
 	}
