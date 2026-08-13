@@ -315,7 +315,7 @@ static PyObject * build_struct_class(
 		refuse_displaced_slots(
 				original_namespace,
 				plan.all_names,
-				request.options.weakref || any_base_has_weakref_slot(bases)
+				weakref_expected(request.options, bases)
 			) !=
 			RESULT_OK
 	) {
@@ -835,6 +835,10 @@ static bool settled_by_the_plan(char const * const name, struct binding_plan con
 		return plan.rebind_not_equal || plan.answered_by_body;
 	}
 
+	if (strcmp(name, "__init__") == 0 || strcmp(name, "__post_init__") == 0) {
+		return false;
+	}
+
 	if (strcmp(name, "__repr__") == 0) {
 		return plan.rebind_representation;
 	}
@@ -1299,6 +1303,8 @@ static enum result settle_planned(
 		"__setattr__",
 		"__delattr__",
 		"__hash__",
+		"__init__",
+		"__post_init__",
 		NULL,
 	};
 	PY_OWNED(planned, PyList_AsTuple(plan->all_names));
@@ -1382,7 +1388,7 @@ static enum result settle_planned(
 		return RESULT_ERROR;
 	}
 
-	if (bindings.answered_by_body && PyDict_GetItemString(class_dict, "__ne__") == NULL) {
+	if (bindings.answered_by_body && PyDict_GetItemString(original_namespace, "__ne__") == NULL) {
 		/* bind_not_equal's answered case on a live class: the fresh build
 		 * binds object's __ne__ when the body answered equality itself. */
 		PY_OWNED(object_ne, PyObject_GetAttrString((PyObject *) &PyBaseObject_Type, "__ne__"));
@@ -1466,7 +1472,14 @@ static enum result settle_planned(
 	struct_class->struct_options = options;
 	struct_class->struct_resolves_body_eq = body_defines_eq || inherits_body_eq;
 
-	return RESULT_OK;
+	if (defines_own_init(struct_class)) {
+		struct_class->heap_type.ht_type.tp_new = Struct_new;
+		struct_class->heap_type.ht_type.tp_vectorcall = NULL;
+	} else {
+		struct_class->heap_type.ht_type.tp_vectorcall = Struct_vectorcall;
+	}
+
+	return install_post_init(struct_class);
 }
 
 static enum result restore_stripped(

@@ -606,6 +606,83 @@ class TestAMetaclassSubclass:
         with pytest.raises(TypeError, match="did not plan"):
             META("Built", (Base,), {"__annotations__": {"y": int}})
 
+    def test_a_delegate_that_strips_init_is_settled(self):
+        """install_fields' construction decision is re-applied: the body's
+        __init__ is restored so tp_new routes through it (a body __init__
+        displaces the constructor that would run __post_init__, exactly as
+        a fresh build behaves).
+        """
+
+        class Stripping(META):
+            def __new__(metacls, name, bases, namespace, **keywords):
+                if name == "Base":
+                    return super().__new__(metacls, name, bases, namespace, **keywords)
+
+                namespace.pop("__init__", None)
+
+                return super().__new__(metacls, name, bases, namespace, **keywords)
+
+        class Base(Struct, metaclass=Stripping):
+            x: int
+
+        namespace = {
+            "__annotations__": {"y": int},
+            "__init__": lambda self, y: salix.set_field(self, "y", y + 100),
+        }
+        built = META("Built", (Base,), namespace)
+
+        assert built(1).y == 101
+
+    def test_a_delegate_that_strips_post_init_is_settled(self):
+        """install_fields' post_init decision is re-applied: the body's hook
+        is restored and runs.
+        """
+
+        class Stripping(META):
+            def __new__(metacls, name, bases, namespace, **keywords):
+                if name == "Base":
+                    return super().__new__(metacls, name, bases, namespace, **keywords)
+
+                namespace.pop("__post_init__", None)
+
+                return super().__new__(metacls, name, bases, namespace, **keywords)
+
+        class Base(Struct, metaclass=Stripping):
+            x: int
+
+        namespace = {
+            "__annotations__": {"y": int},
+            "__post_init__": lambda self: salix.set_field(self, "y", self.y * 2),
+        }
+        built = META("Built", (Base,), namespace)
+
+        assert built(0, 4).y == 8
+
+    def test_a_delegate_that_injects_ne_when_the_body_answers_eq_is_overwritten(self):
+        """The answered arm binds object's __ne__ whenever the body did not
+        define one, overwriting whatever the delegate injected.
+        """
+
+        class Injecting(META):
+            def __new__(metacls, name, bases, namespace, **keywords):
+                if name == "Base":
+                    return super().__new__(metacls, name, bases, namespace, **keywords)
+
+                namespace["__ne__"] = lambda self, other: True
+
+                return super().__new__(metacls, name, bases, namespace, **keywords)
+
+        def by_x(self, other):
+            return self.x == other.x
+
+        class Base(Struct, metaclass=Injecting):
+            x: int
+
+        namespace = {"__annotations__": {"y": int}, "__eq__": by_x}
+        built = META("Built", (Base,), namespace)
+
+        assert (built(1, 7) != built(1, 8)) is False
+
     def test_a_delegate_returning_same_count_defaults_is_corrected_not_accepted(self):
         """A lying-around class can match the plan's name, fields, and default
         count while carrying different default values; the settle installs the
