@@ -528,6 +528,66 @@ class TestAMetaclassSubclass:
         assert repr(instance) == object.__repr__(instance)
         assert hash(instance) == object.__hash__(instance)
 
+    def test_a_delegate_that_strips_a_body_dunder_restores_it(self):
+        """The fresh build keeps a body-defined dunder; a delegate that strips
+        it leaves the built class without it, and the settle restores the
+        body's own definition.
+        """
+
+        class Stripping(META):
+            def __new__(metacls, name, bases, namespace, **keywords):
+                namespace.pop("__eq__", None)
+                namespace.pop("__hash__", None)
+
+                return super().__new__(metacls, name, bases, namespace, **keywords)
+
+        def by_x(self, other):
+            return self.x == other.x
+
+        def hash_x(self):
+            return hash(self.x)
+
+        class Base(Struct, metaclass=Stripping):
+            x: int
+
+        namespace = {
+            "__annotations__": {"y": int},
+            "__eq__": by_x,
+            "__hash__": hash_x,
+        }
+        built = META("Built", (Base,), namespace)
+
+        assert built(1, 7) == built(1, 8)
+        assert hash(built(1, 7)) == hash(1)
+
+    def test_a_delegate_returning_same_count_defaults_is_corrected_not_accepted(self):
+        """A lying-around class can match the plan's name, fields, and default
+        count while carrying different default values; the settle installs the
+        call's own defaults rather than accepting the class silently.
+        """
+
+        calls = []
+
+        class Substituting(META):
+            def __new__(metacls, name, bases, namespace, **keywords):
+                calls.append(1)
+
+                if len(calls) <= 2:
+                    return super().__new__(metacls, name, bases, namespace, **keywords)
+
+                return Built
+
+        class Base(Struct, metaclass=Substituting):
+            x: int
+
+        class Built(Base):
+            y: int = 99
+
+        namespace = {"__annotations__": {"y": int}, "y": 42}
+        built = META("Built", (Base,), namespace)
+
+        assert built(1).y == 42
+
     def test_a_body_qualname_does_not_upset_the_settle(self):
         """The name check reads ht_name; a body-set __qualname__ is legal and
         the fresh path accepts it.
