@@ -330,6 +330,42 @@ class TestAMetaclassSubclass:
 
         assert built(1, 2) < built(1, 3)
 
+    def test_a_delegate_that_cannot_take_the_options_cannot_add_the_weakref_slot(self):
+        """The keywords cannot ride a __new__ that does not take them, so the
+        refusal says so instead of blaming the entry salix itself wrote.
+        """
+
+        class Plain(META):
+            def __new__(metacls, name, bases, namespace):
+                return super().__new__(metacls, name, bases, namespace)
+
+        class Base(Struct, metaclass=Plain):
+            x: int
+
+        with pytest.raises(TypeError, match="cannot cross"):
+            META("Built", (Base,), {"__annotations__": {"y": int}}, weakref=True)
+
+    def test_a_keyword_rides_only_a_chain_that_takes_it_end_to_end(self):
+        """A chain whose intermediate __new__ takes no **keywords would raise
+        on the options, so the hand-off stays keyword-less and the settle
+        restores what the keyword meant.
+        """
+
+        class Mid(META):
+            def __new__(metacls, name, bases, namespace):
+                return super().__new__(metacls, name, bases, namespace)
+
+        class Low(Mid):
+            def __new__(metacls, name, bases, namespace, **keywords):
+                return super().__new__(metacls, name, bases, namespace, **keywords)
+
+        class Base(Struct, metaclass=Low):
+            x: int
+
+        built = META("Built", (Base,), {"__annotations__": {"y": int}}, order=True)
+
+        assert built(1, 2) < built(1, 3)
+
     def test_two_unrelated_metatypes_still_raise_the_conflict(self):
         """Picking the winner ourselves must not swallow the case that has no
         winner: type_new is handed the requested metatype and says so.

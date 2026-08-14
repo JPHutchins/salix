@@ -59,6 +59,7 @@ bool any_struct_base_is_mutable(PyObject * bases);
 bool has_weakref_slot(StructType const * base);
 bool weakref_expected(struct options options, PyObject * bases);
 bool any_base_has_instance_dict(PyObject * bases);
+bool weakref_slot_is_new(struct options options, PyObject * bases);
 
 struct binding_plan binding_plan(
 	struct options options,

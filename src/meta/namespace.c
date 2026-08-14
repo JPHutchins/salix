@@ -17,6 +17,20 @@ static char const * instance_dict_slot_name(void) {
 	return "__dict__";
 }
 
+enum slot_name_owner { SLOT_NAME_NONE, SLOT_NAME_WEAKREF, SLOT_NAME_INSTANCE_DICT };
+
+static enum slot_name_owner slot_name_owner_of(PyObject * const name) {
+	if (PyUnicode_CompareWithASCIIString(name, weakref_slot_name()) == 0) {
+		return SLOT_NAME_WEAKREF;
+	}
+
+	if (PyUnicode_CompareWithASCIIString(name, instance_dict_slot_name()) == 0) {
+		return SLOT_NAME_INSTANCE_DICT;
+	}
+
+	return SLOT_NAME_NONE;
+}
+
 static PyObject * build_slots(PyObject * new_names, bool weakref);
 static enum result set_match_args(PyObject * namespace, PyObject * all_names, bool wanted);
 static enum result apply_options(
@@ -117,7 +131,9 @@ enum result refuse_displaced_slots(
 			return RESULT_ERROR;
 		}
 
-		if (PyUnicode_CompareWithASCIIString(entry, weakref_slot_name()) == 0) {
+		enum slot_name_owner const owner = slot_name_owner_of(entry);
+
+		if (owner == SLOT_NAME_WEAKREF) {
 			if (carries_a_weakref_slot) {
 				continue;
 			}
@@ -132,7 +148,7 @@ enum result refuse_displaced_slots(
 			return RESULT_ERROR;
 		}
 
-		if (PyUnicode_CompareWithASCIIString(entry, instance_dict_slot_name()) == 0) {
+		if (owner == SLOT_NAME_INSTANCE_DICT) {
 			if (carries_an_instance_dict) {
 				continue;
 			}
@@ -173,24 +189,19 @@ enum result refuse_displaced_slots(
 enum result refuse_slot_name_fields(PyObject * const all_names) {
 	for (Py_ssize_t i = 0; i < PyList_GET_SIZE(all_names); ++i) {
 		PyObject * const field_name = PyList_GET_ITEM(all_names, i);
-		char const * const owner = (
-			PyUnicode_CompareWithASCIIString(
-				field_name,
-				weakref_slot_name()
-			) == 0 ? "the weakref slot's" :
-			PyUnicode_CompareWithASCIIString(
-				field_name,
-				instance_dict_slot_name()
-			) == 0 ? "the instance dict's" :
+		enum slot_name_owner const owner = slot_name_owner_of(field_name);
+		char const * const owner_name = (
+			owner == SLOT_NAME_WEAKREF ? "the weakref slot's" :
+			owner == SLOT_NAME_INSTANCE_DICT ? "the instance dict's" :
 			NULL
 		);
 
-		if (owner != NULL) {
+		if (owner_name != NULL) {
 			PyErr_Format(
 				PyExc_TypeError,
 				"'%U' is %s name and cannot be a field",
 				field_name,
-				owner
+				owner_name
 			);
 
 			return RESULT_ERROR;

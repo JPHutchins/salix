@@ -26,7 +26,7 @@ static StructType * create_class(
 	PyObject * keywords
 );
 static PyTypeObject * winning_metatype(PyTypeObject * requested, PyObject * bases);
-static int delegate_accepts_keywords(PyTypeObject * winner);
+static int metaclass_chain_accepts_keywords(PyTypeObject * winner);
 static int new_accepts_keywords(PyObject * new);
 static enum result install_fields(
 	StructType * struct_class,
@@ -158,6 +158,26 @@ PyObject * build_struct_class(
 		return NULL;
 	}
 
+	PyTypeObject * const handoff = winning_metatype(metatype, bases);
+
+	if (weakref_slot_is_new(request.options, bases) && handoff->tp_new != StructMeta_new) {
+		int const accepts = metaclass_chain_accepts_keywords(handoff);
+
+		if (accepts < 0) {
+			return NULL;
+		}
+
+		if (accepts == 0) {
+			PyErr_SetString(
+				PyExc_TypeError,
+				"weakref=True cannot cross a metaclass __new__ that hands the build "
+				"off: the re-entered call cannot add the weakref slot"
+			);
+
+			return NULL;
+		}
+	}
+
 	struct field_plan plan = field_plan_build(base, original_namespace);
 
 	if (field_plan_failed(&plan)) {
@@ -270,7 +290,7 @@ static StructType * create_class(
 	PyObject * forwarded = NULL;
 
 	if (builder != winner && keywords != NULL && PyDict_GET_SIZE(keywords) > 0) {
-		int const accepts = delegate_accepts_keywords(winner);
+		int const accepts = metaclass_chain_accepts_keywords(winner);
 
 		if (accepts < 0) {
 			return NULL;
@@ -307,14 +327,28 @@ static StructType * create_class(
  * us for a 16-field class either way, so the walk is bounded by the width of
  * that band rather than shown to be free. It is one Py_TYPE and one
  * PyType_IsSubtype per base, and a class has one. */
-static int delegate_accepts_keywords(PyTypeObject * const winner) {
-	PY_OWNED(new, PyObject_GetAttrString((PyObject *) winner, "__new__"));
+static int metaclass_chain_accepts_keywords(PyTypeObject * const winner) {
+	PyObject * const mro = winner->tp_mro;
 
-	if (new == NULL) {
-		return -1;
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); ++i) {
+		PyTypeObject * const link = (PyTypeObject *) PyTuple_GET_ITEM(mro, i);
+
+		if (link == &StructMeta_Type || link == &PyType_Type) {
+			break;
+		}
+
+		PY_OWNED(new, PyObject_GetAttrString((PyObject *) link, "__new__"));
+
+		if (new == NULL) {
+			return -1;
+		}
+
+		if (new_accepts_keywords(new) != 1) {
+			return 0;
+		}
 	}
 
-	return new_accepts_keywords(new);
+	return 1;
 }
 
 static int new_accepts_keywords(PyObject * new) {
