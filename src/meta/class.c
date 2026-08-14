@@ -9,6 +9,7 @@
 #	include <cpython/code.h>
 #endif
 
+#include "../compare.h"
 #include "../construct.h"
 #include "../fields.h"
 #include "meta.h"
@@ -17,6 +18,7 @@
 #include "../owned.h"
 #include "../result.h"
 #include "../types.h"
+#include "../hash.h"
 
 static StructType * create_class(
 	PyTypeObject * metatype,
@@ -61,6 +63,14 @@ static enum result settle_rebind(
 	PyObject * original_namespace,
 	char const * const * names,
 	bool from_mixin
+);
+static enum result settle_mro_bindings(
+	StructType * struct_class,
+	PyObject * bases,
+	PyObject * original_namespace,
+	struct binding_plan bindings,
+	struct options options,
+	bool inherits_body_eq
 );
 static enum result restore_stripped(
 	StructType * struct_class,
@@ -312,6 +322,30 @@ PyObject * build_struct_class(
 
 		if (settled != RESULT_OK) {
 			Py_CLEAR(struct_class);
+		} else {
+			struct binding_plan const bindings = binding_plan(
+				request.options,
+				inherited,
+				frozen_across_bases,
+				body_defines_eq,
+				inherits_body_eq,
+				inherited_equality.needs_derived_not_equal,
+				PyDict_GetItemString(original_namespace, rebind_hash[0]) != NULL
+			);
+
+			if (
+				settle_mro_bindings(
+					struct_class,
+					bases,
+					original_namespace,
+					bindings,
+					request.options,
+					inherits_body_eq
+				) !=
+				RESULT_OK
+			) {
+				Py_CLEAR(struct_class);
+			}
 		}
 	}
 
@@ -559,6 +593,121 @@ static enum result refuse_unplanned(StructType const * const struct_class) {
 	);
 
 	return RESULT_ERROR;
+}
+
+static int struct_base_count(PyObject * const bases) {
+	int count = 0;
+
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(bases); ++i) {
+		if (is_struct_class(PyTuple_GET_ITEM(bases, i))) {
+			count += 1;
+		}
+	}
+
+	return count;
+}
+
+/* What the class's MRO hands out for `name` below the class's own dict,
+ * asked after the class exists so the answer is the real resolution. */
+static PyObject * mro_resolves(PyTypeObject * const type, char const * const name) {
+	PyObject * const mro = type->tp_mro;
+
+	for (Py_ssize_t i = 1; i < PyTuple_GET_SIZE(mro); ++i) {
+		PY_OWNED(dict, struct_type_dict((PyTypeObject *) PyTuple_GET_ITEM(mro, i)));
+
+		if (dict == NULL) {
+			return NULL;
+		}
+
+		PyObject * const bound = PyDict_GetItemString(dict, name);
+
+		if (bound != NULL) {
+			return Py_NewRef(bound);
+		}
+	}
+
+	return Py_NewRef(Py_None);
+}
+
+/* CPython copies the comparison slots from the first base only when the new
+ * class's namespace overrides nothing, so a multi-base class whose namespace
+ * carries salix's own bindings falls back to the default slots. With two
+ * struct bases the real MRO can also answer a dunder from a base the
+ * pre-build walk never read. Both are repaired here, where the class exists
+ * and the MRO is the real one. */
+static enum result settle_mro_bindings(
+	StructType * const struct_class,
+	PyObject * const bases,
+	PyObject * const original_namespace,
+	struct binding_plan const bindings,
+	struct options const options,
+	bool const inherits_body_eq
+) {
+	if (struct_base_count(bases) <= 1) {
+		return RESULT_OK;
+	}
+
+	PyTypeObject * const type = (PyTypeObject *) struct_class;
+	bool const body_defines_eq = PyDict_GetItemString(original_namespace, "__eq__") != NULL;
+	bool const answers_itself = body_defines_eq || inherits_body_eq;
+
+	if (options.eq && !answers_itself && type->tp_richcompare != Struct_rich_compare) {
+		type->tp_richcompare = Struct_rich_compare;
+	}
+
+	if (bindings.hash == HASH_BIND && type->tp_hash != Struct_hash) {
+		type->tp_hash = Struct_hash;
+	}
+
+	PY_OWNED(mixin_eq, PyObject_GetAttrString((PyObject *) &StructMixin_Type, "__eq__"));
+	PY_OWNED(object_eq, PyObject_GetAttrString((PyObject *) &PyBaseObject_Type, "__eq__"));
+	PY_OWNED(mixin_repr, PyObject_GetAttrString((PyObject *) &StructMixin_Type, "__repr__"));
+	PY_OWNED(object_repr, PyObject_GetAttrString((PyObject *) &PyBaseObject_Type, "__repr__"));
+
+	if (mixin_eq == NULL || object_eq == NULL || mixin_repr == NULL || object_repr == NULL) {
+		return RESULT_ERROR;
+	}
+
+	PyObject * const target_eq = options.eq ? mixin_eq : object_eq;
+	PY_OWNED(resolved_eq, mro_resolves(type, "__eq__"));
+
+	if (resolved_eq == NULL) {
+		return RESULT_ERROR;
+	}
+
+	if (!answers_itself && resolved_eq != target_eq) {
+		if (
+			settle_rebind(struct_class, original_namespace, rebind_comparison, options.eq) !=
+				RESULT_OK ||
+			settle_rebind(struct_class, original_namespace, rebind_not_equal, options.eq) !=
+				RESULT_OK
+		) {
+			return RESULT_ERROR;
+		}
+	}
+
+	PyObject * const target_repr = options.repr ? mixin_repr : object_repr;
+	PY_OWNED(resolved_repr, mro_resolves(type, "__repr__"));
+
+	if (resolved_repr == NULL) {
+		return RESULT_ERROR;
+	}
+
+	if (resolved_repr != target_repr) {
+		if (
+			settle_rebind(
+				struct_class,
+				original_namespace,
+				rebind_representation,
+				options.repr
+			) !=
+			RESULT_OK
+		) {
+			return RESULT_ERROR;
+		}
+	}
+
+	return RESULT_OK;
 }
 
 static enum result settle_planned(

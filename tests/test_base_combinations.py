@@ -581,23 +581,8 @@ def test_hashability_follows_the_equality_the_class_answers_with():
     assert hashability_disagrees_with_equality(SOUND_EQ) == []
 
 
-@pytest.mark.xfail(strict=True, reason="#76: equality answered by a later base, hash settled from the record")
 def test_hashability_follows_equality_when_a_later_base_answers_it():
     assert hashability_disagrees_with_equality(CONTESTED_EQ) == []
-
-
-def test_every_contested_hashability_combination_really_is_broken():
-    """The bound for the xfail above, and the one the bucket cannot anchor:
-    the hashability predicate is narrower than the contested-equality bucket
-    it runs over, so only the 24 mutable-first combinations, made unhashable
-    from the record while the MRO answers identity, violate, and the pin is
-    that count rather than the bucket's 272.
-
-    Delete this with the xfail above when #76 lands; they describe the same
-    defect from opposite sides.
-    """
-
-    assert len(hashability_disagrees_with_equality(CONTESTED_EQ)) == 24
 
 
 def test_the_repr_is_the_first_struct_bases():
@@ -620,49 +605,18 @@ def test_equal_instances_hash_equal():
     assert hash_disagreements(SOUND_HASH) == []
 
 
-@pytest.mark.parametrize(
-    ("broken", "violations"),
-    [
-        (CONTESTED_REPR, lambda rows: behaviour_differs_from_the_first_base_alone(rows, "repr")),
-        (CONTESTED_EQ, lambda rows: behaviour_differs_from_the_first_base_alone(rows, "equality")),
-        (CONTESTED_ORDER, lambda rows: behaviour_differs_from_the_first_base_alone(rows, "order")),
-        (CONTESTED_HASH, hash_disagreements),
-    ],
-    ids=["__repr__", "__eq__", "__lt__", "__hash__"],
-)
-def test_every_contested_combination_really_is_broken(broken, violations):
-    """The half of the split the strict xfails cannot police, and the reason
-    each bucket is narrowed until it is exact.
-
-    An xfail over a bucket where everything already fails emits one bit: it
-    flips only when the bucket becomes *entirely* clean. A partial fix, or a
-    new violation among combinations that were sound, leaves it just as failed
-    and just as green. Asserting the bucket is wholly broken is the other
-    bound, and between them the count cannot move without a test noticing.
-
-    Delete this with the four xfails below when #76 lands; they describe the
-    same defect from opposite sides.
-    """
-
-    assert len(violations(broken)) == len(broken)
-
-
-@pytest.mark.xfail(strict=True, reason="#76: the record and the MRO disagree")
 def test_the_repr_is_the_first_struct_bases_when_a_later_one_binds_it():
     assert behaviour_differs_from_the_first_base_alone(CONTESTED_REPR, "repr") == []
 
 
-@pytest.mark.xfail(strict=True, reason="#76: the record and the MRO disagree")
 def test_equality_is_the_first_struct_bases_when_a_later_one_binds_it():
     assert behaviour_differs_from_the_first_base_alone(CONTESTED_EQ, "equality") == []
 
 
-@pytest.mark.xfail(strict=True, reason="#76: the record and the MRO disagree")
 def test_ordering_is_the_first_struct_bases_when_a_later_one_binds_it():
     assert behaviour_differs_from_the_first_base_alone(CONTESTED_ORDER, "order") == []
 
 
-@pytest.mark.xfail(strict=True, reason="#76: a later base's __eq__ against salix's hash")
 def test_equal_instances_hash_equal_when_a_later_base_answers_equality():
     assert hash_disagreements(CONTESTED_HASH) == []
 

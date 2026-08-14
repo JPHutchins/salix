@@ -279,15 +279,10 @@ def test_a_class_that_throws_that_equality_away_is_not_asked_for_it():
     assert B(1, 0) != B(1, 0)
 
 
-@pytest.mark.xfail(strict=True, reason="#76: a later struct base's body __eq__ is not seen")
-def test_a_later_struct_base_answering_equality_is_not_covered_by_this():
-    """The limit of the walk, pinned so the claim above stays honest.
-
-    The search ends at the first struct base, which is exact while there is one
-    of them. With two, C3 puts a later struct base's own `__eq__` ahead of the
-    mixin -- the mixin is a shared ancestor, so it is deferred to the tail --
-    and the class resolves an equality this walk never saw. Structural hash
-    beside a body equality, which is the same break one level over.
+def test_the_first_struct_bases_record_wins_over_a_later_bases_body_equality():
+    """The first struct base's record is what the option asks for, and the
+    settle binds it over the MRO: a later struct base's body `__eq__` is
+    shadowed by the structural pair, hash beside it included.
     """
 
     class WithBodyEq(Base):
@@ -303,8 +298,9 @@ def test_a_later_struct_base_answering_equality_is_not_covered_by_this():
     class B(Plain, WithBodyEq):
         pass
 
-    assert B(1) == B(2)
-    assert hash(B(1)) == hash(B(2))
+    assert B(1) != B(2)
+    assert B(1) == B(1)
+    assert hash(B(1)) == hash(B(1))
 
 
 def test_a_co_base_that_paired_them_itself_keeps_its_own_inequality():
@@ -352,15 +348,11 @@ def test_a_co_base_derived_from_the_mixin_does_not_count_as_having_paired_them()
     assert (B(1, 0) != B(2, 0)) is False
 
 
-@pytest.mark.xfail(strict=True, reason="#76: a co-base between two struct bases is not seen")
-def test_a_co_base_between_two_struct_bases_is_not_seen_either():
-    """The same limit as the later-struct-base case, reached by a co-base
-    rather than by a struct one: C3 defers the shared mixin to the tail, so a
-    plain base sitting between two struct bases supplies the equality the class
-    resolves, and the walk ended at the first struct base without seeing it.
-
-    This is #47's own break in a shape that needs two struct bases to reach, so
-    it goes with the rest of #76 rather than here.
+def test_the_record_wins_over_a_co_base_between_two_struct_bases():
+    """The same rule as the later-struct-base case, reached by a co-base: a
+    plain base sitting between two struct bases supplied the equality the walk
+    never saw, and the settle now binds the structural pair the record asks
+    for over it.
     """
 
     class Second(Struct):
@@ -373,8 +365,9 @@ def test_a_co_base_between_two_struct_bases_is_not_seen_either():
     class B(Second, Equality, Base):
         pass
 
-    assert B(1) == B(2)
-    assert hash(B(1)) == hash(B(2))
+    assert B(1) != B(2)
+    assert B(1) == B(1)
+    assert hash(B(1)) == hash(B(1))
 
 
 def test_equality_and_inequality_may_come_from_different_co_bases():
