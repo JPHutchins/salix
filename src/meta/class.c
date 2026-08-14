@@ -326,9 +326,9 @@ static StructType * create_class(
 	return (StructType *) py_move(&created);
 }
 
-static int callable_accepts_keyword(PyObject * new, PyObject * const keyword) {
-	while (PyMethod_Check(new)) {
-		new = PyMethod_GET_FUNCTION(new);
+static int callable_accepts_keyword(PyObject * const new, PyObject * const keyword) {
+	if (PyMethod_Check(new)) {
+		return 0;
 	}
 
 	if (PyFunction_Check(new)) {
@@ -347,8 +347,14 @@ static int callable_accepts_keyword(PyObject * new, PyObject * const keyword) {
 		Py_ssize_t const named = code->co_argcount + code->co_kwonlyargcount;
 
 		for (Py_ssize_t i = code->co_posonlyargcount; i < named; ++i) {
-			if (PyUnicode_Compare(PyTuple_GET_ITEM(varnames, i), keyword) == 0) {
+			int const compared = PyUnicode_Compare(PyTuple_GET_ITEM(varnames, i), keyword);
+
+			if (compared == 0) {
 				return 1;
+			}
+
+			if (compared < 0 && PyErr_Occurred()) {
+				return -1;
 			}
 		}
 
