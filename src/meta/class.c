@@ -27,6 +27,7 @@ static StructType * create_class(
 );
 static PyTypeObject * winning_metatype(PyTypeObject * requested, PyObject * bases);
 static int delegate_accepts_keywords(PyTypeObject * winner);
+static int new_accepts_keywords(PyObject * new);
 static enum result install_fields(
 	StructType * struct_class,
 	StructType const * base,
@@ -268,7 +269,7 @@ static StructType * create_class(
 	PyTypeObject * const builder = winner->tp_new == StructMeta_new ? winner : metatype;
 	PyObject * forwarded = NULL;
 
-	if (builder != winner) {
+	if (builder != winner && keywords != NULL && PyDict_GET_SIZE(keywords) > 0) {
 		int const accepts = delegate_accepts_keywords(winner);
 
 		if (accepts < 0) {
@@ -313,10 +314,29 @@ static int delegate_accepts_keywords(PyTypeObject * const winner) {
 		return -1;
 	}
 
-	return (
-		PyFunction_Check(new) &&
-		(((PyCodeObject *) ((PyFunctionObject *) new)->func_code)->co_flags & CO_VARKEYWORDS) != 0
-	);
+	return new_accepts_keywords(new);
+}
+
+static int new_accepts_keywords(PyObject * new) {
+	while (PyMethod_Check(new)) {
+		new = PyMethod_GET_FUNCTION(new);
+	}
+
+	if (PyFunction_Check(new)) {
+		return (
+			(
+				((PyCodeObject *) ((PyFunctionObject *) new)->func_code)->co_flags &
+				CO_VARKEYWORDS
+			) !=
+			0
+		);
+	}
+
+	if (PyCFunction_Check(new)) {
+		return PyCFunction_GET_FLAGS(new) & METH_KEYWORDS;
+	}
+
+	return 0;
 }
 
 static PyTypeObject * winning_metatype(PyTypeObject * const requested, PyObject * const bases) {
