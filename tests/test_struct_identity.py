@@ -301,11 +301,20 @@ class TestAMetaclassSubclass:
         assert type(built) is Delegating
 
     def test_weakref_survives_the_handoff_to_a_derived_metatype(self):
-        class Delegating(META):
-            def __new__(metacls, name, bases, namespace, **keywords):
-                return super().__new__(metacls, name, bases, namespace, **keywords)
+        class Base(Struct, metaclass=Forwarding):
+            x: int
 
-        class Base(Struct, metaclass=Delegating):
+        built = META("Built", (Base,), {"__annotations__": {"y": int}}, weakref=True)
+        held = built(1, 2)
+
+        assert weakref.ref(held)() is held
+
+    def test_a_keyword_only_delegate_that_names_weakref_can_add_the_slot(self):
+        class KwOnly(META):
+            def __new__(metacls, name, bases, namespace, *, weakref=False):
+                return super().__new__(metacls, name, bases, namespace, weakref=weakref)
+
+        class Base(Struct, metaclass=KwOnly):
             x: int
 
         built = META("Built", (Base,), {"__annotations__": {"y": int}}, weakref=True)

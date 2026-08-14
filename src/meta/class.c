@@ -23,11 +23,12 @@ static StructType * create_class(
 	PyObject * name,
 	PyObject * bases,
 	PyObject * namespace,
-	PyObject * keywords
+	PyObject * forwarded_keywords
 );
 static PyTypeObject * winning_metatype(PyTypeObject * requested, PyObject * bases);
-static int metaclass_chain_accepts_keywords(PyTypeObject * winner);
-static int new_accepts_keywords(PyObject * new);
+static int metaclass_chain_accepts_keyword(PyTypeObject * winner, PyObject * keyword);
+static int callable_accepts_keyword(PyObject * new, PyObject * keyword);
+static PyObject * chain_forwarded_keywords(PyTypeObject * winner, PyObject * keywords);
 static enum result install_fields(
 	StructType * struct_class,
 	StructType const * base,
@@ -159,27 +160,37 @@ PyObject * build_struct_class(
 	}
 
 	PyTypeObject * const handoff = winning_metatype(metatype, bases);
+	PyObject * forwarded_keywords = NULL;
+	PY_MOVABLE(filtered_keywords, NULL);
+
+	if (handoff->tp_new != StructMeta_new && keywords != NULL && PyDict_GET_SIZE(keywords) > 0) {
+		filtered_keywords = chain_forwarded_keywords(handoff, keywords);
+
+		if (filtered_keywords == NULL) {
+			return NULL;
+		}
+
+		if (PyDict_GET_SIZE(filtered_keywords) > 0) {
+			forwarded_keywords = filtered_keywords;
+		}
+	}
 
 	if (
 		metatype == &StructMeta_Type &&
 		weakref_slot_is_new(request.options, bases) &&
-		handoff->tp_new != StructMeta_new
+		handoff->tp_new != StructMeta_new &&
+		(
+			filtered_keywords == NULL ||
+			PyDict_GetItemString(filtered_keywords, option_keywords[OPTION_WEAKREF]) == NULL
+		)
 	) {
-		int const accepts = metaclass_chain_accepts_keywords(handoff);
+		PyErr_SetString(
+			PyExc_TypeError,
+			"weakref=True cannot cross a metaclass __new__ that hands the build "
+			"off: the re-entered call cannot add the weakref slot"
+		);
 
-		if (accepts < 0) {
-			return NULL;
-		}
-
-		if (accepts == 0) {
-			PyErr_SetString(
-				PyExc_TypeError,
-				"weakref=True cannot cross a metaclass __new__ that hands the build "
-				"off: the re-entered call cannot add the weakref slot"
-			);
-
-			return NULL;
-		}
+		return NULL;
 	}
 
 	struct field_plan plan = field_plan_build(base, original_namespace);
@@ -196,6 +207,7 @@ PyObject * build_struct_class(
 				original_namespace,
 				plan.all_names,
 				weakref_expected(request.options, bases),
+				PyDict_GetItemString(original_namespace, "__slots__") != NULL &&
 				any_base_has_instance_dict(bases)
 			) !=
 			RESULT_OK
@@ -237,7 +249,7 @@ PyObject * build_struct_class(
 		)
 	);
 	StructType * struct_class = (
-		namespace != NULL ? create_class(metatype, name, bases, namespace, keywords) :
+		namespace != NULL ? create_class(metatype, name, bases, namespace, forwarded_keywords) :
 		NULL
 	);
 
@@ -281,7 +293,7 @@ static StructType * create_class(
 	PyObject * const name,
 	PyObject * const bases,
 	PyObject * const namespace,
-	PyObject * const keywords
+	PyObject * const forwarded_keywords
 ) {
 	PY_OWNED(type_args, PyTuple_Pack(3, name, bases, namespace));
 
@@ -291,21 +303,11 @@ static StructType * create_class(
 
 	PyTypeObject * const winner = winning_metatype(metatype, bases);
 	PyTypeObject * const builder = winner->tp_new == StructMeta_new ? winner : metatype;
-	PyObject * forwarded = NULL;
 
-	if (builder != winner && keywords != NULL && PyDict_GET_SIZE(keywords) > 0) {
-		int const accepts = metaclass_chain_accepts_keywords(winner);
-
-		if (accepts < 0) {
-			return NULL;
-		}
-
-		if (accepts == 1) {
-			forwarded = keywords;
-		}
-	}
-
-	PY_MOVABLE(created, PyType_Type.tp_new(builder, type_args, forwarded));
+	PY_MOVABLE(
+		created,
+		PyType_Type.tp_new(builder, type_args, builder == winner ? NULL : forwarded_keywords)
+	);
 
 	if (created == NULL) {
 		return NULL;
@@ -325,13 +327,7 @@ static StructType * create_class(
 	return (StructType *) py_move(&created);
 }
 
-/* It is the third walk of `bases` in a class creation, after find_struct_base
- * and _PyType_CalculateMetaclass. Measured, and smaller than the measurement:
- * replacing the body with `return requested` leaves class creation at 9.77-9.87
- * us for a 16-field class either way, so the walk is bounded by the width of
- * that band rather than shown to be free. It is one Py_TYPE and one
- * PyType_IsSubtype per base, and a class has one. */
-static int metaclass_chain_accepts_keywords(PyTypeObject * const winner) {
+static int metaclass_chain_accepts_keyword(PyTypeObject * const winner, PyObject * const keyword) {
 	PyObject * const mro = winner->tp_mro;
 
 	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); ++i) {
@@ -347,7 +343,7 @@ static int metaclass_chain_accepts_keywords(PyTypeObject * const winner) {
 			return -1;
 		}
 
-		if (new_accepts_keywords(new) != 1) {
+		if (callable_accepts_keyword(new, keyword) != 1) {
 			return 0;
 		}
 	}
@@ -355,19 +351,33 @@ static int metaclass_chain_accepts_keywords(PyTypeObject * const winner) {
 	return 1;
 }
 
-static int new_accepts_keywords(PyObject * new) {
+static int callable_accepts_keyword(PyObject * new, PyObject * const keyword) {
 	while (PyMethod_Check(new)) {
 		new = PyMethod_GET_FUNCTION(new);
 	}
 
 	if (PyFunction_Check(new)) {
-		return (
-			(
-				((PyCodeObject *) ((PyFunctionObject *) new)->func_code)->co_flags &
-				CO_VARKEYWORDS
-			) !=
-			0
-		);
+		PyCodeObject * const code = (PyCodeObject *) ((PyFunctionObject *) new)->func_code;
+
+		if ((code->co_flags & CO_VARKEYWORDS) != 0) {
+			return 1;
+		}
+
+		PY_OWNED(varnames, PyObject_GetAttrString((PyObject *) code, "co_varnames"));
+
+		if (varnames == NULL) {
+			return -1;
+		}
+
+		Py_ssize_t const named = code->co_argcount + code->co_kwonlyargcount;
+
+		for (Py_ssize_t i = code->co_posonlyargcount; i < named; ++i) {
+			if (PyUnicode_Compare(PyTuple_GET_ITEM(varnames, i), keyword) == 0) {
+				return 1;
+			}
+		}
+
+		return 0;
 	}
 
 	if (PyCFunction_Check(new)) {
@@ -377,6 +387,38 @@ static int new_accepts_keywords(PyObject * new) {
 	return 0;
 }
 
+static PyObject * chain_forwarded_keywords(PyTypeObject * const winner, PyObject * const keywords) {
+	PY_MOVABLE(filtered, PyDict_New());
+
+	if (filtered == NULL) {
+		return NULL;
+	}
+
+	Py_ssize_t position = 0;
+	PyObject * key;
+	PyObject * value;
+
+	while (PyDict_Next(keywords, &position, &key, &value)) {
+		int const accepts = metaclass_chain_accepts_keyword(winner, key);
+
+		if (accepts < 0) {
+			return NULL;
+		}
+
+		if (accepts == 1 && PyDict_SetItem(filtered, key, value) < 0) {
+			return NULL;
+		}
+	}
+
+	return py_move(&filtered);
+}
+
+/* It is the third walk of `bases` in a class creation, after find_struct_base
+ * and _PyType_CalculateMetaclass. Measured, and smaller than the measurement:
+ * replacing the body with `return requested` leaves class creation at 9.77-9.87
+ * us for a 16-field class either way, so the walk is bounded by the width of
+ * that band rather than shown to be free. It is one Py_TYPE and one
+ * PyType_IsSubtype per base, and a class has one. */
 static PyTypeObject * winning_metatype(PyTypeObject * const requested, PyObject * const bases) {
 	PyTypeObject * winner = requested;
 

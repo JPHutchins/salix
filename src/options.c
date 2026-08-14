@@ -4,15 +4,6 @@
 #include "options.h"
 #include "owned.h"
 
-enum option {
-	OPTION_FROZEN,
-	OPTION_EQ,
-	OPTION_ORDER,
-	OPTION_REPR,
-	OPTION_MATCH_ARGS,
-	OPTION_WEAKREF,
-};
-
 enum : Py_ssize_t {
 	OPTION_COUNT = OPTION_WEAKREF + 1,
 };
@@ -22,7 +13,7 @@ struct option_lookup {
 	enum option option;
 };
 
-static char const * const option_keywords[OPTION_COUNT] = {
+char const * const option_keywords[OPTION_COUNT] = {
 	[OPTION_FROZEN] = "frozen",
 	[OPTION_EQ] = "eq",
 	[OPTION_ORDER] = "order",
