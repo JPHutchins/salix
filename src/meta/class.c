@@ -26,7 +26,6 @@ static StructType * create_class(
 	PyObject * forwarded_keywords
 );
 static PyTypeObject * winning_metatype(PyTypeObject * requested, PyObject * bases);
-static int metaclass_chain_accepts_keyword(PyTypeObject * winner, PyObject * keyword);
 static int callable_accepts_keyword(PyObject * new, PyObject * keyword);
 static PyObject * chain_forwarded_keywords(PyTypeObject * winner, PyObject * keywords);
 static enum result install_fields(
@@ -327,30 +326,6 @@ static StructType * create_class(
 	return (StructType *) py_move(&created);
 }
 
-static int metaclass_chain_accepts_keyword(PyTypeObject * const winner, PyObject * const keyword) {
-	PyObject * const mro = winner->tp_mro;
-
-	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); ++i) {
-		PyTypeObject * const link = (PyTypeObject *) PyTuple_GET_ITEM(mro, i);
-
-		if (link == &StructMeta_Type || link == &PyType_Type) {
-			break;
-		}
-
-		PY_OWNED(new, PyObject_GetAttrString((PyObject *) link, "__new__"));
-
-		if (new == NULL) {
-			return -1;
-		}
-
-		if (callable_accepts_keyword(new, keyword) != 1) {
-			return 0;
-		}
-	}
-
-	return 1;
-}
-
 static int callable_accepts_keyword(PyObject * new, PyObject * const keyword) {
 	while (PyMethod_Check(new)) {
 		new = PyMethod_GET_FUNCTION(new);
@@ -392,6 +367,28 @@ static int callable_accepts_keyword(PyObject * new, PyObject * const keyword) {
 }
 
 static PyObject * chain_forwarded_keywords(PyTypeObject * const winner, PyObject * const keywords) {
+	PY_MOVABLE(chain, PyList_New(0));
+
+	if (chain == NULL) {
+		return NULL;
+	}
+
+	PyObject * const mro = winner->tp_mro;
+
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); ++i) {
+		PyTypeObject * const link = (PyTypeObject *) PyTuple_GET_ITEM(mro, i);
+
+		if (link == &StructMeta_Type || link == &PyType_Type) {
+			break;
+		}
+
+		PY_OWNED(new, PyObject_GetAttrString((PyObject *) link, "__new__"));
+
+		if (new == NULL || PyList_Append(chain, new) < 0) {
+			return NULL;
+		}
+	}
+
 	PY_MOVABLE(filtered, PyDict_New());
 
 	if (filtered == NULL) {
@@ -403,7 +400,15 @@ static PyObject * chain_forwarded_keywords(PyTypeObject * const winner, PyObject
 	PyObject * value;
 
 	while (PyDict_Next(keywords, &position, &key, &value)) {
-		int const accepts = metaclass_chain_accepts_keyword(winner, key);
+		int accepts = 1;
+
+		for (Py_ssize_t i = 0; i < PyList_GET_SIZE(chain); ++i) {
+			accepts = callable_accepts_keyword(PyList_GET_ITEM(chain, i), key);
+
+			if (accepts <= 0) {
+				break;
+			}
+		}
 
 		if (accepts < 0) {
 			return NULL;

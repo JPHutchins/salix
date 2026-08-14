@@ -564,6 +564,20 @@ class TestBindingsSalixOwns:
 
         assert instance.__dict__ == {"extra": 2}
 
+    @pytest.mark.skipif(sys.version_info < (3, 12), reason="managed dicts are 3.12+")
+    def test_a_slot_naming_an_inherited_managed_dict_is_accepted(self):
+        class DictedSlots:
+            __slots__ = ("__dict__",)
+
+        class WithManaged(Struct, DictedSlots, frozen=False):
+            x: int
+            __slots__ = ("__dict__",)
+
+        instance = WithManaged(1)
+        instance.extra = 2
+
+        assert instance.__dict__ == {"extra": 2}
+
     def test_a_field_named_weakref_is_refused(self):
         with pytest.raises(TypeError, match="weakref slot's name"):
 

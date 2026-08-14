@@ -228,7 +228,11 @@ static bool carries_weakref_slot(PyTypeObject * const base) {
 }
 
 static bool carries_instance_dict(PyTypeObject * const base) {
+#if PY_VERSION_HEX < 0x030C0000
 	return base->tp_dictoffset != 0;
+#else
+	return base->tp_dictoffset != 0 || (base->tp_flags & Py_TPFLAGS_MANAGED_DICT) != 0;
+#endif
 }
 
 static bool any_base_satisfies(PyObject * const bases, bool (*carries)(PyTypeObject *)) {
