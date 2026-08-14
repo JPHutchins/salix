@@ -122,8 +122,9 @@ def test_a_mutable_struct_may_not_inherit_from_a_frozen_one():
 
 
 def test_a_frozen_struct_may_strengthen_a_mutable_one():
-    """frozen=True over a mutable base is a strengthening the caller asks for,
-    and the blocking __setattr__ is bound for it."""
+    """A fieldless frozen base imposes nothing, and frozen=True is a
+    strengthening the caller asks for — the promise flows in from the caller
+    rather than the widest base."""
 
     class Child(Mutable, frozen=True):
         pass
@@ -133,8 +134,8 @@ def test_a_frozen_struct_may_strengthen_a_mutable_one():
 
 
 def test_frozen_true_over_a_mutable_base_holds_beside_a_permissive_co_base():
-    """The block is bound into the child's own namespace, which the MRO
-    reaches before any co-base, in either order."""
+    """The block is enforced by the mixin's tp_setattro, which the MRO reaches
+    before any co-base, in either order, for writes and deletes."""
 
     class Permissive:
         def __setattr__(self, name: str, value: object) -> None:
@@ -147,21 +148,40 @@ def test_frozen_true_over_a_mutable_base_holds_beside_a_permissive_co_base():
         pass
 
     for Child in (Ahead, Behind):
-        with pytest.raises(TypeError, match="does not support attribute assignment"):
+        with pytest.raises(TypeError, match="does not support attribute"):
             Child(1).x = 9
+
+        with pytest.raises(TypeError, match="does not support attribute"):
+            del Child(1).x
 
 
 def test_a_fieldless_frozen_base_promises_nothing_to_a_mutable_class():
+    """A fieldless frozen base made no promise, so frozen=False over one is
+    free, in either order."""
+
     class FrozenFieldless(Struct):
         pass
 
-    class Child(FrozenFieldless, Mutable, frozen=False):
+    class Ahead(FrozenFieldless, Mutable, frozen=False):
         pass
 
-    instance = Child(1)
-    instance.x = 9
+    class Behind(Mutable, FrozenFieldless, frozen=False):
+        pass
 
-    assert instance.x == 9
+    for Child in (Ahead, Behind):
+        instance = Child(1)
+        instance.x = 9
+
+        assert instance.x == 9
+
+
+def test_a_fielded_frozen_base_refuses_a_mutable_child_in_either_order():
+    class FrozenOther(Struct):
+        other: object
+
+    for order in ((Frozen, FrozenOther), (FrozenOther, Frozen)):
+        with pytest.raises(TypeError, match="mutable struct cannot inherit from a frozen one"):
+            type(Struct)("Child", order, {}, frozen=False)
 
 
 def test_a_base_with_no_fields_imposes_nothing():

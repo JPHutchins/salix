@@ -9,6 +9,7 @@
  * the value bound to `result`. Aborts the test on any Python error. */
 PyObject * testing_evaluate(char const * source);
 
+void class_tests(void);
 void construct_tests(void);
 void fields_tests(void);
 void meta_tests(void);
