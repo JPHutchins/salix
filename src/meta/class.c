@@ -167,8 +167,26 @@ PyObject * build_struct_class(
 ) {
 	StructType const * const behaviour = find_behaviour_base(bases);
 	struct options const inherited = inherited_options(bases, behaviour);
+	bool fielded_base_is_frozen = false;
+
+	if (keywords != NULL) {
+		PY_OWNED(frozen_name, PyUnicode_InternFromString(option_keywords[OPTION_FROZEN]));
+
+		if (frozen_name == NULL) {
+			return NULL;
+		}
+
+		int const asked = PyDict_Contains(keywords, frozen_name);
+
+		if (asked < 0) {
+			return NULL;
+		}
+
+		fielded_base_is_frozen = asked == 1 && any_fielded_base_is_frozen(bases);
+	}
+
 	struct options_request const request =
-		options_read(keywords, inherited, any_fielded_base_is_frozen(bases));
+		options_read(keywords, inherited, fielded_base_is_frozen);
 
 	if (request.tag == OPTIONS_REJECTED) {
 		return NULL;
@@ -793,11 +811,24 @@ static enum result settle_mro_bindings(
 	struct binding_plan const bindings,
 	struct options const options
 ) {
+	PyTypeObject * const type = (PyTypeObject *) struct_class;
+
+	/* The frozen block rides the mixin's tp_setattro; a co-base carrying its
+	 * own C-level slot can divert the inherited one to a dispatch that
+	 * bypasses the rebind, so the enforcing slot is restored here. */
+	if (
+		options.frozen &&
+		PyDict_GetItemString(original_namespace, "__setattr__") == NULL &&
+		PyDict_GetItemString(original_namespace, "__delattr__") == NULL &&
+		type->tp_setattro != StructMixin_Type.tp_setattro
+	) {
+		type->tp_setattro = StructMixin_Type.tp_setattro;
+	}
+
 	if (struct_base_count(bases) <= 1) {
 		return RESULT_OK;
 	}
 
-	PyTypeObject * const type = (PyTypeObject *) struct_class;
 	PyTypeObject * const first_struct = (PyTypeObject *) find_behaviour_base(bases);
 
 	PY_MOVABLE(mixin_eq, NULL);

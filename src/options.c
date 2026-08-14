@@ -176,7 +176,7 @@ static void test_no_keywords_inherit_the_base(void) {
 	struct options inherited = options_initial();
 	inherited.eq = false;
 
-	struct options_request const request = options_read(NULL, inherited, true);
+	struct options_request const request = options_read(NULL, inherited, false);
 
 	TEST_ASSERT_EQUAL_INT(OPTIONS_RESOLVED, request.tag);
 	TEST_ASSERT_FALSE(request.options.eq);
@@ -220,7 +220,7 @@ static void test_ordering_without_equality_is_rejected(void) {
 	Py_DECREF(keywords);
 }
 
-static void test_a_constraining_base_pins_frozen(void) {
+static void test_a_fielded_frozen_base_pins_frozen(void) {
 	PyObject * const keywords = keywords_of("frozen", false);
 	struct options_request const constrained = options_read(keywords, options_initial(), true);
 
@@ -243,7 +243,7 @@ void options_tests(void) {
 	RUN_TEST(test_a_keyword_replaces_only_the_flag_it_names);
 	RUN_TEST(test_an_unknown_keyword_is_rejected);
 	RUN_TEST(test_ordering_without_equality_is_rejected);
-	RUN_TEST(test_a_constraining_base_pins_frozen);
+	RUN_TEST(test_a_fielded_frozen_base_pins_frozen);
 }
 
 #endif
