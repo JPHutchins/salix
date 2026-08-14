@@ -20,6 +20,7 @@
 
 static StructType * create_class(
 	PyTypeObject * metatype,
+	PyTypeObject * handoff,
 	PyObject * name,
 	PyObject * bases,
 	PyObject * namespace,
@@ -277,7 +278,14 @@ PyObject * build_struct_class(
 		)
 	);
 	StructType * struct_class = (
-		namespace != NULL ? create_class(metatype, name, bases, namespace, forwarded_keywords) :
+		namespace != NULL ? create_class(
+			metatype,
+			handoff,
+			name,
+			bases,
+			namespace,
+			forwarded_keywords
+		) :
 		NULL
 	);
 
@@ -318,6 +326,7 @@ PyObject * build_struct_class(
 
 static StructType * create_class(
 	PyTypeObject * const metatype,
+	PyTypeObject * const handoff,
 	PyObject * const name,
 	PyObject * const bases,
 	PyObject * const namespace,
@@ -329,12 +338,11 @@ static StructType * create_class(
 		return NULL;
 	}
 
-	PyTypeObject * const winner = winning_metatype(metatype, bases);
-	PyTypeObject * const builder = winner->tp_new == StructMeta_new ? winner : metatype;
+	PyTypeObject * const builder = handoff->tp_new == StructMeta_new ? handoff : metatype;
 
 	PY_MOVABLE(
 		created,
-		PyType_Type.tp_new(builder, type_args, builder == winner ? NULL : forwarded_keywords)
+		PyType_Type.tp_new(builder, type_args, builder == handoff ? NULL : forwarded_keywords)
 	);
 
 	if (created == NULL) {
@@ -345,7 +353,7 @@ static StructType * create_class(
 		PyErr_Format(
 			PyExc_TypeError,
 			"%.200s.__new__ returned %.200s, which is not a struct class",
-			winner->tp_name,
+			handoff->tp_name,
 			Py_TYPE(created)->tp_name
 		);
 
