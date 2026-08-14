@@ -70,7 +70,11 @@ struct binding_plan binding_plan(
 	bool body_defines_hash
 );
 
-bool settled_by_the_plan(char const * name, struct binding_plan plan);
+extern char const * const rebind_comparison[];
+extern char const * const rebind_not_equal[];
+extern char const * const rebind_representation[];
+extern char const * const rebind_mutability[];
+extern char const * const rebind_hash[];
 
 PyObject * build_class_namespace(
 	PyObject * original_namespace,
