@@ -3,6 +3,12 @@
 #include <stddef.h>
 #include <string.h>
 
+#if PY_VERSION_HEX < 0x030B0000
+#	include <code.h>
+#else
+#	include <cpython/code.h>
+#endif
+
 #include "../construct.h"
 #include "../fields.h"
 #include "meta.h"
@@ -20,6 +26,7 @@ static StructType * create_class(
 	PyObject * keywords
 );
 static PyTypeObject * winning_metatype(PyTypeObject * requested, PyObject * bases);
+static int delegate_accepts_keywords(PyTypeObject * winner);
 static enum result install_fields(
 	StructType * struct_class,
 	StructType const * base,
@@ -259,10 +266,21 @@ static StructType * create_class(
 
 	PyTypeObject * const winner = winning_metatype(metatype, bases);
 	PyTypeObject * const builder = winner->tp_new == StructMeta_new ? winner : metatype;
-	PY_MOVABLE(
-		created,
-		PyType_Type.tp_new(builder, type_args, builder == winner ? NULL : keywords)
-	);
+	PyObject * forwarded = NULL;
+
+	if (builder != winner) {
+		int const accepts = delegate_accepts_keywords(winner);
+
+		if (accepts < 0) {
+			return NULL;
+		}
+
+		if (accepts == 1) {
+			forwarded = keywords;
+		}
+	}
+
+	PY_MOVABLE(created, PyType_Type.tp_new(builder, type_args, forwarded));
 
 	if (created == NULL) {
 		return NULL;
@@ -288,6 +306,19 @@ static StructType * create_class(
  * us for a 16-field class either way, so the walk is bounded by the width of
  * that band rather than shown to be free. It is one Py_TYPE and one
  * PyType_IsSubtype per base, and a class has one. */
+static int delegate_accepts_keywords(PyTypeObject * const winner) {
+	PY_OWNED(new, PyObject_GetAttrString((PyObject *) winner, "__new__"));
+
+	if (new == NULL) {
+		return -1;
+	}
+
+	return (
+		PyFunction_Check(new) &&
+		(((PyCodeObject *) ((PyFunctionObject *) new)->func_code)->co_flags & CO_VARKEYWORDS) != 0
+	);
+}
+
 static PyTypeObject * winning_metatype(PyTypeObject * const requested, PyObject * const bases) {
 	PyTypeObject * winner = requested;
 

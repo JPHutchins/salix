@@ -298,6 +298,7 @@ class TestAMetaclassSubclass:
         built = META("Built", (Base,), {"__annotations__": {"y": int}}, order=True)
 
         assert built(1, 2) < built(1, 3)
+        assert type(built) is Delegating
 
     def test_weakref_survives_the_handoff_to_a_derived_metatype(self):
         class Delegating(META):
@@ -311,7 +312,23 @@ class TestAMetaclassSubclass:
         held = built(1, 2)
 
         assert weakref.ref(held)() is held
-        assert type(built) is Delegating
+
+    def test_a_delegate_without_keywords_still_gets_none_handed_over(self):
+        """A delegate whose __new__ takes no **keywords would be handed the
+        options and raise; it gets the keyword-less hand-off it declared, and
+        the settle restores what the keyword meant.
+        """
+
+        class Plain(META):
+            def __new__(metacls, name, bases, namespace):
+                return super().__new__(metacls, name, bases, namespace)
+
+        class Base(Struct, metaclass=Plain):
+            x: int
+
+        built = META("Built", (Base,), {"__annotations__": {"y": int}}, order=True)
+
+        assert built(1, 2) < built(1, 3)
 
     def test_two_unrelated_metatypes_still_raise_the_conflict(self):
         """Picking the winner ourselves must not swallow the case that has no
