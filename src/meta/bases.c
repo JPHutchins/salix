@@ -220,18 +220,28 @@ struct options inherited_options(PyObject * const bases, StructType const * cons
 }
 
 static bool carries_weakref_slot(PyTypeObject const * const base) {
-#if PY_VERSION_HEX < 0x030C0000
-	return base->tp_weaklistoffset != 0;
+	if (base->tp_weaklistoffset != 0) {
+		return true;
+	}
+
+#if PY_VERSION_HEX >= 0x030C0000
+	return (base->tp_flags & Py_TPFLAGS_HEAPTYPE) != 0 &&
+		(base->tp_flags & Py_TPFLAGS_MANAGED_WEAKREF) != 0;
 #else
-	return base->tp_weaklistoffset != 0 || (base->tp_flags & Py_TPFLAGS_MANAGED_WEAKREF) != 0;
+	return false;
 #endif
 }
 
 static bool carries_instance_dict(PyTypeObject const * const base) {
-#if PY_VERSION_HEX < 0x030C0000
-	return base->tp_dictoffset != 0;
+	if (base->tp_dictoffset != 0) {
+		return true;
+	}
+
+#if PY_VERSION_HEX >= 0x030C0000
+	return (base->tp_flags & Py_TPFLAGS_HEAPTYPE) != 0 &&
+		(base->tp_flags & Py_TPFLAGS_MANAGED_DICT) != 0;
 #else
-	return base->tp_dictoffset != 0 || (base->tp_flags & Py_TPFLAGS_MANAGED_DICT) != 0;
+	return false;
 #endif
 }
 

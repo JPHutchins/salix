@@ -369,6 +369,21 @@ class TestAMetaclassSubclass:
         with pytest.raises(TypeError, match="cannot cross"):
             META("Built", (Base,), {"__annotations__": {"y": int}}, weakref=True)
 
+    def test_a_delegate_that_swallows_the_options_gets_the_displaced_slot_advice(self):
+        """The boundary: a delegate that accepts the options and drops them
+        re-enters keyword-less, and the advice blames the entry salix wrote.
+        """
+
+        class Swallowing(META):
+            def __new__(metacls, name, bases, namespace, **keywords):
+                return super().__new__(metacls, name, bases, namespace)
+
+        class Base(Struct, metaclass=Swallowing):
+            x: int
+
+        with pytest.raises(TypeError, match="carries no weakref slot"):
+            META("Built", (Base,), {"__annotations__": {"y": int}}, weakref=True)
+
     def test_a_cobase_weakref_slot_needs_no_duplicate_entry(self):
         class Slotted:
             __slots__ = ("__weakref__",)
