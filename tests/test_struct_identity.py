@@ -327,7 +327,11 @@ class TestAMetaclassSubclass:
 
         assert weakref.ref(held)() is held
 
-    def test_a_keyword_only_delegate_that_names_only_weakref_cannot_take_the_rest(self):
+    def test_a_keyword_only_delegate_that_names_only_weakref_gets_weakref_alone(self):
+        """The one option the settle cannot repair rides by itself; the rest
+        takes the keyword-less path and the settle restores it.
+        """
+
         class KwOnly(META):
             def __new__(metacls, name, bases, namespace, *, weakref=False):
                 return super().__new__(metacls, name, bases, namespace, weakref=weakref)
@@ -335,8 +339,11 @@ class TestAMetaclassSubclass:
         class Base(Struct, metaclass=KwOnly):
             x: int
 
-        with pytest.raises(TypeError, match="cannot cross"):
-            META("Built", (Base,), {"__annotations__": {"y": int}}, weakref=True, eq=False)
+        built = META("Built", (Base,), {"__annotations__": {"y": int}}, weakref=True, eq=False)
+        held = built(1, 2)
+
+        assert weakref.ref(held)() is held
+        assert built(1, 2) != built(1, 3)
 
     def test_a_delegate_without_keywords_still_gets_none_handed_over(self):
         """A delegate whose __new__ takes no **keywords would be handed the

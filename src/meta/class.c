@@ -27,8 +27,11 @@ static StructType * create_class(
 );
 static PyTypeObject * winning_metatype(PyTypeObject * requested, PyObject * bases);
 static int callable_accepts_keyword(PyObject * new, char const * keyword);
+static int callable_accepts_keywords(PyObject * new, PyObject * keywords);
+static int code_accepts_keyword(PyCodeObject * code, PyObject * varnames, char const * keyword);
 static PyObject * metaclass_chain(PyTypeObject * winner);
 static int chain_accepts_keywords(PyTypeObject * winner, PyObject * keywords);
+static int chain_accepts_keyword(PyTypeObject * winner, char const * keyword);
 static enum result install_fields(
 	StructType * struct_class,
 	StructType const * base,
@@ -161,7 +164,9 @@ PyObject * build_struct_class(
 
 	PyTypeObject * const handoff = winning_metatype(metatype, bases);
 	PyObject * forwarded_keywords = NULL;
-	int accepts = 1;
+	PY_MOVABLE(weakref_only, NULL);
+	int accepts_all = 1;
+	int accepts_weakref = 1;
 
 	if (
 		handoff != metatype &&
@@ -169,14 +174,34 @@ PyObject * build_struct_class(
 		keywords != NULL &&
 		PyDict_GET_SIZE(keywords) > 0
 	) {
-		accepts = chain_accepts_keywords(handoff, keywords);
+		accepts_all = chain_accepts_keywords(handoff, keywords);
 
-		if (accepts < 0) {
+		if (accepts_all < 0) {
 			return NULL;
 		}
 
-		if (accepts == 1) {
+		if (accepts_all == 1) {
 			forwarded_keywords = keywords;
+		} else {
+			accepts_weakref = chain_accepts_keyword(handoff, option_keywords[OPTION_WEAKREF]);
+
+			if (accepts_weakref < 0) {
+				return NULL;
+			}
+
+			if (accepts_weakref == 1 && request.options.weakref) {
+				weakref_only = PyDict_New();
+
+				if (
+					weakref_only == NULL ||
+					PyDict_SetItemString(weakref_only, option_keywords[OPTION_WEAKREF], Py_True) <
+						0
+				) {
+					return NULL;
+				}
+
+				forwarded_keywords = weakref_only;
+			}
 		}
 	}
 
@@ -184,7 +209,8 @@ PyObject * build_struct_class(
 		metatype == &StructMeta_Type &&
 		weakref_slot_is_new(request.options, bases) &&
 		handoff->tp_new != StructMeta_new &&
-		accepts == 0
+		accepts_all == 0 &&
+		accepts_weakref == 0
 	) {
 		PyErr_SetString(
 			PyExc_TypeError,
@@ -205,13 +231,7 @@ PyObject * build_struct_class(
 		refuse_colliding_methods(original_namespace, plan.all_names, name) != RESULT_OK ||
 		refuse_mixin_method_fields(plan.all_names) != RESULT_OK ||
 		refuse_slot_name_fields(plan.new_names) != RESULT_OK ||
-		refuse_displaced_slots(
-				original_namespace,
-				plan.all_names,
-				weakref_expected(request.options, bases),
-				PyDict_GetItemString(original_namespace, "__slots__") != NULL &&
-				any_base_has_instance_dict(bases)
-			) !=
+		refuse_displaced_slots(original_namespace, plan.all_names, bases, request.options) !=
 			RESULT_OK
 	) {
 		field_plan_clear(&plan);
@@ -329,23 +349,11 @@ static StructType * create_class(
 	return (StructType *) py_move(&created);
 }
 
-static int callable_accepts_keyword(PyObject * const new, char const * const keyword) {
-	if (!PyFunction_Check(new)) {
-		return 0;
-	}
-
-	PyCodeObject * const code = (PyCodeObject *) ((PyFunctionObject *) new)->func_code;
-
-	if ((code->co_flags & CO_VARKEYWORDS) != 0) {
-		return 1;
-	}
-
-	PY_OWNED(varnames, PyObject_GetAttrString((PyObject *) code, "co_varnames"));
-
-	if (varnames == NULL) {
-		return -1;
-	}
-
+static int code_accepts_keyword(
+	PyCodeObject * const code,
+	PyObject * const varnames,
+	char const * const keyword
+) {
 	Py_ssize_t const named = code->co_argcount + code->co_kwonlyargcount;
 
 	for (Py_ssize_t i = code->co_posonlyargcount; i < named; ++i) {
@@ -364,6 +372,68 @@ static int callable_accepts_keyword(PyObject * const new, char const * const key
 	}
 
 	return 0;
+}
+
+static int callable_accepts_keyword(PyObject * const new, char const * const keyword) {
+	if (!PyFunction_Check(new)) {
+		return 0;
+	}
+
+	PyCodeObject * const code = (PyCodeObject *) ((PyFunctionObject *) new)->func_code;
+
+	if ((code->co_flags & CO_VARKEYWORDS) != 0) {
+		return 1;
+	}
+
+	PY_OWNED(varnames, PyObject_GetAttrString((PyObject *) code, "co_varnames"));
+
+	if (varnames == NULL) {
+		return -1;
+	}
+
+	return code_accepts_keyword(code, varnames, keyword);
+}
+
+static int callable_accepts_keywords(PyObject * const new, PyObject * const keywords) {
+	if (!PyFunction_Check(new)) {
+		return 0;
+	}
+
+	PyCodeObject * const code = (PyCodeObject *) ((PyFunctionObject *) new)->func_code;
+
+	if ((code->co_flags & CO_VARKEYWORDS) != 0) {
+		return 1;
+	}
+
+	PY_OWNED(varnames, PyObject_GetAttrString((PyObject *) code, "co_varnames"));
+
+	if (varnames == NULL) {
+		return -1;
+	}
+
+	Py_ssize_t position = 0;
+	PyObject * key;
+	PyObject * value;
+
+	while (PyDict_Next(keywords, &position, &key, &value)) {
+		char const * const name = PyUnicode_AsUTF8(key);
+
+		if (name == NULL) {
+			return -1;
+		}
+
+		int const accepts = code_accepts_keyword(code, varnames, name);
+
+		if (accepts < 0) {
+			return -1;
+		}
+
+		if (accepts == 0) {
+			return 0;
+		}
+	}
+
+	return 1;
 }
 
 static PyObject * metaclass_chain(PyTypeObject * const winner) {
@@ -399,27 +469,33 @@ static int chain_accepts_keywords(PyTypeObject * const winner, PyObject * const 
 		return -1;
 	}
 
-	Py_ssize_t position = 0;
-	PyObject * key;
-	PyObject * value;
+	for (Py_ssize_t i = 0; i < PyList_GET_SIZE(chain); ++i) {
+		int const accepts = callable_accepts_keywords(PyList_GET_ITEM(chain, i), keywords);
 
-	while (PyDict_Next(keywords, &position, &key, &value)) {
-		char const * const name = PyUnicode_AsUTF8(key);
-
-		if (name == NULL) {
+		if (accepts < 0) {
 			return -1;
 		}
 
-		for (Py_ssize_t i = 0; i < PyList_GET_SIZE(chain); ++i) {
-			int const accepts = callable_accepts_keyword(PyList_GET_ITEM(chain, i), name);
+		if (accepts == 0) {
+			return 0;
+		}
+	}
 
-			if (accepts < 0) {
-				return -1;
-			}
+	return 1;
+}
 
-			if (accepts == 0) {
-				return 0;
-			}
+static int chain_accepts_keyword(PyTypeObject * const winner, char const * const keyword) {
+	PY_OWNED(chain, metaclass_chain(winner));
+
+	if (chain == NULL) {
+		return -1;
+	}
+
+	for (Py_ssize_t i = 0; i < PyList_GET_SIZE(chain); ++i) {
+		int const accepts = callable_accepts_keyword(PyList_GET_ITEM(chain, i), keyword);
+
+		if (accepts <= 0) {
+			return accepts;
 		}
 	}
 

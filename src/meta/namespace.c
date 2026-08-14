@@ -100,14 +100,17 @@ PyObject * build_class_namespace(
 enum result refuse_displaced_slots(
 	PyObject * const original_namespace,
 	PyObject * const all_names,
-	bool const carries_a_weakref_slot,
-	bool const carries_an_instance_dict
+	PyObject * const bases,
+	struct options const options
 ) {
 	PyObject * const declared = PyDict_GetItemString(original_namespace, "__slots__");
 
 	if (declared == NULL) {
 		return PyErr_Occurred() ? RESULT_ERROR : RESULT_OK;
 	}
+
+	bool const carries_a_weakref_slot = weakref_expected(options, bases);
+	bool const carries_an_instance_dict = any_base_has_instance_dict(bases);
 
 	PY_OWNED(
 		entries,

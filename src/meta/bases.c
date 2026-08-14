@@ -219,15 +219,19 @@ struct options inherited_options(PyObject * const bases, StructType const * cons
 	};
 }
 
-bool has_weakref_slot(StructType const * const base) {
-	return base != NULL && base->heap_type.ht_type.tp_weaklistoffset != 0;
-}
-
-static bool carries_weakref_slot(PyTypeObject * const base) {
+static bool carries_weakref_slot(PyTypeObject const * const base) {
+#if PY_VERSION_HEX < 0x030C0000
 	return base->tp_weaklistoffset != 0;
+#else
+	return base->tp_weaklistoffset != 0 || (base->tp_flags & Py_TPFLAGS_MANAGED_WEAKREF) != 0;
+#endif
 }
 
-static bool carries_instance_dict(PyTypeObject * const base) {
+bool has_weakref_slot(StructType const * const base) {
+	return base != NULL && carries_weakref_slot(&base->heap_type.ht_type);
+}
+
+static bool carries_instance_dict(PyTypeObject const * const base) {
 #if PY_VERSION_HEX < 0x030C0000
 	return base->tp_dictoffset != 0;
 #else
@@ -235,7 +239,7 @@ static bool carries_instance_dict(PyTypeObject * const base) {
 #endif
 }
 
-static bool any_base_satisfies(PyObject * const bases, bool (*carries)(PyTypeObject *)) {
+static bool any_base_satisfies(PyObject * const bases, bool (*carries)(PyTypeObject const *)) {
 	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(bases); ++i) {
 		PyObject * const base = PyTuple_GET_ITEM(bases, i);
 
