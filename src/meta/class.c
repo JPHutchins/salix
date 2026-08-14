@@ -27,12 +27,14 @@ static StructType * create_class(
 	PyObject * forwarded_keywords
 );
 static PyTypeObject * winning_metatype(PyTypeObject * requested, PyObject * bases);
-static int callable_accepts_keyword(PyObject * new, char const * keyword);
-static int callable_accepts_keywords(PyObject * new, PyObject * keywords);
+struct chain_verdict {
+	int accepts_all;
+	int accepts_weakref;
+	bool readable;
+};
 static int code_accepts_keyword(PyCodeObject * code, PyObject * varnames, char const * keyword);
 static PyObject * metaclass_chain(PyTypeObject * winner);
-static int chain_accepts_keywords(PyObject * chain, PyObject * keywords);
-static int chain_accepts_keyword(PyObject * chain, char const * keyword);
+static struct chain_verdict chain_probe(PyObject * chain, PyObject * keywords, bool weakref_column);
 static enum result install_fields(
 	StructType * struct_class,
 	StructType const * base,
@@ -167,8 +169,7 @@ PyObject * build_struct_class(
 	PyObject * forwarded_keywords = NULL;
 	PY_MOVABLE(weakref_only, NULL);
 	PY_MOVABLE(chain, NULL);
-	int accepts_all = 1;
-	int accepts_weakref = 1;
+	struct chain_verdict verdict = {.accepts_all = 1, .accepts_weakref = 1, .readable = true};
 
 	if (
 		handoff != metatype &&
@@ -182,46 +183,41 @@ PyObject * build_struct_class(
 			return NULL;
 		}
 
-		accepts_all = chain_accepts_keywords(chain, keywords);
+		verdict = chain_probe(chain, keywords, request.options.weakref);
 
-		if (accepts_all < 0) {
+		if (verdict.accepts_all < 0) {
 			return NULL;
 		}
 
-		if (accepts_all == 1) {
+		if (verdict.accepts_all == 1) {
 			forwarded_keywords = keywords;
-		} else if (request.options.weakref) {
-			accepts_weakref = chain_accepts_keyword(chain, option_keywords[OPTION_WEAKREF]);
+		} else if (request.options.weakref && verdict.accepts_weakref == 1) {
+			weakref_only = PyDict_New();
 
-			if (accepts_weakref < 0) {
+			if (
+				weakref_only == NULL ||
+				PyDict_SetItemString(weakref_only, option_keywords[OPTION_WEAKREF], Py_True) < 0
+			) {
 				return NULL;
 			}
 
-			if (accepts_weakref == 1) {
-				weakref_only = PyDict_New();
-
-				if (
-					weakref_only == NULL ||
-					PyDict_SetItemString(weakref_only, option_keywords[OPTION_WEAKREF], Py_True) <
-						0
-				) {
-					return NULL;
-				}
-
-				forwarded_keywords = weakref_only;
-			}
+			forwarded_keywords = weakref_only;
 		}
 	}
 
 	if (
 		weakref_slot_is_new(request.options, bases) &&
 		handoff->tp_new != StructMeta_new &&
-		accepts_weakref == 0
+		verdict.accepts_weakref == 0
 	) {
 		PyErr_SetString(
 			PyExc_TypeError,
-			"weakref=True cannot cross a metaclass __new__ that hands the build "
-			"off: the re-entered call cannot add the weakref slot"
+			verdict.readable ?
+				"weakref=True cannot cross a metaclass __new__ that hands the build "
+				"off: the re-entered call cannot add the weakref slot" :
+				"weakref=True cannot cross a metaclass __new__ that hands the build "
+				"off: the chain contains a __new__ whose signature cannot be read, so "
+				"the re-entered call cannot be verified to add the weakref slot"
 		);
 
 		return NULL;
@@ -388,74 +384,88 @@ static int code_accepts_keyword(
 	return 0;
 }
 
-static int callable_accepts_keyword(PyObject * const new, char const * const keyword) {
-	if (!PyFunction_Check(new)) {
-		return 0;
-	}
+static struct chain_verdict chain_probe(
+	PyObject * const chain,
+	PyObject * const keywords,
+	bool const weakref_column
+) {
+	struct chain_verdict verdict = {.accepts_all = 1, .accepts_weakref = 1, .readable = true};
 
-	PyCodeObject * const code = (PyCodeObject *) ((PyFunctionObject *) new)->func_code;
+	for (Py_ssize_t i = 0; i < PyList_GET_SIZE(chain); ++i) {
+		PyObject * const link = PyList_GET_ITEM(chain, i);
 
-	if ((code->co_flags & CO_VARKEYWORDS) != 0) {
-		return 1;
-	}
+		if (!PyFunction_Check(link)) {
+			verdict.readable = false;
+			verdict.accepts_all = 0;
+			verdict.accepts_weakref = 0;
+			continue;
+		}
+
+		PyCodeObject * const code = (PyCodeObject *) ((PyFunctionObject *) link)->func_code;
+
+		if ((code->co_flags & CO_VARKEYWORDS) != 0) {
+			continue;
+		}
 
 #if PY_VERSION_HEX >= 0x030B0000
-	PY_OWNED(varnames, PyCode_GetVarnames(code));
+		PY_OWNED(varnames, PyCode_GetVarnames(code));
 #else
-	PyObject * const varnames = code->co_varnames;
+		PyObject * const varnames = code->co_varnames;
 #endif
 
-	if (varnames == NULL) {
-		return -1;
-	}
+		if (varnames == NULL) {
+			verdict.accepts_all = -1;
 
-	return code_accepts_keyword(code, varnames, keyword);
-}
-
-static int callable_accepts_keywords(PyObject * const new, PyObject * const keywords) {
-	if (!PyFunction_Check(new)) {
-		return 0;
-	}
-
-	PyCodeObject * const code = (PyCodeObject *) ((PyFunctionObject *) new)->func_code;
-
-	if ((code->co_flags & CO_VARKEYWORDS) != 0) {
-		return 1;
-	}
-
-#if PY_VERSION_HEX >= 0x030B0000
-	PY_OWNED(varnames, PyCode_GetVarnames(code));
-#else
-	PyObject * const varnames = code->co_varnames;
-#endif
-
-	if (varnames == NULL) {
-		return -1;
-	}
-
-	Py_ssize_t position = 0;
-	PyObject * key;
-	PyObject * value;
-
-	while (PyDict_Next(keywords, &position, &key, &value)) {
-		char const * const name = PyUnicode_AsUTF8(key);
-
-		if (name == NULL) {
-			return -1;
+			return verdict;
 		}
 
-		int const accepts = code_accepts_keyword(code, varnames, name);
+		Py_ssize_t position = 0;
+		PyObject * key;
+		PyObject * value;
 
-		if (accepts < 0) {
-			return -1;
+		while (PyDict_Next(keywords, &position, &key, &value)) {
+			char const * const name = PyUnicode_AsUTF8(key);
+
+			if (name == NULL) {
+				verdict.accepts_all = -1;
+
+				return verdict;
+			}
+
+			int const accepts = code_accepts_keyword(code, varnames, name);
+
+			if (accepts < 0) {
+				verdict.accepts_all = -1;
+
+				return verdict;
+			}
+
+			if (accepts == 0) {
+				verdict.accepts_all = 0;
+				break;
+			}
 		}
 
-		if (accepts == 0) {
-			return 0;
+		if (weakref_column) {
+			int const accepts_weakref = code_accepts_keyword(
+				code,
+				varnames,
+				option_keywords[OPTION_WEAKREF]
+			);
+
+			if (accepts_weakref < 0) {
+				verdict.accepts_all = -1;
+
+				return verdict;
+			}
+
+			if (accepts_weakref == 0) {
+				verdict.accepts_weakref = 0;
+			}
 		}
 	}
 
-	return 1;
+	return verdict;
 }
 
 static PyObject * metaclass_chain(PyTypeObject * const winner) {
@@ -486,34 +496,6 @@ static PyObject * metaclass_chain(PyTypeObject * const winner) {
 	}
 
 	return py_move(&chain);
-}
-
-static int chain_accepts_keywords(PyObject * const chain, PyObject * const keywords) {
-	for (Py_ssize_t i = 0; i < PyList_GET_SIZE(chain); ++i) {
-		int const accepts = callable_accepts_keywords(PyList_GET_ITEM(chain, i), keywords);
-
-		if (accepts < 0) {
-			return -1;
-		}
-
-		if (accepts == 0) {
-			return 0;
-		}
-	}
-
-	return 1;
-}
-
-static int chain_accepts_keyword(PyObject * const chain, char const * const keyword) {
-	for (Py_ssize_t i = 0; i < PyList_GET_SIZE(chain); ++i) {
-		int const accepts = callable_accepts_keyword(PyList_GET_ITEM(chain, i), keyword);
-
-		if (accepts <= 0) {
-			return accepts;
-		}
-	}
-
-	return 1;
 }
 
 /* It is the third walk of `bases` in a class creation, after find_struct_base
