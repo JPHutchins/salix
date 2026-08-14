@@ -14,6 +14,11 @@ class Forwarding(META):
     def __new__(metacls, name, bases, namespace, **keywords):
         return super().__new__(metacls, name, bases, namespace, **keywords)
 
+
+class Plain(META):
+    def __new__(metacls, name, bases, namespace):
+        return super().__new__(metacls, name, bases, namespace)
+
 # Both spellings of both, in one place: two literals drifted apart is a test
 # that silently stops covering a name.
 METADATA_NAMES = (
@@ -328,10 +333,6 @@ class TestAMetaclassSubclass:
         the settle restores what the keyword meant.
         """
 
-        class Plain(META):
-            def __new__(metacls, name, bases, namespace):
-                return super().__new__(metacls, name, bases, namespace)
-
         class Base(Struct, metaclass=Plain):
             x: int
 
@@ -343,10 +344,6 @@ class TestAMetaclassSubclass:
         """The keywords cannot ride a __new__ that does not take them, so the
         refusal says so instead of blaming the entry salix itself wrote.
         """
-
-        class Plain(META):
-            def __new__(metacls, name, bases, namespace):
-                return super().__new__(metacls, name, bases, namespace)
 
         class Base(Struct, metaclass=Plain):
             x: int

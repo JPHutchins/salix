@@ -384,6 +384,10 @@ static int callable_accepts_keyword(PyObject * new, PyObject * const keyword) {
 		return (PyCFunction_GET_FLAGS(new) & METH_KEYWORDS) != 0;
 	}
 
+	if ((Py_TYPE(new)->tp_flags & Py_TPFLAGS_HEAPTYPE) == 0) {
+		return 1;
+	}
+
 	return 0;
 }
 
