@@ -333,7 +333,7 @@ static int new_accepts_keywords(PyObject * new) {
 	}
 
 	if (PyCFunction_Check(new)) {
-		return PyCFunction_GET_FLAGS(new) & METH_KEYWORDS;
+		return (PyCFunction_GET_FLAGS(new) & METH_KEYWORDS) != 0;
 	}
 
 	return 0;

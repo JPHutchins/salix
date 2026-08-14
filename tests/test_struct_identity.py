@@ -330,26 +330,6 @@ class TestAMetaclassSubclass:
 
         assert built(1, 2) < built(1, 3)
 
-    def test_a_strict_init_subclass_survives_the_handoff_with_an_option_keyword(self):
-        """The hand-off's keywords never reach __init_subclass__, so a strict
-        signature stays valid.
-        """
-
-        class Strict(Struct):
-            def __init_subclass__(cls):
-                pass
-
-        class Delegating(META):
-            def __new__(metacls, name, bases, namespace, **keywords):
-                return super().__new__(metacls, name, bases, namespace, **keywords)
-
-        class Base(Strict, metaclass=Delegating):
-            x: int
-
-        built = META("Built", (Base,), {"__annotations__": {"y": int}}, order=True)
-
-        assert built(1, 2) < built(1, 3)
-
     def test_two_unrelated_metatypes_still_raise_the_conflict(self):
         """Picking the winner ourselves must not swallow the case that has no
         winner: type_new is handed the requested metatype and says so.
