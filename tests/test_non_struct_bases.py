@@ -303,6 +303,56 @@ def test_the_first_struct_bases_record_wins_over_a_later_bases_body_equality():
     assert hash(B(1)) == hash(B(1))
 
 
+def test_a_multi_base_class_recording_identity_keeps_the_identity_hash():
+    """eq=False's HASH_BIND binds object's identity hash, and the settle must
+    not swap the structural slot in over it."""
+
+    class ByIdentity(Base, eq=False):
+        pass
+
+    class Plain(Base):
+        pass
+
+    class C(ByIdentity, Plain):
+        pass
+
+    assert hash(C(1)) != hash(C(1))
+
+
+def test_the_first_struct_bases_body_repr_keeps_answering():
+    """A body __repr__ on the first struct base is the record, and the settle
+    leaves it answering where the single-base path always did."""
+
+    class WithBodyRepr(Base):
+        def __repr__(self) -> str:
+            return "the body repr"
+
+    class Plain(Base):
+        pass
+
+    class C(WithBodyRepr, Plain):
+        pass
+
+    assert repr(C(1)) == "the body repr"
+
+
+def test_a_later_bases_body_ne_does_not_survive_beside_the_structural_pair():
+    """The pair is bound as a pair: when the structural eq answers, a later
+    base's body __ne__ is rebound over, not left answering beside it."""
+
+    class WithBodyNe(Base):
+        def __ne__(self, other: object) -> bool:
+            return False
+
+    class Plain(Base):
+        pass
+
+    class C(Plain, WithBodyNe):
+        pass
+
+    assert C(1) != C(2)
+
+
 def test_a_co_base_that_paired_them_itself_keeps_its_own_inequality():
     """The other half of the __ne__ fix, and the half nothing pinned.
 

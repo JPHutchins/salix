@@ -648,23 +648,31 @@ static enum result settle_mro_bindings(
 	}
 
 	PyTypeObject * const type = (PyTypeObject *) struct_class;
-	bool const body_defines_eq = PyDict_GetItemString(original_namespace, "__eq__") != NULL;
-	bool const answers_itself = body_defines_eq || inherits_body_eq;
+	bool const answers_itself = bindings.answered_by_body || inherits_body_eq;
 
-	if (options.eq && !answers_itself && type->tp_richcompare != Struct_rich_compare) {
+	if (!answers_itself && options.eq && type->tp_richcompare != Struct_rich_compare) {
 		type->tp_richcompare = Struct_rich_compare;
 	}
 
-	if (bindings.hash == HASH_BIND && type->tp_hash != Struct_hash) {
+	if (options.eq && bindings.hash == HASH_BIND && type->tp_hash != Struct_hash) {
 		type->tp_hash = Struct_hash;
 	}
 
 	PY_OWNED(mixin_eq, PyObject_GetAttrString((PyObject *) &StructMixin_Type, "__eq__"));
 	PY_OWNED(object_eq, PyObject_GetAttrString((PyObject *) &PyBaseObject_Type, "__eq__"));
+	PY_OWNED(mixin_ne, PyObject_GetAttrString((PyObject *) &StructMixin_Type, "__ne__"));
+	PY_OWNED(object_ne, PyObject_GetAttrString((PyObject *) &PyBaseObject_Type, "__ne__"));
 	PY_OWNED(mixin_repr, PyObject_GetAttrString((PyObject *) &StructMixin_Type, "__repr__"));
 	PY_OWNED(object_repr, PyObject_GetAttrString((PyObject *) &PyBaseObject_Type, "__repr__"));
 
-	if (mixin_eq == NULL || object_eq == NULL || mixin_repr == NULL || object_repr == NULL) {
+	if (
+		mixin_eq == NULL ||
+		object_eq == NULL ||
+		mixin_ne == NULL ||
+		object_ne == NULL ||
+		mixin_repr == NULL ||
+		object_repr == NULL
+	) {
 		return RESULT_ERROR;
 	}
 
@@ -678,9 +686,23 @@ static enum result settle_mro_bindings(
 	if (!answers_itself && resolved_eq != target_eq) {
 		if (
 			settle_rebind(struct_class, original_namespace, rebind_comparison, options.eq) !=
-				RESULT_OK ||
+			RESULT_OK
+		) {
+			return RESULT_ERROR;
+		}
+	}
+
+	PyObject * const target_ne = options.eq ? mixin_ne : object_ne;
+	PY_OWNED(resolved_ne, mro_resolves(type, "__ne__"));
+
+	if (resolved_ne == NULL) {
+		return RESULT_ERROR;
+	}
+
+	if (!answers_itself && resolved_ne != target_ne) {
+		if (
 			settle_rebind(struct_class, original_namespace, rebind_not_equal, options.eq) !=
-				RESULT_OK
+			RESULT_OK
 		) {
 			return RESULT_ERROR;
 		}
@@ -693,7 +715,10 @@ static enum result settle_mro_bindings(
 		return RESULT_ERROR;
 	}
 
-	if (resolved_repr != target_repr) {
+	if (
+		(resolved_repr == mixin_repr || resolved_repr == object_repr) &&
+		resolved_repr != target_repr
+	) {
 		if (
 			settle_rebind(
 				struct_class,
