@@ -353,6 +353,37 @@ def test_a_later_bases_body_ne_does_not_survive_beside_the_structural_pair():
     assert C(1) != C(2)
 
 
+def test_the_class_bodys_own_ne_answers_like_the_single_base_path():
+    """A body __ne__ in the class's own namespace is the class's own rule, and
+    the slot repair must yield to it the way the single-base path does."""
+
+    class Second(Struct):
+        pass
+
+    class C(Base, Second):
+        def __ne__(self, other: object) -> bool:
+            return False
+
+    assert (C(1) != C(2)) is False
+
+
+def test_a_later_bases_body_repr_is_shadowed_by_the_record():
+    """The first struct base's own body __repr__ keeps answering, but a later
+    base's is shadowed: the record's repr is what the class does."""
+
+    class Later(Base):
+        def __repr__(self) -> str:
+            return "the later repr"
+
+    class Plain(Base):
+        pass
+
+    class C(Plain, Later):
+        pass
+
+    assert repr(C(1)).startswith("C(")
+
+
 def test_a_co_base_that_paired_them_itself_keeps_its_own_inequality():
     """The other half of the __ne__ fix, and the half nothing pinned.
 

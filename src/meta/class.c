@@ -607,26 +607,118 @@ static int struct_base_count(PyObject * const bases) {
 	return count;
 }
 
-/* What the class's MRO hands out for `name` below the class's own dict,
- * asked after the class exists so the answer is the real resolution. */
-static PyObject * mro_resolves(PyTypeObject * const type, char const * const name) {
-	PyObject * const mro = type->tp_mro;
+static PyObject * mixin_bindings[3];
+static PyObject * object_bindings[3];
 
-	for (Py_ssize_t i = 1; i < PyTuple_GET_SIZE(mro); ++i) {
-		PY_OWNED(dict, struct_type_dict((PyTypeObject *) PyTuple_GET_ITEM(mro, i)));
+static int settle_candidates(
+	PyObject * * const mixin_eq,
+	PyObject * * const object_eq,
+	PyObject * * const mixin_ne,
+	PyObject * * const object_ne,
+	PyObject * * const mixin_repr,
+	PyObject * * const object_repr
+) {
+	char const * const names[3] = {"__eq__", "__ne__", "__repr__"};
 
-		if (dict == NULL) {
-			return NULL;
-		}
-
-		PyObject * const bound = PyDict_GetItemString(dict, name);
-
-		if (bound != NULL) {
-			return Py_NewRef(bound);
+	if (
+		mixin_bindings[0] == NULL ||
+		mixin_bindings[1] == NULL ||
+		mixin_bindings[2] == NULL ||
+		object_bindings[0] == NULL ||
+		object_bindings[1] == NULL ||
+		object_bindings[2] == NULL
+	) {
+		for (Py_ssize_t i = 0; i < 3; ++i) {
+			mixin_bindings[i] = PyObject_GetAttrString((PyObject *) &StructMixin_Type, names[i]);
+			object_bindings[i] = PyObject_GetAttrString((PyObject *) &PyBaseObject_Type, names[i]);
 		}
 	}
 
-	return Py_NewRef(Py_None);
+	if (
+		mixin_bindings[0] == NULL ||
+		mixin_bindings[1] == NULL ||
+		mixin_bindings[2] == NULL ||
+		object_bindings[0] == NULL ||
+		object_bindings[1] == NULL ||
+		object_bindings[2] == NULL
+	) {
+		return -1;
+	}
+
+	*mixin_eq = Py_NewRef(mixin_bindings[0]);
+	*object_eq = Py_NewRef(object_bindings[0]);
+	*mixin_ne = Py_NewRef(mixin_bindings[1]);
+	*object_ne = Py_NewRef(object_bindings[1]);
+	*mixin_repr = Py_NewRef(mixin_bindings[2]);
+	*object_repr = Py_NewRef(object_bindings[2]);
+
+	return 0;
+}
+
+/* What the class's MRO hands out below the class's own dict for the three
+ * names, asked after the class exists so the answer is the real resolution,
+ * in one walk. */
+static enum result mro_dunders_of(
+	PyTypeObject * const type,
+	PyObject * * const resolved_eq,
+	PyObject * * const resolved_ne,
+	PyObject * * const resolved_repr,
+	PyTypeObject * * const repr_owner
+) {
+	*resolved_eq = NULL;
+	*resolved_ne = NULL;
+	*resolved_repr = NULL;
+	*repr_owner = NULL;
+
+	PY_OWNED(eq_name, PyUnicode_InternFromString("__eq__"));
+	PY_OWNED(ne_name, PyUnicode_InternFromString("__ne__"));
+	PY_OWNED(repr_name, PyUnicode_InternFromString("__repr__"));
+
+	if (eq_name == NULL || ne_name == NULL || repr_name == NULL) {
+		return RESULT_ERROR;
+	}
+
+	PyObject * const mro = type->tp_mro;
+
+	for (Py_ssize_t i = 1; i < PyTuple_GET_SIZE(mro); ++i) {
+		PyTypeObject * const entry = (PyTypeObject *) PyTuple_GET_ITEM(mro, i);
+		PY_OWNED(dict, struct_type_dict(entry));
+
+		if (dict == NULL) {
+			return RESULT_ERROR;
+		}
+
+		if (*resolved_eq == NULL) {
+			PyObject * const found = PyDict_GetItem(dict, eq_name);
+
+			if (found != NULL) {
+				*resolved_eq = Py_NewRef(found);
+			}
+		}
+
+		if (*resolved_ne == NULL) {
+			PyObject * const found = PyDict_GetItem(dict, ne_name);
+
+			if (found != NULL) {
+				*resolved_ne = Py_NewRef(found);
+			}
+		}
+
+		if (*resolved_repr == NULL) {
+			PyObject * const found = PyDict_GetItem(dict, repr_name);
+
+			if (found != NULL) {
+				*resolved_repr = Py_NewRef(found);
+				*repr_owner = entry;
+			}
+		}
+
+		if (*resolved_eq != NULL && *resolved_ne != NULL && *resolved_repr != NULL) {
+			break;
+		}
+	}
+
+	return RESULT_OK;
 }
 
 /* CPython copies the comparison slots from the first base only when the new
@@ -649,8 +741,21 @@ static enum result settle_mro_bindings(
 
 	PyTypeObject * const type = (PyTypeObject *) struct_class;
 	bool const answers_itself = bindings.answered_by_body || inherits_body_eq;
+	bool const body_defines_comparison = (
+		PyDict_GetItemString(original_namespace, "__eq__") != NULL ||
+		PyDict_GetItemString(original_namespace, "__ne__") != NULL ||
+		PyDict_GetItemString(original_namespace, "__lt__") != NULL ||
+		PyDict_GetItemString(original_namespace, "__le__") != NULL ||
+		PyDict_GetItemString(original_namespace, "__gt__") != NULL ||
+		PyDict_GetItemString(original_namespace, "__ge__") != NULL
+	);
 
-	if (!answers_itself && options.eq && type->tp_richcompare != Struct_rich_compare) {
+	if (
+		!answers_itself &&
+		!body_defines_comparison &&
+		options.eq &&
+		type->tp_richcompare != Struct_rich_compare
+	) {
 		type->tp_richcompare = Struct_rich_compare;
 	}
 
@@ -658,30 +763,33 @@ static enum result settle_mro_bindings(
 		type->tp_hash = Struct_hash;
 	}
 
-	PY_OWNED(mixin_eq, PyObject_GetAttrString((PyObject *) &StructMixin_Type, "__eq__"));
-	PY_OWNED(object_eq, PyObject_GetAttrString((PyObject *) &PyBaseObject_Type, "__eq__"));
-	PY_OWNED(mixin_ne, PyObject_GetAttrString((PyObject *) &StructMixin_Type, "__ne__"));
-	PY_OWNED(object_ne, PyObject_GetAttrString((PyObject *) &PyBaseObject_Type, "__ne__"));
-	PY_OWNED(mixin_repr, PyObject_GetAttrString((PyObject *) &StructMixin_Type, "__repr__"));
-	PY_OWNED(object_repr, PyObject_GetAttrString((PyObject *) &PyBaseObject_Type, "__repr__"));
+	PY_MOVABLE(mixin_eq, NULL);
+	PY_MOVABLE(object_eq, NULL);
+	PY_MOVABLE(mixin_ne, NULL);
+	PY_MOVABLE(object_ne, NULL);
+	PY_MOVABLE(mixin_repr, NULL);
+	PY_MOVABLE(object_repr, NULL);
+	PY_MOVABLE(resolved_eq, NULL);
+	PY_MOVABLE(resolved_ne, NULL);
+	PY_MOVABLE(resolved_repr, NULL);
+	PyTypeObject * repr_owner = NULL;
 
 	if (
-		mixin_eq == NULL ||
-		object_eq == NULL ||
-		mixin_ne == NULL ||
-		object_ne == NULL ||
-		mixin_repr == NULL ||
-		object_repr == NULL
+		settle_candidates(
+				&mixin_eq,
+				&object_eq,
+				&mixin_ne,
+				&object_ne,
+				&mixin_repr,
+				&object_repr
+			) <
+			0 ||
+		mro_dunders_of(type, &resolved_eq, &resolved_ne, &resolved_repr, &repr_owner) != RESULT_OK
 	) {
 		return RESULT_ERROR;
 	}
 
 	PyObject * const target_eq = options.eq ? mixin_eq : object_eq;
-	PY_OWNED(resolved_eq, mro_resolves(type, "__eq__"));
-
-	if (resolved_eq == NULL) {
-		return RESULT_ERROR;
-	}
 
 	if (!answers_itself && resolved_eq != target_eq) {
 		if (
@@ -693,11 +801,6 @@ static enum result settle_mro_bindings(
 	}
 
 	PyObject * const target_ne = options.eq ? mixin_ne : object_ne;
-	PY_OWNED(resolved_ne, mro_resolves(type, "__ne__"));
-
-	if (resolved_ne == NULL) {
-		return RESULT_ERROR;
-	}
 
 	if (!answers_itself && resolved_ne != target_ne) {
 		if (
@@ -709,16 +812,13 @@ static enum result settle_mro_bindings(
 	}
 
 	PyObject * const target_repr = options.repr ? mixin_repr : object_repr;
-	PY_OWNED(resolved_repr, mro_resolves(type, "__repr__"));
+	bool const salix_owned = resolved_repr == mixin_repr || resolved_repr == object_repr;
+	bool const from_the_first_struct_base = (
+		repr_owner ==
+		(PyTypeObject *) find_behaviour_base(bases)
+	);
 
-	if (resolved_repr == NULL) {
-		return RESULT_ERROR;
-	}
-
-	if (
-		(resolved_repr == mixin_repr || resolved_repr == object_repr) &&
-		resolved_repr != target_repr
-	) {
+	if (resolved_repr != target_repr && (salix_owned || !from_the_first_struct_base)) {
 		if (
 			settle_rebind(
 				struct_class,
