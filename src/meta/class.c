@@ -26,8 +26,9 @@ static StructType * create_class(
 	PyObject * forwarded_keywords
 );
 static PyTypeObject * winning_metatype(PyTypeObject * requested, PyObject * bases);
-static int callable_accepts_keyword(PyObject * new, PyObject * keyword);
-static PyObject * chain_forwarded_keywords(PyTypeObject * winner, PyObject * keywords);
+static int callable_accepts_keyword(PyObject * new, char const * keyword);
+static PyObject * metaclass_chain(PyTypeObject * winner);
+static int chain_accepts_keywords(PyTypeObject * winner, PyObject * keywords);
 static enum result install_fields(
 	StructType * struct_class,
 	StructType const * base,
@@ -160,17 +161,22 @@ PyObject * build_struct_class(
 
 	PyTypeObject * const handoff = winning_metatype(metatype, bases);
 	PyObject * forwarded_keywords = NULL;
-	PY_MOVABLE(filtered_keywords, NULL);
+	int accepts = 1;
 
-	if (handoff->tp_new != StructMeta_new && keywords != NULL && PyDict_GET_SIZE(keywords) > 0) {
-		filtered_keywords = chain_forwarded_keywords(handoff, keywords);
+	if (
+		handoff != metatype &&
+		handoff->tp_new != StructMeta_new &&
+		keywords != NULL &&
+		PyDict_GET_SIZE(keywords) > 0
+	) {
+		accepts = chain_accepts_keywords(handoff, keywords);
 
-		if (filtered_keywords == NULL) {
+		if (accepts < 0) {
 			return NULL;
 		}
 
-		if (PyDict_GET_SIZE(filtered_keywords) > 0) {
-			forwarded_keywords = filtered_keywords;
+		if (accepts == 1) {
+			forwarded_keywords = keywords;
 		}
 	}
 
@@ -178,10 +184,7 @@ PyObject * build_struct_class(
 		metatype == &StructMeta_Type &&
 		weakref_slot_is_new(request.options, bases) &&
 		handoff->tp_new != StructMeta_new &&
-		(
-			filtered_keywords == NULL ||
-			PyDict_GetItemString(filtered_keywords, option_keywords[OPTION_WEAKREF]) == NULL
-		)
+		accepts == 0
 	) {
 		PyErr_SetString(
 			PyExc_TypeError,
@@ -326,53 +329,44 @@ static StructType * create_class(
 	return (StructType *) py_move(&created);
 }
 
-static int callable_accepts_keyword(PyObject * const new, PyObject * const keyword) {
-	if (PyMethod_Check(new)) {
+static int callable_accepts_keyword(PyObject * const new, char const * const keyword) {
+	if (!PyFunction_Check(new)) {
 		return 0;
 	}
 
-	if (PyFunction_Check(new)) {
-		PyCodeObject * const code = (PyCodeObject *) ((PyFunctionObject *) new)->func_code;
+	PyCodeObject * const code = (PyCodeObject *) ((PyFunctionObject *) new)->func_code;
 
-		if ((code->co_flags & CO_VARKEYWORDS) != 0) {
+	if ((code->co_flags & CO_VARKEYWORDS) != 0) {
+		return 1;
+	}
+
+	PY_OWNED(varnames, PyObject_GetAttrString((PyObject *) code, "co_varnames"));
+
+	if (varnames == NULL) {
+		return -1;
+	}
+
+	Py_ssize_t const named = code->co_argcount + code->co_kwonlyargcount;
+
+	for (Py_ssize_t i = code->co_posonlyargcount; i < named; ++i) {
+		int const compared = PyUnicode_CompareWithASCIIString(
+			PyTuple_GET_ITEM(varnames, i),
+			keyword
+		);
+
+		if (compared == 0) {
 			return 1;
 		}
 
-		PY_OWNED(varnames, PyObject_GetAttrString((PyObject *) code, "co_varnames"));
-
-		if (varnames == NULL) {
+		if (compared < 0 && PyErr_Occurred()) {
 			return -1;
 		}
-
-		Py_ssize_t const named = code->co_argcount + code->co_kwonlyargcount;
-
-		for (Py_ssize_t i = code->co_posonlyargcount; i < named; ++i) {
-			int const compared = PyUnicode_Compare(PyTuple_GET_ITEM(varnames, i), keyword);
-
-			if (compared == 0) {
-				return 1;
-			}
-
-			if (compared < 0 && PyErr_Occurred()) {
-				return -1;
-			}
-		}
-
-		return 0;
-	}
-
-	if (PyCFunction_Check(new)) {
-		return (PyCFunction_GET_FLAGS(new) & METH_KEYWORDS) != 0;
-	}
-
-	if ((Py_TYPE(new)->tp_flags & Py_TPFLAGS_HEAPTYPE) == 0) {
-		return 1;
 	}
 
 	return 0;
 }
 
-static PyObject * chain_forwarded_keywords(PyTypeObject * const winner, PyObject * const keywords) {
+static PyObject * metaclass_chain(PyTypeObject * const winner) {
 	PY_MOVABLE(chain, PyList_New(0));
 
 	if (chain == NULL) {
@@ -395,10 +389,14 @@ static PyObject * chain_forwarded_keywords(PyTypeObject * const winner, PyObject
 		}
 	}
 
-	PY_MOVABLE(filtered, PyDict_New());
+	return py_move(&chain);
+}
 
-	if (filtered == NULL) {
-		return NULL;
+static int chain_accepts_keywords(PyTypeObject * const winner, PyObject * const keywords) {
+	PY_OWNED(chain, metaclass_chain(winner));
+
+	if (chain == NULL) {
+		return -1;
 	}
 
 	Py_ssize_t position = 0;
@@ -406,26 +404,26 @@ static PyObject * chain_forwarded_keywords(PyTypeObject * const winner, PyObject
 	PyObject * value;
 
 	while (PyDict_Next(keywords, &position, &key, &value)) {
-		int accepts = 1;
+		char const * const name = PyUnicode_AsUTF8(key);
+
+		if (name == NULL) {
+			return -1;
+		}
 
 		for (Py_ssize_t i = 0; i < PyList_GET_SIZE(chain); ++i) {
-			accepts = callable_accepts_keyword(PyList_GET_ITEM(chain, i), key);
+			int const accepts = callable_accepts_keyword(PyList_GET_ITEM(chain, i), name);
 
-			if (accepts <= 0) {
-				break;
+			if (accepts < 0) {
+				return -1;
 			}
-		}
 
-		if (accepts < 0) {
-			return NULL;
-		}
-
-		if (accepts == 1 && PyDict_SetItem(filtered, key, value) < 0) {
-			return NULL;
+			if (accepts == 0) {
+				return 0;
+			}
 		}
 	}
 
-	return py_move(&filtered);
+	return 1;
 }
 
 /* It is the third walk of `bases` in a class creation, after find_struct_base
