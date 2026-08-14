@@ -189,14 +189,14 @@ PyObject * build_struct_class(
 
 		if (accepts_all == 1) {
 			forwarded_keywords = keywords;
-		} else {
+		} else if (request.options.weakref) {
 			accepts_weakref = chain_accepts_keyword(chain, option_keywords[OPTION_WEAKREF]);
 
 			if (accepts_weakref < 0) {
 				return NULL;
 			}
 
-			if (accepts_weakref == 1 && request.options.weakref) {
+			if (accepts_weakref == 1) {
 				weakref_only = PyDict_New();
 
 				if (
@@ -213,10 +213,8 @@ PyObject * build_struct_class(
 	}
 
 	if (
-		metatype == &StructMeta_Type &&
 		weakref_slot_is_new(request.options, bases) &&
 		handoff->tp_new != StructMeta_new &&
-		accepts_all == 0 &&
 		accepts_weakref == 0
 	) {
 		PyErr_SetString(
