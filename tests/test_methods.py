@@ -541,6 +541,55 @@ class TestBindingsSalixOwns:
                 x: int
                 __slots__ = ("__weakref__", "x")
 
+    def test_a_slot_naming_dict_gets_the_dict_advice(self):
+        with pytest.raises(TypeError, match="carries no instance dict"):
+
+            class Dicted(Struct):
+                __slots__ = ("__dict__",)
+
+    def test_a_slot_naming_an_inherited_dict_is_accepted(self):
+        """Naming the inherited dict loses nothing, so the entry is accepted
+        and the dict still works.
+        """
+
+        class Dicted:
+            pass
+
+        class WithDict(Struct, Dicted, frozen=False):
+            x: int
+            __slots__ = ("__dict__",)
+
+        instance = WithDict(1)
+        instance.extra = 2
+
+        assert instance.__dict__ == {"extra": 2}
+
+    @pytest.mark.skipif(sys.version_info < (3, 12), reason="managed dicts are 3.12+")
+    def test_a_slot_naming_an_inherited_managed_dict_is_accepted(self):
+        class DictedSlots:
+            __slots__ = ("__dict__",)
+
+        class WithManaged(Struct, DictedSlots, frozen=False):
+            x: int
+            __slots__ = ("__dict__",)
+
+        instance = WithManaged(1)
+        instance.extra = 2
+
+        assert instance.__dict__ == {"extra": 2}
+
+    def test_a_field_named_weakref_is_refused(self):
+        with pytest.raises(TypeError, match="weakref slot's name"):
+
+            class Named(Struct):
+                __weakref__: int
+
+    def test_a_field_named_dict_is_refused(self):
+        with pytest.raises(TypeError, match="instance dict's name"):
+
+            class Named(Struct):
+                __dict__: int
+
     def test_an_inherited_weakref_slot_exempts_it_too(self):
         """The other half of the exemption: the class need not ask for the slot
         if a base already has one, because then salix drops nothing.

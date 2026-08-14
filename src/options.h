@@ -17,6 +17,17 @@ struct options_request {
 	struct options options;
 };
 
+enum option {
+	OPTION_FROZEN,
+	OPTION_EQ,
+	OPTION_ORDER,
+	OPTION_REPR,
+	OPTION_MATCH_ARGS,
+	OPTION_WEAKREF,
+};
+
+extern char const * const option_keywords[];
+
 static inline struct options options_initial(void) {
 	return (struct options){
 		.frozen = true,

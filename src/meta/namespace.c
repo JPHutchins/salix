@@ -9,7 +9,29 @@
 #include "../result.h"
 #include "../types.h"
 
-static PyObject * build_slots(PyObject * new_names, bool weakref);
+static char const * weakref_slot_name(void) {
+	return "__weakref__";
+}
+
+static char const * instance_dict_slot_name(void) {
+	return "__dict__";
+}
+
+enum slot_name_owner { SLOT_NAME_NONE, SLOT_NAME_WEAKREF, SLOT_NAME_INSTANCE_DICT };
+
+static enum slot_name_owner slot_name_owner_of(PyObject * const name) {
+	if (PyUnicode_CompareWithASCIIString(name, weakref_slot_name()) == 0) {
+		return SLOT_NAME_WEAKREF;
+	}
+
+	if (PyUnicode_CompareWithASCIIString(name, instance_dict_slot_name()) == 0) {
+		return SLOT_NAME_INSTANCE_DICT;
+	}
+
+	return SLOT_NAME_NONE;
+}
+
+static PyObject * build_slots(PyObject * new_names, bool weakref, PyObject * bases);
 static enum result set_match_args(PyObject * namespace, PyObject * all_names, bool wanted);
 static enum result apply_options(
 	PyObject * namespace,
@@ -43,13 +65,14 @@ PyObject * build_class_namespace(
 	PyObject * const new_names,
 	struct options const options,
 	StructType const * const base,
+	PyObject * const bases,
 	struct options const inherited,
 	bool const frozen_across_bases,
 	bool const body_defines_eq,
 	bool const inherits_body_eq,
 	bool const derive_not_equal
 ) {
-	PY_OWNED(slots, build_slots(new_names, options.weakref && !has_weakref_slot(base)));
+	PY_OWNED(slots, build_slots(new_names, options.weakref, bases));
 	PY_MOVABLE(namespace, PyDict_Copy(original_namespace));
 
 	if (
@@ -78,13 +101,17 @@ PyObject * build_class_namespace(
 enum result refuse_displaced_slots(
 	PyObject * const original_namespace,
 	PyObject * const all_names,
-	bool const carries_a_weakref_slot
+	PyObject * const bases,
+	struct options const options
 ) {
 	PyObject * const declared = PyDict_GetItemString(original_namespace, "__slots__");
 
 	if (declared == NULL) {
 		return PyErr_Occurred() ? RESULT_ERROR : RESULT_OK;
 	}
+
+	bool const carries_a_weakref_slot = weakref_expected(options, bases);
+	bool const carries_an_instance_dict = any_base_has_instance_dict(bases);
 
 	PY_OWNED(
 		entries,
@@ -108,7 +135,9 @@ enum result refuse_displaced_slots(
 			return RESULT_ERROR;
 		}
 
-		if (PyUnicode_CompareWithASCIIString(entry, "__weakref__") == 0) {
+		enum slot_name_owner const owner = slot_name_owner_of(entry);
+
+		if (owner == SLOT_NAME_WEAKREF) {
 			if (carries_a_weakref_slot) {
 				continue;
 			}
@@ -118,6 +147,20 @@ enum result refuse_displaced_slots(
 				"__slots__ names __weakref__ and this class carries no weakref "
 				"slot to name; a struct gets one from weakref=True or from a base "
 				"that has one"
+			);
+
+			return RESULT_ERROR;
+		}
+
+		if (owner == SLOT_NAME_INSTANCE_DICT) {
+			if (carries_an_instance_dict) {
+				continue;
+			}
+
+			PyErr_SetString(
+				PyExc_TypeError,
+				"__slots__ names __dict__ and a struct carries no instance dict; "
+				"a non-struct base that carries one gives the struct one"
 			);
 
 			return RESULT_ERROR;
@@ -147,15 +190,44 @@ enum result refuse_displaced_slots(
 	return RESULT_OK;
 }
 
-static PyObject * build_slots(PyObject * const new_names, bool const weakref) {
+enum result refuse_slot_name_fields(PyObject * const all_names) {
+	for (Py_ssize_t i = 0; i < PyList_GET_SIZE(all_names); ++i) {
+		PyObject * const field_name = PyList_GET_ITEM(all_names, i);
+		enum slot_name_owner const owner = slot_name_owner_of(field_name);
+		char const * const owner_name = (
+			owner == SLOT_NAME_WEAKREF ? "the weakref slot's" :
+			owner == SLOT_NAME_INSTANCE_DICT ? "the instance dict's" :
+			NULL
+		);
+
+		if (owner_name != NULL) {
+			PyErr_Format(
+				PyExc_TypeError,
+				"'%U' is %s name and cannot be a field",
+				field_name,
+				owner_name
+			);
+
+			return RESULT_ERROR;
+		}
+	}
+
+	return RESULT_OK;
+}
+
+static PyObject * build_slots(
+	PyObject * const new_names,
+	bool const weakref,
+	PyObject * const bases
+) {
 	PY_OWNED(names, PySequence_List(new_names));
 
 	if (names == NULL) {
 		return NULL;
 	}
 
-	if (weakref) {
-		PY_OWNED(weakref_name, PyUnicode_FromString("__weakref__"));
+	if (weakref && !any_base_has_weakref_slot(bases)) {
+		PY_OWNED(weakref_name, PyUnicode_FromString(weakref_slot_name()));
 
 		if (weakref_name == NULL || PyList_Append(names, weakref_name) < 0) {
 			return NULL;

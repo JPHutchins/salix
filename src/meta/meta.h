@@ -56,8 +56,10 @@ StructType * find_behaviour_base(PyObject * bases);
 struct equality_source resolves_body_equality(PyObject * bases);
 struct options inherited_options(PyObject * bases, StructType const * behaviour);
 bool any_struct_base_is_mutable(PyObject * bases);
-bool has_weakref_slot(StructType const * base);
+bool any_base_has_weakref_slot(PyObject * bases);
+bool carries_weakref_slot(PyTypeObject const * type);
 bool weakref_expected(struct options options, PyObject * bases);
+bool any_base_has_instance_dict(PyObject * bases);
 bool weakref_slot_is_new(struct options options, PyObject * bases);
 
 struct binding_plan binding_plan(
@@ -82,6 +84,7 @@ PyObject * build_class_namespace(
 	PyObject * new_names,
 	struct options options,
 	StructType const * base,
+	PyObject * bases,
 	struct options inherited,
 	bool frozen_across_bases,
 	bool body_defines_eq,
@@ -91,7 +94,8 @@ PyObject * build_class_namespace(
 enum result refuse_displaced_slots(
 	PyObject * original_namespace,
 	PyObject * all_names,
-	bool carries_a_weakref_slot
+	PyObject * bases,
+	struct options options
 );
 enum result refuse_colliding_methods(
 	PyObject * original_namespace,
@@ -99,6 +103,7 @@ enum result refuse_colliding_methods(
 	PyObject * class_name
 );
 enum result refuse_mixin_method_fields(PyObject * all_names);
+enum result refuse_slot_name_fields(PyObject * all_names);
 
 PyObject * build_struct_class(
 	PyTypeObject * metatype,

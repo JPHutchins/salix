@@ -3,6 +3,12 @@
 #include <stddef.h>
 #include <string.h>
 
+#if PY_VERSION_HEX < 0x030B0000
+#	include <code.h>
+#else
+#	include <cpython/code.h>
+#endif
+
 #include "../construct.h"
 #include "../fields.h"
 #include "meta.h"
@@ -14,11 +20,21 @@
 
 static StructType * create_class(
 	PyTypeObject * metatype,
+	PyTypeObject * handoff,
 	PyObject * name,
 	PyObject * bases,
-	PyObject * namespace
+	PyObject * namespace,
+	PyObject * forwarded_keywords
 );
 static PyTypeObject * winning_metatype(PyTypeObject * requested, PyObject * bases);
+struct chain_verdict {
+	int accepts_all;
+	int accepts_weakref;
+	bool readable;
+};
+static int code_accepts_keyword(PyCodeObject * code, PyObject * varnames, char const * keyword);
+static PyObject * metaclass_chain(PyTypeObject * winner);
+static struct chain_verdict chain_probe(PyObject * chain, PyObject * keywords, bool weakref_column);
 static enum result install_fields(
 	StructType * struct_class,
 	StructType const * base,
@@ -149,15 +165,59 @@ PyObject * build_struct_class(
 		return NULL;
 	}
 
+	PyTypeObject * const handoff = winning_metatype(metatype, bases);
+	PyObject * forwarded_keywords = NULL;
+	PY_MOVABLE(weakref_only, NULL);
+	PY_MOVABLE(chain, NULL);
+	struct chain_verdict verdict = {.accepts_all = 1, .accepts_weakref = 1, .readable = true};
+
 	if (
-		metatype == &StructMeta_Type &&
+		handoff != metatype &&
+		handoff->tp_new != StructMeta_new &&
+		keywords != NULL &&
+		PyDict_GET_SIZE(keywords) > 0
+	) {
+		chain = metaclass_chain(handoff);
+
+		if (chain == NULL) {
+			return NULL;
+		}
+
+		verdict = chain_probe(chain, keywords, request.options.weakref);
+
+		if (verdict.accepts_all < 0) {
+			return NULL;
+		}
+
+		if (verdict.accepts_all == 1) {
+			forwarded_keywords = keywords;
+		} else if (request.options.weakref && verdict.accepts_weakref == 1) {
+			weakref_only = PyDict_New();
+
+			if (
+				weakref_only == NULL ||
+				PyDict_SetItemString(weakref_only, option_keywords[OPTION_WEAKREF], Py_True) < 0
+			) {
+				return NULL;
+			}
+
+			forwarded_keywords = weakref_only;
+		}
+	}
+
+	if (
 		weakref_slot_is_new(request.options, bases) &&
-		winning_metatype(metatype, bases)->tp_new != StructMeta_new
+		handoff->tp_new != StructMeta_new &&
+		verdict.accepts_weakref == 0
 	) {
 		PyErr_SetString(
 			PyExc_TypeError,
-			"weakref=True cannot cross a metaclass __new__ that hands the build "
-			"off: the re-entered call cannot add the weakref slot"
+			verdict.readable ?
+				"weakref=True cannot cross a metaclass __new__ that hands the build "
+				"off: the re-entered call cannot add the weakref slot" :
+				"weakref=True cannot cross a metaclass __new__ that hands the build "
+				"off: the chain contains a __new__ whose signature cannot be read, so "
+				"the re-entered call cannot be verified to add the weakref slot"
 		);
 
 		return NULL;
@@ -172,11 +232,8 @@ PyObject * build_struct_class(
 	if (
 		refuse_colliding_methods(original_namespace, plan.all_names, name) != RESULT_OK ||
 		refuse_mixin_method_fields(plan.all_names) != RESULT_OK ||
-		refuse_displaced_slots(
-				original_namespace,
-				plan.all_names,
-				weakref_expected(request.options, bases)
-			) !=
+		refuse_slot_name_fields(plan.new_names) != RESULT_OK ||
+		refuse_displaced_slots(original_namespace, plan.all_names, bases, request.options) !=
 			RESULT_OK
 	) {
 		field_plan_clear(&plan);
@@ -208,6 +265,7 @@ PyObject * build_struct_class(
 			plan.new_names,
 			request.options,
 			base,
+			bases,
 			inherited,
 			frozen_across_bases,
 			body_defines_eq,
@@ -216,7 +274,14 @@ PyObject * build_struct_class(
 		)
 	);
 	StructType * struct_class = (
-		namespace != NULL ? create_class(metatype, name, bases, namespace) :
+		namespace != NULL ? create_class(
+			metatype,
+			handoff,
+			name,
+			bases,
+			namespace,
+			forwarded_keywords
+		) :
 		NULL
 	);
 
@@ -257,9 +322,11 @@ PyObject * build_struct_class(
 
 static StructType * create_class(
 	PyTypeObject * const metatype,
+	PyTypeObject * const handoff,
 	PyObject * const name,
 	PyObject * const bases,
-	PyObject * const namespace
+	PyObject * const namespace,
+	PyObject * const forwarded_keywords
 ) {
 	PY_OWNED(type_args, PyTuple_Pack(3, name, bases, namespace));
 
@@ -267,9 +334,12 @@ static StructType * create_class(
 		return NULL;
 	}
 
-	PyTypeObject * const winner = winning_metatype(metatype, bases);
-	PyTypeObject * const builder = winner->tp_new == StructMeta_new ? winner : metatype;
-	PY_MOVABLE(created, PyType_Type.tp_new(builder, type_args, NULL));
+	PyTypeObject * const builder = handoff->tp_new == StructMeta_new ? handoff : metatype;
+
+	PY_MOVABLE(
+		created,
+		PyType_Type.tp_new(builder, type_args, builder == handoff ? NULL : forwarded_keywords)
+	);
 
 	if (created == NULL) {
 		return NULL;
@@ -279,7 +349,7 @@ static StructType * create_class(
 		PyErr_Format(
 			PyExc_TypeError,
 			"%.200s.__new__ returned %.200s, which is not a struct class",
-			winner->tp_name,
+			handoff->tp_name,
 			Py_TYPE(created)->tp_name
 		);
 
@@ -287,6 +357,145 @@ static StructType * create_class(
 	}
 
 	return (StructType *) py_move(&created);
+}
+
+static int code_accepts_keyword(
+	PyCodeObject * const code,
+	PyObject * const varnames,
+	char const * const keyword
+) {
+	Py_ssize_t const named = code->co_argcount + code->co_kwonlyargcount;
+
+	for (Py_ssize_t i = code->co_posonlyargcount; i < named; ++i) {
+		int const compared = PyUnicode_CompareWithASCIIString(
+			PyTuple_GET_ITEM(varnames, i),
+			keyword
+		);
+
+		if (compared == 0) {
+			return 1;
+		}
+
+		if (compared < 0 && PyErr_Occurred()) {
+			return -1;
+		}
+	}
+
+	return 0;
+}
+
+static struct chain_verdict chain_probe(
+	PyObject * const chain,
+	PyObject * const keywords,
+	bool const weakref_column
+) {
+	struct chain_verdict verdict = {.accepts_all = 1, .accepts_weakref = 1, .readable = true};
+
+	for (Py_ssize_t i = 0; i < PyList_GET_SIZE(chain); ++i) {
+		PyObject * const link = PyList_GET_ITEM(chain, i);
+
+		if (!PyFunction_Check(link)) {
+			verdict.readable = false;
+			verdict.accepts_all = 0;
+			verdict.accepts_weakref = 0;
+			continue;
+		}
+
+		PyCodeObject * const code = (PyCodeObject *) ((PyFunctionObject *) link)->func_code;
+
+		if ((code->co_flags & CO_VARKEYWORDS) != 0) {
+			continue;
+		}
+
+#if PY_VERSION_HEX >= 0x030B0000
+		PY_OWNED(varnames, PyCode_GetVarnames(code));
+#else
+		PyObject * const varnames = code->co_varnames;
+#endif
+
+		if (varnames == NULL) {
+			verdict.accepts_all = -1;
+
+			return verdict;
+		}
+
+		Py_ssize_t position = 0;
+		PyObject * key;
+		PyObject * value;
+
+		while (PyDict_Next(keywords, &position, &key, &value)) {
+			char const * const name = PyUnicode_AsUTF8(key);
+
+			if (name == NULL) {
+				verdict.accepts_all = -1;
+
+				return verdict;
+			}
+
+			int const accepts = code_accepts_keyword(code, varnames, name);
+
+			if (accepts < 0) {
+				verdict.accepts_all = -1;
+
+				return verdict;
+			}
+
+			if (accepts == 0) {
+				verdict.accepts_all = 0;
+				break;
+			}
+		}
+
+		if (weakref_column) {
+			int const accepts_weakref = code_accepts_keyword(
+				code,
+				varnames,
+				option_keywords[OPTION_WEAKREF]
+			);
+
+			if (accepts_weakref < 0) {
+				verdict.accepts_all = -1;
+
+				return verdict;
+			}
+
+			if (accepts_weakref == 0) {
+				verdict.accepts_weakref = 0;
+			}
+		}
+	}
+
+	return verdict;
+}
+
+static PyObject * metaclass_chain(PyTypeObject * const winner) {
+	PY_MOVABLE(chain, PyList_New(0));
+
+	if (chain == NULL) {
+		return NULL;
+	}
+
+	PyObject * const mro = winner->tp_mro;
+
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); ++i) {
+		PyTypeObject * const link = (PyTypeObject *) PyTuple_GET_ITEM(mro, i);
+
+		if (link == &StructMeta_Type || link == &PyType_Type) {
+			break;
+		}
+
+		if (link->tp_new == StructMeta_new) {
+			continue;
+		}
+
+		PY_OWNED(new, PyObject_GetAttrString((PyObject *) link, "__new__"));
+
+		if (new == NULL || PyList_Append(chain, new) < 0) {
+			return NULL;
+		}
+	}
+
+	return py_move(&chain);
 }
 
 /* It is the third walk of `bases` in a class creation, after find_struct_base
@@ -414,7 +623,7 @@ static enum result settle_planned(
 		return refuse_unplanned(struct_class);
 	}
 
-	bool const carries_slot = ((PyTypeObject *) struct_class)->tp_weaklistoffset != 0;
+	bool const carries_slot = carries_weakref_slot((PyTypeObject *) struct_class);
 
 	if (carries_slot != weakref_expected(options, bases)) {
 		return refuse_unplanned(struct_class);

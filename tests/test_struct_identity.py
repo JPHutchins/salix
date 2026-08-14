@@ -14,6 +14,11 @@ class Forwarding(META):
     def __new__(metacls, name, bases, namespace, **keywords):
         return super().__new__(metacls, name, bases, namespace, **keywords)
 
+
+class Plain(META):
+    def __new__(metacls, name, bases, namespace):
+        return super().__new__(metacls, name, bases, namespace)
+
 # Both spellings of both, in one place: two literals drifted apart is a test
 # that silently stops covering a name.
 METADATA_NAMES = (
@@ -300,6 +305,151 @@ class TestAMetaclassSubclass:
         assert built(1, 2) < built(1, 3)
         assert type(built) is Delegating
 
+    def test_weakref_survives_the_handoff_to_a_derived_metatype(self):
+        class Base(Struct, metaclass=Forwarding):
+            x: int
+
+        built = META("Built", (Base,), {"__annotations__": {"y": int}}, weakref=True)
+        held = built(1, 2)
+
+        assert weakref.ref(held)() is held
+
+    def test_a_keyword_only_delegate_that_names_weakref_can_add_the_slot(self):
+        class KwOnly(META):
+            def __new__(metacls, name, bases, namespace, *, weakref=False):
+                return super().__new__(metacls, name, bases, namespace, weakref=weakref)
+
+        class Base(Struct, metaclass=KwOnly):
+            x: int
+
+        built = META("Built", (Base,), {"__annotations__": {"y": int}}, weakref=True)
+        held = built(1, 2)
+
+        assert weakref.ref(held)() is held
+
+    def test_a_keyword_only_delegate_that_names_only_weakref_gets_weakref_alone(self):
+        """The one option the settle cannot repair rides by itself; the rest
+        takes the keyword-less path and the settle restores it.
+        """
+
+        class KwOnly(META):
+            def __new__(metacls, name, bases, namespace, *, weakref=False):
+                return super().__new__(metacls, name, bases, namespace, weakref=weakref)
+
+        class Base(Struct, metaclass=KwOnly):
+            x: int
+
+        built = META("Built", (Base,), {"__annotations__": {"y": int}}, weakref=True, eq=False)
+        held = built(1, 2)
+
+        assert weakref.ref(held)() is held
+        assert built(1, 2) != built(1, 2)
+
+    def test_a_delegate_without_keywords_still_gets_none_handed_over(self):
+        """A delegate whose __new__ takes no **keywords would be handed the
+        options and raise; it gets the keyword-less hand-off it declared, and
+        the settle restores what the keyword meant.
+        """
+
+        class Base(Struct, metaclass=Plain):
+            x: int
+
+        built = META("Built", (Base,), {"__annotations__": {"y": int}}, order=True)
+
+        assert built(1, 2) < built(1, 3)
+
+    def test_a_delegate_that_cannot_take_the_options_cannot_add_the_weakref_slot(self):
+        """The keywords cannot ride a __new__ that does not take them, so the
+        refusal says so instead of blaming the entry salix itself wrote.
+        """
+
+        class Base(Struct, metaclass=Plain):
+            x: int
+
+        with pytest.raises(TypeError, match="cannot cross"):
+            META("Built", (Base,), {"__annotations__": {"y": int}}, weakref=True)
+
+    def test_a_delegate_that_swallows_the_options_gets_the_displaced_slot_advice(self):
+        """The boundary: a delegate that accepts the options and drops them
+        re-enters keyword-less, and the advice blames the entry salix wrote.
+        """
+
+        class Swallowing(META):
+            def __new__(metacls, name, bases, namespace, **keywords):
+                return super().__new__(metacls, name, bases, namespace)
+
+        class Base(Struct, metaclass=Swallowing):
+            x: int
+
+        with pytest.raises(TypeError, match="carries no weakref slot"):
+            META("Built", (Base,), {"__annotations__": {"y": int}}, weakref=True)
+
+    def test_a_cobase_weakref_slot_needs_no_duplicate_entry(self):
+        class Slotted:
+            __slots__ = ("__weakref__",)
+
+        class WithSlot(Struct, Slotted, weakref=True):
+            x: int
+
+        held = WithSlot(1)
+
+        assert weakref.ref(held)() is held
+
+    def test_a_keyword_only_delegate_still_gets_the_class_statement_keywords(self):
+        """The class statement hands its keywords to the metaclass's own
+        __new__, so a delegate that names them as keyword-only parameters
+        builds without any hand-off from salix.
+        """
+
+        class KwOnly(META):
+            def __new__(metacls, name, bases, namespace, *, weakref=False):
+                return super().__new__(metacls, name, bases, namespace, weakref=weakref)
+
+        class Base(Struct, metaclass=KwOnly):
+            x: int
+
+        class Built(Base, weakref=True):
+            y: int = 0
+
+        held = Built(1)
+
+        assert weakref.ref(held)() is held
+
+    def test_a_staticmethod_delegate_accepts_the_handoff_keywords(self):
+        class Staticmethoded(META):
+            @staticmethod
+            def __new__(metacls, name, bases, namespace, **keywords):
+                return META.__new__(metacls, name, bases, namespace, **keywords)
+
+        class Base(Struct, metaclass=Staticmethoded):
+            x: int
+
+        built = META("Built", (Base,), {"__annotations__": {"y": int}}, weakref=True)
+        held = built(1, 2)
+
+        assert weakref.ref(held)() is held
+
+    def test_a_keyword_rides_only_a_chain_that_takes_it_end_to_end(self):
+        """A chain whose intermediate __new__ takes no **keywords would raise
+        on the options, so the hand-off stays keyword-less and the settle
+        restores what the keyword meant.
+        """
+
+        class Mid(META):
+            def __new__(metacls, name, bases, namespace):
+                return super().__new__(metacls, name, bases, namespace)
+
+        class Low(Mid):
+            def __new__(metacls, name, bases, namespace, **keywords):
+                return super().__new__(metacls, name, bases, namespace, **keywords)
+
+        class Base(Struct, metaclass=Low):
+            x: int
+
+        built = META("Built", (Base,), {"__annotations__": {"y": int}}, order=True)
+
+        assert built(1, 2) < built(1, 3)
+
     def test_two_unrelated_metatypes_still_raise_the_conflict(self):
         """Picking the winner ourselves must not swallow the case that has no
         winner: type_new is handed the requested metatype and says so.
@@ -484,16 +634,18 @@ class TestAMetaclassSubclass:
 
         assert weakref.ref(instance)() is instance
 
-    def test_a_delegate_cannot_add_a_weakref_slot_the_call_planned(self):
-        """The re-entered build cannot add the weakref slot, so the refusal
-        says so instead of dying in the inner call's displaced-slot check.
+    def test_a_delegate_can_add_the_weakref_slot_the_call_planned(self):
+        """The keywords ride the hand-off, so the re-entered build plans the
+        same slot and the direct spelling builds like the subclass spelling.
         """
 
         class Base(Struct, metaclass=Forwarding):
             x: int
 
-        with pytest.raises(TypeError, match="cannot cross"):
-            META("Built", (Base,), {"__annotations__": {"y": int}}, weakref=True)
+        built = META("Built", (Base,), {"__annotations__": {"y": int}}, weakref=True)
+        held = built(1, 2)
+
+        assert weakref.ref(held)() is held
 
     def test_a_delegate_that_strips_the_dunders_is_settled(self):
         """A delegate that removes the dunders from the namespace leaves the
