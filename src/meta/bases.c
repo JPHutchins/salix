@@ -272,3 +272,20 @@ bool weakref_slot_is_new(struct options const options, PyObject * const bases) {
 bool any_base_has_instance_dict(PyObject * const bases) {
 	return any_base_satisfies(bases, carries_instance_dict);
 }
+
+bool any_fielded_base_is_frozen(PyObject * const bases) {
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(bases); ++i) {
+		PyObject * const base = PyTuple_GET_ITEM(bases, i);
+		StructType const * const struct_base = (StructType *) base;
+
+		if (
+			is_struct_class(base) &&
+			struct_base->struct_field_count > 0 &&
+			struct_base->struct_options.frozen
+		) {
+			return true;
+		}
+	}
+
+	return false;
+}

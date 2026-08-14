@@ -24,18 +24,14 @@ char const * const option_keywords[OPTION_COUNT] = {
 
 static struct option_lookup find_option(PyObject * keyword);
 static struct options with_option(struct options options, enum option which, bool value);
-static struct options_request checked(
-	struct options requested,
-	struct options inherited,
-	bool base_is_constraining
-);
+static struct options_request checked(struct options requested, bool fielded_base_is_frozen);
 static struct options_request reject_unknown(PyObject * keyword);
 static PyObject * accepted_keywords(void);
 
 struct options_request options_read(
 	PyObject * const keywords,
 	struct options const inherited,
-	bool const base_is_constraining
+	bool const fielded_base_is_frozen
 ) {
 	if (keywords == NULL) {
 		return (struct options_request){.tag = OPTIONS_RESOLVED, .options = inherited};
@@ -65,7 +61,7 @@ struct options_request options_read(
 		requested = with_option(requested, found.option, truth != 0);
 	}
 
-	return checked(requested, inherited, base_is_constraining);
+	return checked(requested, fielded_base_is_frozen);
 }
 
 static struct option_lookup find_option(PyObject * const keyword) {
@@ -111,16 +107,10 @@ static struct options with_option(
 
 static struct options_request checked(
 	struct options const requested,
-	struct options const inherited,
-	bool const base_is_constraining
+	bool const fielded_base_is_frozen
 ) {
-	if (base_is_constraining && requested.frozen != inherited.frozen) {
-		PyErr_Format(
-			PyExc_TypeError,
-			"%s struct cannot inherit from a %s one",
-			requested.frozen ? "a frozen" : "a mutable",
-			inherited.frozen ? "frozen" : "mutable"
-		);
+	if (!requested.frozen && fielded_base_is_frozen) {
+		PyErr_SetString(PyExc_TypeError, "mutable struct cannot inherit from a frozen one");
 
 		return (struct options_request){.tag = OPTIONS_REJECTED};
 	}

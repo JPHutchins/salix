@@ -621,33 +621,6 @@ def test_equal_instances_hash_equal_when_a_later_base_answers_equality():
     assert hash_disagreements(CONTESTED_HASH) == []
 
 
-def inherits_a_different_frozen_reversed(bases: tuple[type, ...]) -> bool:
-    """Whether reversing these bases changes what `frozen` they inherit, in a
-    way `options_read` can act on.
-
-    Two clauses, because the refusal needs both. `inherited.frozen` is the
-    first struct base's, strengthened by any *fielded* frozen base -- so it can
-    differ between an ordering and its reverse. And the refusal only fires when
-    the layout base is constraining, which means some base has fields: an
-    all-fieldless arrangement inherits a different frozen and is accepted both
-    ways regardless.
-
-    Leaving the second clause out puts 324 orderings in the bucket to hold 188
-    real ones.
-    """
-
-    reversed_bases = tuple(reversed(bases))
-
-    def inherited(order: tuple[type, ...]) -> bool:
-        return FROZEN_ALONE[order[0]] or any(
-            base.__struct_fields__ and FROZEN_ALONE[base] for base in order
-        )
-
-    return any(base.__struct_fields__ for base in bases) and inherited(
-        bases
-    ) != inherited(reversed_bases)
-
-
 def frozen_refusals_that_depend_on_order() -> list[str]:
     asymmetric = []
 
@@ -665,36 +638,12 @@ def frozen_refusals_that_depend_on_order() -> list[str]:
     return asymmetric
 
 
-FROZEN_AT_RISK = tuple(
-    (bases, wanted)
-    for bases in ARRANGEMENTS
-    for wanted in (True, False)
-    if inherits_a_different_frozen_reversed(bases)
-    and not isinstance(build(bases, frozen=wanted), Impossible)
-    and not isinstance(build(tuple(reversed(bases)), frozen=wanted), Impossible)
-)
-
-
-@pytest.mark.xfail(strict=True, reason="#77: the frozen pin is armed from one base and directed by another")
 def test_the_frozen_pin_does_not_depend_on_the_order_of_the_bases():
     """Whether a class may be frozen is a question about which of its bases
     made a promise, and no ordering of the same bases changes the answer.
     """
 
     assert frozen_refusals_that_depend_on_order() == []
-
-
-def test_every_order_dependent_frozen_refusal_really_is_one():
-    """#77's bucket bound, the last of the four this file owes.
-
-    Without it a partial fix -- one that settles the six width-2 pairs and
-    leaves the 182 width-3 arrangements -- keeps the xfail above failing
-    exactly as expected, and the tail goes unmentioned.
-
-    Delete this with the xfail when #77 lands.
-    """
-
-    assert len(frozen_refusals_that_depend_on_order()) == len(FROZEN_AT_RISK)
 
 
 WITH_A_SLOT = tuple(

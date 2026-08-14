@@ -168,7 +168,7 @@ PyObject * build_struct_class(
 	StructType const * const behaviour = find_behaviour_base(bases);
 	struct options const inherited = inherited_options(bases, behaviour);
 	struct options_request const request =
-		options_read(keywords, inherited, base != NULL && base->struct_field_count > 0);
+		options_read(keywords, inherited, any_fielded_base_is_frozen(bases));
 
 	if (request.tag == OPTIONS_REJECTED) {
 		return NULL;

@@ -60,6 +60,7 @@ bool any_base_has_weakref_slot(PyObject * bases);
 bool carries_weakref_slot(PyTypeObject const * type);
 bool weakref_expected(struct options options, PyObject * bases);
 bool any_base_has_instance_dict(PyObject * bases);
+bool any_fielded_base_is_frozen(PyObject * bases);
 bool weakref_slot_is_new(struct options options, PyObject * bases);
 
 struct binding_plan binding_plan(

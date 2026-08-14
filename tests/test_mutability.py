@@ -121,11 +121,15 @@ def test_a_mutable_struct_may_not_inherit_from_a_frozen_one():
             pass
 
 
-def test_a_frozen_struct_may_not_inherit_from_a_mutable_one():
-    with pytest.raises(TypeError, match="frozen struct cannot inherit from a mutable one"):
+def test_a_frozen_struct_may_strengthen_a_mutable_one():
+    """frozen=True over a mutable base is a strengthening the caller asks for,
+    and the promise flows in from the caller rather than being refused."""
 
-        class Child(Mutable, frozen=True):
-            pass
+    class Child(Mutable, frozen=True):
+        pass
+
+    with pytest.raises(TypeError, match="does not support attribute assignment"):
+        Child(1).x = 9
 
 
 def test_a_base_with_no_fields_imposes_nothing():
