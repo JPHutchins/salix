@@ -399,7 +399,11 @@ static int callable_accepts_keyword(PyObject * const new, char const * const key
 		return 1;
 	}
 
-	PY_OWNED(varnames, PyObject_GetAttrString((PyObject *) code, "co_varnames"));
+#if PY_VERSION_HEX >= 0x030B0000
+	PY_OWNED(varnames, PyCode_GetVarnames(code));
+#else
+	PyObject * const varnames = code->co_varnames;
+#endif
 
 	if (varnames == NULL) {
 		return -1;
@@ -419,7 +423,11 @@ static int callable_accepts_keywords(PyObject * const new, PyObject * const keyw
 		return 1;
 	}
 
-	PY_OWNED(varnames, PyObject_GetAttrString((PyObject *) code, "co_varnames"));
+#if PY_VERSION_HEX >= 0x030B0000
+	PY_OWNED(varnames, PyCode_GetVarnames(code));
+#else
+	PyObject * const varnames = code->co_varnames;
+#endif
 
 	if (varnames == NULL) {
 		return -1;
