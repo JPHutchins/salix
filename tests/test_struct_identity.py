@@ -301,7 +301,8 @@ class TestAMetaclassSubclass:
 
     def test_weakref_survives_the_handoff_to_a_derived_metatype(self):
         class Delegating(META):
-            pass
+            def __new__(metacls, name, bases, namespace, **keywords):
+                return super().__new__(metacls, name, bases, namespace, **keywords)
 
         class Base(Struct, metaclass=Delegating):
             x: int
@@ -496,16 +497,18 @@ class TestAMetaclassSubclass:
 
         assert weakref.ref(instance)() is instance
 
-    def test_a_delegate_cannot_add_a_weakref_slot_the_call_planned(self):
-        """The re-entered build cannot add the weakref slot, so the refusal
-        says so instead of dying in the inner call's displaced-slot check.
+    def test_a_delegate_can_add_the_weakref_slot_the_call_planned(self):
+        """The keywords ride the hand-off, so the re-entered build plans the
+        same slot and the direct spelling builds like the subclass spelling.
         """
 
         class Base(Struct, metaclass=Forwarding):
             x: int
 
-        with pytest.raises(TypeError, match="cannot cross"):
-            META("Built", (Base,), {"__annotations__": {"y": int}}, weakref=True)
+        built = META("Built", (Base,), {"__annotations__": {"y": int}}, weakref=True)
+        held = built(1, 2)
+
+        assert weakref.ref(held)() is held
 
     def test_a_delegate_that_strips_the_dunders_is_settled(self):
         """A delegate that removes the dunders from the namespace leaves the

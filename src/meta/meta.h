@@ -58,7 +58,7 @@ struct options inherited_options(PyObject * bases, StructType const * behaviour)
 bool any_struct_base_is_mutable(PyObject * bases);
 bool has_weakref_slot(StructType const * base);
 bool weakref_expected(struct options options, PyObject * bases);
-bool weakref_slot_is_new(struct options options, PyObject * bases);
+bool any_base_has_instance_dict(PyObject * bases);
 
 struct binding_plan binding_plan(
 	struct options options,
@@ -91,7 +91,8 @@ PyObject * build_class_namespace(
 enum result refuse_displaced_slots(
 	PyObject * original_namespace,
 	PyObject * all_names,
-	bool carries_a_weakref_slot
+	bool carries_a_weakref_slot,
+	bool carries_an_instance_dict
 );
 enum result refuse_colliding_methods(
 	PyObject * original_namespace,

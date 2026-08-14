@@ -150,20 +150,6 @@ PyObject * build_struct_class(
 		return NULL;
 	}
 
-	if (
-		metatype == &StructMeta_Type &&
-		weakref_slot_is_new(request.options, bases) &&
-		winning_metatype(metatype, bases)->tp_new != StructMeta_new
-	) {
-		PyErr_SetString(
-			PyExc_TypeError,
-			"weakref=True cannot cross a metaclass __new__ that hands the build "
-			"off: the re-entered call cannot add the weakref slot"
-		);
-
-		return NULL;
-	}
-
 	struct field_plan plan = field_plan_build(base, original_namespace);
 
 	if (field_plan_failed(&plan)) {
@@ -177,7 +163,8 @@ PyObject * build_struct_class(
 		refuse_displaced_slots(
 				original_namespace,
 				plan.all_names,
-				weakref_expected(request.options, bases)
+				weakref_expected(request.options, bases),
+				any_base_has_instance_dict(bases)
 			) !=
 			RESULT_OK
 	) {

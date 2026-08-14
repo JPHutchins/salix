@@ -240,6 +240,14 @@ bool weakref_expected(struct options const options, PyObject * const bases) {
 	return options.weakref || any_base_has_weakref_slot(bases);
 }
 
-bool weakref_slot_is_new(struct options const options, PyObject * const bases) {
-	return options.weakref && !any_base_has_weakref_slot(bases);
+bool any_base_has_instance_dict(PyObject * const bases) {
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(bases); ++i) {
+		PyObject * const base = PyTuple_GET_ITEM(bases, i);
+
+		if (PyType_Check(base) && ((PyTypeObject *) base)->tp_dictoffset != 0) {
+			return true;
+		}
+	}
+
+	return false;
 }

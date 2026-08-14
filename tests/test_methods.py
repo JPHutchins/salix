@@ -547,6 +547,23 @@ class TestBindingsSalixOwns:
             class Dicted(Struct):
                 __slots__ = ("__dict__",)
 
+    def test_a_slot_naming_an_inherited_dict_is_accepted(self):
+        """Naming the inherited dict loses nothing, so the entry is accepted
+        and the dict still works.
+        """
+
+        class Dicted:
+            pass
+
+        class WithDict(Struct, Dicted, frozen=False):
+            x: int
+            __slots__ = ("__dict__",)
+
+        instance = WithDict(1)
+        instance.extra = 2
+
+        assert instance.__dict__ == {"extra": 2}
+
     def test_a_field_named_weakref_is_refused(self):
         with pytest.raises(TypeError, match="weakref slot's name"):
 
