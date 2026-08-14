@@ -633,7 +633,7 @@ static enum result settle_planned(
 		return refuse_unplanned(struct_class);
 	}
 
-	bool const carries_slot = ((PyTypeObject *) struct_class)->tp_weaklistoffset != 0;
+	bool const carries_slot = carries_weakref_slot((PyTypeObject *) struct_class);
 
 	if (carries_slot != weakref_expected(options, bases)) {
 		return refuse_unplanned(struct_class);

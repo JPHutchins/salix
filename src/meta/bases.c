@@ -219,7 +219,7 @@ struct options inherited_options(PyObject * const bases, StructType const * cons
 	};
 }
 
-static bool carries_weakref_slot(PyTypeObject const * const base) {
+bool carries_weakref_slot(PyTypeObject const * const base) {
 	if (base->tp_weaklistoffset != 0) {
 		return true;
 	}

@@ -343,7 +343,7 @@ class TestAMetaclassSubclass:
         held = built(1, 2)
 
         assert weakref.ref(held)() is held
-        assert built(1, 2) != built(1, 3)
+        assert built(1, 2) != built(1, 2)
 
     def test_a_delegate_without_keywords_still_gets_none_handed_over(self):
         """A delegate whose __new__ takes no **keywords would be handed the
