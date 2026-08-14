@@ -123,6 +123,16 @@ enum result refuse_displaced_slots(
 			return RESULT_ERROR;
 		}
 
+		if (PyUnicode_CompareWithASCIIString(entry, "__dict__") == 0) {
+			PyErr_SetString(
+				PyExc_TypeError,
+				"__slots__ names __dict__ and a struct carries no instance dict; "
+				"a non-struct base that carries one gives the struct one"
+			);
+
+			return RESULT_ERROR;
+		}
+
 		int const named_by_a_field = PySequence_Contains(all_names, entry);
 
 		if (named_by_a_field < 0) {
@@ -142,6 +152,33 @@ enum result refuse_displaced_slots(
 		);
 
 		return RESULT_ERROR;
+	}
+
+	return RESULT_OK;
+}
+
+enum result refuse_slot_name_fields(PyObject * const all_names) {
+	for (Py_ssize_t i = 0; i < PyList_GET_SIZE(all_names); ++i) {
+		PyObject * const field_name = PyList_GET_ITEM(all_names, i);
+		char const * const owner = (
+			PyUnicode_CompareWithASCIIString(
+				field_name,
+				"__weakref__"
+			) == 0 ? "the weakref slot's" :
+			PyUnicode_CompareWithASCIIString(field_name, "__dict__") == 0 ? "the instance dict's" :
+			NULL
+		);
+
+		if (owner != NULL) {
+			PyErr_Format(
+				PyExc_TypeError,
+				"'%U' is %s name and cannot be a field",
+				field_name,
+				owner
+			);
+
+			return RESULT_ERROR;
+		}
 	}
 
 	return RESULT_OK;

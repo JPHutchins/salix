@@ -16,7 +16,8 @@ static StructType * create_class(
 	PyTypeObject * metatype,
 	PyObject * name,
 	PyObject * bases,
-	PyObject * namespace
+	PyObject * namespace,
+	PyObject * keywords
 );
 static PyTypeObject * winning_metatype(PyTypeObject * requested, PyObject * bases);
 static enum result install_fields(
@@ -172,6 +173,7 @@ PyObject * build_struct_class(
 	if (
 		refuse_colliding_methods(original_namespace, plan.all_names, name) != RESULT_OK ||
 		refuse_mixin_method_fields(plan.all_names) != RESULT_OK ||
+		refuse_slot_name_fields(plan.all_names) != RESULT_OK ||
 		refuse_displaced_slots(
 				original_namespace,
 				plan.all_names,
@@ -216,7 +218,7 @@ PyObject * build_struct_class(
 		)
 	);
 	StructType * struct_class = (
-		namespace != NULL ? create_class(metatype, name, bases, namespace) :
+		namespace != NULL ? create_class(metatype, name, bases, namespace, keywords) :
 		NULL
 	);
 
@@ -259,7 +261,8 @@ static StructType * create_class(
 	PyTypeObject * const metatype,
 	PyObject * const name,
 	PyObject * const bases,
-	PyObject * const namespace
+	PyObject * const namespace,
+	PyObject * const keywords
 ) {
 	PY_OWNED(type_args, PyTuple_Pack(3, name, bases, namespace));
 
@@ -269,7 +272,10 @@ static StructType * create_class(
 
 	PyTypeObject * const winner = winning_metatype(metatype, bases);
 	PyTypeObject * const builder = winner->tp_new == StructMeta_new ? winner : metatype;
-	PY_MOVABLE(created, PyType_Type.tp_new(builder, type_args, NULL));
+	PY_MOVABLE(
+		created,
+		PyType_Type.tp_new(builder, type_args, builder == winner ? NULL : keywords)
+	);
 
 	if (created == NULL) {
 		return NULL;

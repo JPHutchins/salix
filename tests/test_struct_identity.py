@@ -298,6 +298,18 @@ class TestAMetaclassSubclass:
         built = META("Built", (Base,), {"__annotations__": {"y": int}}, order=True)
 
         assert built(1, 2) < built(1, 3)
+
+    def test_weakref_survives_the_handoff_to_a_derived_metatype(self):
+        class Delegating(META):
+            pass
+
+        class Base(Struct, metaclass=Delegating):
+            x: int
+
+        built = META("Built", (Base,), {"__annotations__": {"y": int}}, weakref=True)
+        held = built(1, 2)
+
+        assert weakref.ref(held)() is held
         assert type(built) is Delegating
 
     def test_two_unrelated_metatypes_still_raise_the_conflict(self):
