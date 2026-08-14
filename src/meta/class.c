@@ -160,7 +160,11 @@ PyObject * build_struct_class(
 
 	PyTypeObject * const handoff = winning_metatype(metatype, bases);
 
-	if (weakref_slot_is_new(request.options, bases) && handoff->tp_new != StructMeta_new) {
+	if (
+		metatype == &StructMeta_Type &&
+		weakref_slot_is_new(request.options, bases) &&
+		handoff->tp_new != StructMeta_new
+	) {
 		int const accepts = metaclass_chain_accepts_keywords(handoff);
 
 		if (accepts < 0) {
@@ -187,7 +191,7 @@ PyObject * build_struct_class(
 	if (
 		refuse_colliding_methods(original_namespace, plan.all_names, name) != RESULT_OK ||
 		refuse_mixin_method_fields(plan.all_names) != RESULT_OK ||
-		refuse_slot_name_fields(plan.all_names) != RESULT_OK ||
+		refuse_slot_name_fields(plan.new_names) != RESULT_OK ||
 		refuse_displaced_slots(
 				original_namespace,
 				plan.all_names,

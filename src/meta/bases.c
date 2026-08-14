@@ -17,7 +17,6 @@ static struct equality_source equality_from_the_co_bases(PyObject * bases, Py_ss
 static struct definition base_defines(PyObject * base, PyObject * name);
 static struct definition any_base_defines(PyObject * bases, Py_ssize_t first, PyObject * name);
 static struct options base_options(StructType const * base);
-static bool any_base_has_weakref_slot(PyObject * bases);
 
 StructType * find_struct_base(PyObject * const bases) {
 	StructType * widest = NULL;
@@ -224,11 +223,19 @@ bool has_weakref_slot(StructType const * const base) {
 	return base != NULL && base->heap_type.ht_type.tp_weaklistoffset != 0;
 }
 
-static bool any_base_has_weakref_slot(PyObject * const bases) {
+static bool carries_weakref_slot(PyTypeObject * const base) {
+	return base->tp_weaklistoffset != 0;
+}
+
+static bool carries_instance_dict(PyTypeObject * const base) {
+	return base->tp_dictoffset != 0;
+}
+
+static bool any_base_satisfies(PyObject * const bases, bool (*carries)(PyTypeObject *)) {
 	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(bases); ++i) {
 		PyObject * const base = PyTuple_GET_ITEM(bases, i);
 
-		if (PyType_Check(base) && ((PyTypeObject *) base)->tp_weaklistoffset != 0) {
+		if (PyType_Check(base) && carries((PyTypeObject *) base)) {
 			return true;
 		}
 	}
@@ -237,21 +244,13 @@ static bool any_base_has_weakref_slot(PyObject * const bases) {
 }
 
 bool weakref_expected(struct options const options, PyObject * const bases) {
-	return options.weakref || any_base_has_weakref_slot(bases);
+	return options.weakref || any_base_satisfies(bases, carries_weakref_slot);
 }
 
 bool weakref_slot_is_new(struct options const options, PyObject * const bases) {
-	return options.weakref && !any_base_has_weakref_slot(bases);
+	return options.weakref && !any_base_satisfies(bases, carries_weakref_slot);
 }
 
 bool any_base_has_instance_dict(PyObject * const bases) {
-	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(bases); ++i) {
-		PyObject * const base = PyTuple_GET_ITEM(bases, i);
-
-		if (PyType_Check(base) && ((PyTypeObject *) base)->tp_dictoffset != 0) {
-			return true;
-		}
-	}
-
-	return false;
+	return any_base_satisfies(bases, carries_instance_dict);
 }

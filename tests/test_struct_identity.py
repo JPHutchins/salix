@@ -345,6 +345,40 @@ class TestAMetaclassSubclass:
         with pytest.raises(TypeError, match="cannot cross"):
             META("Built", (Base,), {"__annotations__": {"y": int}}, weakref=True)
 
+    def test_a_keyword_only_delegate_still_gets_the_class_statement_keywords(self):
+        """The class statement hands its keywords to the metaclass's own
+        __new__, so a delegate that names them as keyword-only parameters
+        builds without any hand-off from salix.
+        """
+
+        class KwOnly(META):
+            def __new__(metacls, name, bases, namespace, *, weakref=False):
+                return super().__new__(metacls, name, bases, namespace, weakref=weakref)
+
+        class Base(Struct, metaclass=KwOnly):
+            x: int
+
+        class Built(Base, weakref=True):
+            y: int = 0
+
+        held = Built(1)
+
+        assert weakref.ref(held)() is held
+
+    def test_a_staticmethod_delegate_accepts_the_handoff_keywords(self):
+        class Staticmethoded(META):
+            @staticmethod
+            def __new__(metacls, name, bases, namespace, **keywords):
+                return META.__new__(metacls, name, bases, namespace, **keywords)
+
+        class Base(Struct, metaclass=Staticmethoded):
+            x: int
+
+        built = META("Built", (Base,), {"__annotations__": {"y": int}}, weakref=True)
+        held = built(1, 2)
+
+        assert weakref.ref(held)() is held
+
     def test_a_keyword_rides_only_a_chain_that_takes_it_end_to_end(self):
         """A chain whose intermediate __new__ takes no **keywords would raise
         on the options, so the hand-off stays keyword-less and the settle
