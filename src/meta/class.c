@@ -30,8 +30,8 @@ static int callable_accepts_keyword(PyObject * new, char const * keyword);
 static int callable_accepts_keywords(PyObject * new, PyObject * keywords);
 static int code_accepts_keyword(PyCodeObject * code, PyObject * varnames, char const * keyword);
 static PyObject * metaclass_chain(PyTypeObject * winner);
-static int chain_accepts_keywords(PyTypeObject * winner, PyObject * keywords);
-static int chain_accepts_keyword(PyTypeObject * winner, char const * keyword);
+static int chain_accepts_keywords(PyObject * chain, PyObject * keywords);
+static int chain_accepts_keyword(PyObject * chain, char const * keyword);
 static enum result install_fields(
 	StructType * struct_class,
 	StructType const * base,
@@ -165,6 +165,7 @@ PyObject * build_struct_class(
 	PyTypeObject * const handoff = winning_metatype(metatype, bases);
 	PyObject * forwarded_keywords = NULL;
 	PY_MOVABLE(weakref_only, NULL);
+	PY_MOVABLE(chain, NULL);
 	int accepts_all = 1;
 	int accepts_weakref = 1;
 
@@ -174,7 +175,13 @@ PyObject * build_struct_class(
 		keywords != NULL &&
 		PyDict_GET_SIZE(keywords) > 0
 	) {
-		accepts_all = chain_accepts_keywords(handoff, keywords);
+		chain = metaclass_chain(handoff);
+
+		if (chain == NULL) {
+			return NULL;
+		}
+
+		accepts_all = chain_accepts_keywords(chain, keywords);
 
 		if (accepts_all < 0) {
 			return NULL;
@@ -183,7 +190,7 @@ PyObject * build_struct_class(
 		if (accepts_all == 1) {
 			forwarded_keywords = keywords;
 		} else {
-			accepts_weakref = chain_accepts_keyword(handoff, option_keywords[OPTION_WEAKREF]);
+			accepts_weakref = chain_accepts_keyword(chain, option_keywords[OPTION_WEAKREF]);
 
 			if (accepts_weakref < 0) {
 				return NULL;
@@ -263,6 +270,7 @@ PyObject * build_struct_class(
 			plan.new_names,
 			request.options,
 			base,
+			bases,
 			inherited,
 			frozen_across_bases,
 			body_defines_eq,
@@ -452,6 +460,10 @@ static PyObject * metaclass_chain(PyTypeObject * const winner) {
 			break;
 		}
 
+		if (link->tp_new == StructMeta_new) {
+			continue;
+		}
+
 		PY_OWNED(new, PyObject_GetAttrString((PyObject *) link, "__new__"));
 
 		if (new == NULL || PyList_Append(chain, new) < 0) {
@@ -462,13 +474,7 @@ static PyObject * metaclass_chain(PyTypeObject * const winner) {
 	return py_move(&chain);
 }
 
-static int chain_accepts_keywords(PyTypeObject * const winner, PyObject * const keywords) {
-	PY_OWNED(chain, metaclass_chain(winner));
-
-	if (chain == NULL) {
-		return -1;
-	}
-
+static int chain_accepts_keywords(PyObject * const chain, PyObject * const keywords) {
 	for (Py_ssize_t i = 0; i < PyList_GET_SIZE(chain); ++i) {
 		int const accepts = callable_accepts_keywords(PyList_GET_ITEM(chain, i), keywords);
 
@@ -484,13 +490,7 @@ static int chain_accepts_keywords(PyTypeObject * const winner, PyObject * const 
 	return 1;
 }
 
-static int chain_accepts_keyword(PyTypeObject * const winner, char const * const keyword) {
-	PY_OWNED(chain, metaclass_chain(winner));
-
-	if (chain == NULL) {
-		return -1;
-	}
-
+static int chain_accepts_keyword(PyObject * const chain, char const * const keyword) {
 	for (Py_ssize_t i = 0; i < PyList_GET_SIZE(chain); ++i) {
 		int const accepts = callable_accepts_keyword(PyList_GET_ITEM(chain, i), keyword);
 

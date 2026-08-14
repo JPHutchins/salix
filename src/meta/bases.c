@@ -227,10 +227,6 @@ static bool carries_weakref_slot(PyTypeObject const * const base) {
 #endif
 }
 
-bool has_weakref_slot(StructType const * const base) {
-	return base != NULL && carries_weakref_slot(&base->heap_type.ht_type);
-}
-
 static bool carries_instance_dict(PyTypeObject const * const base) {
 #if PY_VERSION_HEX < 0x030C0000
 	return base->tp_dictoffset != 0;
@@ -249,6 +245,10 @@ static bool any_base_satisfies(PyObject * const bases, bool (*carries)(PyTypeObj
 	}
 
 	return false;
+}
+
+bool any_base_has_weakref_slot(PyObject * const bases) {
+	return any_base_satisfies(bases, carries_weakref_slot);
 }
 
 bool weakref_expected(struct options const options, PyObject * const bases) {

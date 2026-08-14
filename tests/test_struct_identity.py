@@ -369,6 +369,17 @@ class TestAMetaclassSubclass:
         with pytest.raises(TypeError, match="cannot cross"):
             META("Built", (Base,), {"__annotations__": {"y": int}}, weakref=True)
 
+    def test_a_cobase_weakref_slot_needs_no_duplicate_entry(self):
+        class Slotted:
+            __slots__ = ("__weakref__",)
+
+        class WithSlot(Struct, Slotted, weakref=True):
+            x: int
+
+        held = WithSlot(1)
+
+        assert weakref.ref(held)() is held
+
     def test_a_keyword_only_delegate_still_gets_the_class_statement_keywords(self):
         """The class statement hands its keywords to the metaclass's own
         __new__, so a delegate that names them as keyword-only parameters

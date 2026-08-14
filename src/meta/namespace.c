@@ -31,7 +31,7 @@ static enum slot_name_owner slot_name_owner_of(PyObject * const name) {
 	return SLOT_NAME_NONE;
 }
 
-static PyObject * build_slots(PyObject * new_names, bool weakref);
+static PyObject * build_slots(PyObject * new_names, bool weakref, PyObject * bases);
 static enum result set_match_args(PyObject * namespace, PyObject * all_names, bool wanted);
 static enum result apply_options(
 	PyObject * namespace,
@@ -65,13 +65,14 @@ PyObject * build_class_namespace(
 	PyObject * const new_names,
 	struct options const options,
 	StructType const * const base,
+	PyObject * const bases,
 	struct options const inherited,
 	bool const frozen_across_bases,
 	bool const body_defines_eq,
 	bool const inherits_body_eq,
 	bool const derive_not_equal
 ) {
-	PY_OWNED(slots, build_slots(new_names, options.weakref && !has_weakref_slot(base)));
+	PY_OWNED(slots, build_slots(new_names, options.weakref, bases));
 	PY_MOVABLE(namespace, PyDict_Copy(original_namespace));
 
 	if (
@@ -214,14 +215,18 @@ enum result refuse_slot_name_fields(PyObject * const all_names) {
 	return RESULT_OK;
 }
 
-static PyObject * build_slots(PyObject * const new_names, bool const weakref) {
+static PyObject * build_slots(
+	PyObject * const new_names,
+	bool const weakref,
+	PyObject * const bases
+) {
 	PY_OWNED(names, PySequence_List(new_names));
 
 	if (names == NULL) {
 		return NULL;
 	}
 
-	if (weakref) {
+	if (weakref && !any_base_has_weakref_slot(bases)) {
 		PY_OWNED(weakref_name, PyUnicode_FromString(weakref_slot_name()));
 
 		if (weakref_name == NULL || PyList_Append(names, weakref_name) < 0) {
