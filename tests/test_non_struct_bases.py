@@ -303,9 +303,10 @@ def test_the_first_struct_bases_record_wins_over_a_later_bases_body_equality():
     assert hash(B(1)) == hash(B(1))
 
 
-def test_a_multi_base_class_recording_identity_keeps_the_identity_hash():
-    """eq=False's HASH_BIND binds object's identity hash, and the settle must
-    not swap the structural slot in over it."""
+def test_a_multi_base_class_recording_identity_keeps_the_identity_pair():
+    """eq=False binds object's identity pair, and the settle must not swap the
+    structural slots in over it: two instances compare unequal and hash
+    differently."""
 
     class ByIdentity(Base, eq=False):
         pass
@@ -316,7 +317,11 @@ def test_a_multi_base_class_recording_identity_keeps_the_identity_hash():
     class C(ByIdentity, Plain):
         pass
 
-    assert hash(C(1)) != hash(C(1))
+    one = C(1)
+    other = C(1)
+
+    assert one != other
+    assert hash(one) != hash(other)
 
 
 def test_the_first_struct_bases_body_repr_keeps_answering():
@@ -429,26 +434,28 @@ def test_a_co_base_derived_from_the_mixin_does_not_count_as_having_paired_them()
     assert (B(1, 0) != B(2, 0)) is False
 
 
-def test_the_record_wins_over_a_co_base_between_two_struct_bases():
-    """The same rule as the later-struct-base case, reached by a co-base: a
-    plain base sitting between two struct bases supplied the equality the walk
-    never saw, and the settle now binds the structural pair the record asks
-    for over it.
+def test_a_co_base_between_two_struct_bases_answers_equality_with_the_hash_paired():
+    """A co-base sits between two struct bases where the pre-build walk never
+    saw it, and the settle honours it the way the single-base path does: its
+    body __eq__ answers, and the hash beside it is Python's own pairing —
+    unhashable, since the co-base wrote no __hash__.
     """
 
     class Second(Struct):
         pass
 
-    class Equality:  # noqa: PLW1641 -- the absent __hash__ is not what is under test
+    class Equality:  # noqa: PLW1641 -- the absent __hash__ is what is under test
         def __eq__(self, other: object) -> bool:
             return True
 
     class B(Second, Equality, Base):
         pass
 
-    assert B(1) != B(2)
-    assert B(1) == B(1)
-    assert hash(B(1)) == hash(B(1))
+    assert B(1) == B(2)
+    assert (B(1) != B(2)) is False
+
+    with pytest.raises(TypeError, match="unhashable type: 'B'"):
+        hash(B(1))
 
 
 def test_equality_and_inequality_may_come_from_different_co_bases():
