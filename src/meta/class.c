@@ -52,8 +52,8 @@ static enum result restore_stripped(
 	PyObject * class_dict,
 	char const * const * const * tables
 );
-static bool table_names(char const * const * names, char const * name);
-static bool settled_by_the_plan(char const * name, struct binding_plan plan);
+static bool table_names(char const * const * const names, char const * const name);
+static bool settled_by_the_plan(char const * const name, struct binding_plan const plan);
 static enum result refuse_unplanned(StructType const * struct_class);
 static enum result install_post_init(StructType * struct_class);
 static bool defines_own_init(StructType const * struct_class);
@@ -82,7 +82,7 @@ char const * const rebind_not_equal[] = {"__ne__", NULL};
 char const * const rebind_representation[] = {"__repr__", NULL};
 char const * const rebind_mutability[] = {"__setattr__", "__delattr__", NULL};
 char const * const rebind_hash[] = {"__hash__", NULL};
-char const * const rebind_never[] = {"__init__", "__post_init__", "__new__", NULL};
+static char const * const rebind_never[] = {"__init__", "__post_init__", "__new__", NULL};
 
 static char const * const * const settle_tables[] = {
 	rebind_comparison,
@@ -119,6 +119,10 @@ static bool settled_by_the_plan(char const * const name, struct binding_plan con
 
 	if (table_names(rebind_mutability, name)) {
 		return plan.rebind_mutability;
+	}
+
+	if (table_names(rebind_hash, name)) {
+		return plan.hash == HASH_BIND || plan.hash == HASH_NONE;
 	}
 
 	if (table_names(rebind_never, name)) {
@@ -423,7 +427,7 @@ static enum result settle_planned(
 		body_defines_eq,
 		inherits_body_eq,
 		derive_not_equal,
-		PyDict_GetItemString(original_namespace, "__hash__") != NULL
+		PyDict_GetItemString(original_namespace, rebind_hash[0]) != NULL
 	);
 
 	for (char const * const * const * tables = settle_tables; *tables != NULL; tables += 1) {
@@ -460,19 +464,14 @@ static enum result settle_planned(
 		return RESULT_ERROR;
 	}
 
-	if (bindings.answered_by_body && PyDict_GetItemString(original_namespace, "__ne__") == NULL) {
-		/* bind_not_equal's answered case on a live class: the fresh build
-		 * binds object's __ne__ when the body answered equality itself. */
-		PY_OWNED(object_ne, PyObject_GetAttrString((PyObject *) &PyBaseObject_Type, "__ne__"));
-		PY_OWNED(ne_name, PyUnicode_FromString("__ne__"));
-
-		if (
-			object_ne == NULL ||
-			ne_name == NULL ||
-			PyType_Type.tp_setattro((PyObject *) struct_class, ne_name, object_ne) < 0
-		) {
-			return RESULT_ERROR;
-		}
+	/* bind_not_equal's answered case on a live class: the fresh build binds
+	 * object's __ne__ when the body answered equality itself. */
+	if (
+		bindings.answered_by_body &&
+		PyDict_GetItemString(original_namespace, rebind_not_equal[0]) == NULL &&
+		settle_rebind(struct_class, original_namespace, rebind_not_equal, false) != RESULT_OK
+	) {
+		return RESULT_ERROR;
 	}
 
 	if (
@@ -496,7 +495,7 @@ static enum result settle_planned(
 		case HASH_INHERITED_EQ:
 			break;
 		case HASH_NONE: {
-			PY_OWNED(hash_name_obj, PyUnicode_FromString("__hash__"));
+			PY_OWNED(hash_name_obj, PyUnicode_FromString(rebind_hash[0]));
 
 			if (
 				hash_name_obj == NULL ||

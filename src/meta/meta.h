@@ -75,7 +75,6 @@ extern char const * const rebind_not_equal[];
 extern char const * const rebind_representation[];
 extern char const * const rebind_mutability[];
 extern char const * const rebind_hash[];
-extern char const * const rebind_never[];
 
 PyObject * build_class_namespace(
 	PyObject * original_namespace,
