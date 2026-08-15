@@ -369,6 +369,22 @@ class TestAMetaclassSubclass:
         with pytest.raises(TypeError, match="cannot cross"):
             META("Built", (Base,), {"__annotations__": {"y": int}}, weakref=True)
 
+    def test_a_declining_chain_still_gets_the_frozen_record(self):
+        """The declining delegate's chain drops the frozen keyword from the
+        hand-off, the re-entered build inherits mutability, and the outer
+        settle restores the frozen block it never planned."""
+
+        class MutableRoot(Struct, frozen=False):
+            x: int
+
+        class Base(MutableRoot, metaclass=Plain):
+            pass
+
+        Built = META("Built", (Base,), {"__annotations__": {}}, frozen=True)
+
+        with pytest.raises(TypeError, match="does not support attribute"):
+            Built(1).x = 9
+
     def test_a_delegate_that_swallows_the_options_gets_the_displaced_slot_advice(self):
         """The boundary: a delegate that accepts the options and drops them
         re-enters keyword-less, and the advice blames the entry salix wrote.

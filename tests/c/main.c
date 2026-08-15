@@ -29,10 +29,10 @@ int main(void) {
 
 	UNITY_BEGIN();
 
+	class_tests();
 	construct_tests();
 	fields_tests();
 	meta_tests();
-	class_tests();
 	options_tests();
 	owned_tests();
 	repr_tests();

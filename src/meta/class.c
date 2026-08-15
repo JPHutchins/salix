@@ -11,6 +11,7 @@
 
 #include "../compare.h"
 #include "../construct.h"
+#include <descrobject.h>
 #include "../fields.h"
 #include "meta.h"
 #include "../mixin.h"
@@ -608,6 +609,43 @@ static int struct_base_count(PyObject * const bases) {
 
 static PyObject * mixin_bindings[7];
 static PyObject * object_bindings[7];
+static PyObject * setattr_name_cache;
+static PyObject * delattr_name_cache;
+
+/* The mutable column's tp_setattro: dispatch through the MRO so a body or
+ * co-base __setattr__ hook answers, skip a foreign C-level slot that would
+ * swallow the write, and fall back to the generic setter. */
+static int struct_setattro(PyObject * const self, PyObject * const name, PyObject * const value) {
+	if (setattr_name_cache == NULL) {
+		setattr_name_cache = PyUnicode_InternFromString("__setattr__");
+		delattr_name_cache = PyUnicode_InternFromString("__delattr__");
+	}
+
+	if (setattr_name_cache == NULL || delattr_name_cache == NULL) {
+		return -1;
+	}
+
+	PY_MOVABLE(descriptor, PyObject_GetAttr(
+		(PyObject *) Py_TYPE(self),
+		value != NULL ? setattr_name_cache : delattr_name_cache
+	));
+
+	if (descriptor == NULL) {
+		PyErr_Clear();
+	} else if (
+		PyObject_TypeCheck(descriptor, &PyWrapperDescr_Type) &&
+		((PyWrapperDescrObject *) descriptor)->d_wrapped != PyBaseObject_Type.tp_setattro &&
+		((PyWrapperDescrObject *) descriptor)->d_wrapped != StructMixin_Type.tp_setattro
+	) {
+		Py_CLEAR(descriptor);
+	} else {
+		PY_OWNED(result, PyObject_CallFunctionObjArgs(descriptor, self, name, value));
+
+		return result != NULL ? 0 : -1;
+	}
+
+	return PyObject_GenericSetAttr(self, name, value);
+}
 
 static int settle_candidates(
 	PyObject * * const mixin_eq,
@@ -797,20 +835,27 @@ static enum result settle_mro_bindings(
 	PyTypeObject * const type = (PyTypeObject *) struct_class;
 
 	/* A co-base carrying its own C-level tp_setattro can divert the child's
-	 * slot to a dispatch that bypasses the namespace rebind, so the slot the
-	 * record asks for — the mixin's frozen block or object's generic setter —
-	 * is restored here. Unlike the comparison repairs below, this runs for
-	 * every struct class, single or multi base, and defers only to the
-	 * child's own body __setattr__, which the single-base path lets answer. */
-	setattrofunc const own_setattro = (
-		options.frozen ? StructMixin_Type.tp_setattro :
-		PyBaseObject_Type.tp_setattro
-	);
+	 * slot away from what the record asks for, so the slot is restored here.
+	 * The frozen column gets the mixin's block unless the child's own body
+	 * __setattr__ answers (the single-base escape hatch); the mutable column
+	 * gets the dispatch shim, which honours body and co-base hooks while
+	 * skipping a foreign C-level slot that would swallow the write. Unlike
+	 * the comparison repairs below, this runs for every struct class,
+	 * single or multi base. */
+	setattrofunc own_setattro = NULL;
 
-	if (
-		PyDict_GetItemString(original_namespace, "__setattr__") == NULL &&
-		type->tp_setattro != own_setattro
+	if (options.frozen) {
+		if (PyDict_GetItemString(original_namespace, "__setattr__") == NULL) {
+			own_setattro = StructMixin_Type.tp_setattro;
+		}
+	} else if (
+		type->tp_setattro != PyBaseObject_Type.tp_setattro &&
+		type->tp_setattro != StructMixin_Type.tp_setattro
 	) {
+		own_setattro = struct_setattro;
+	}
+
+	if (own_setattro != NULL && type->tp_setattro != own_setattro) {
 		type->tp_setattro = own_setattro;
 	}
 
@@ -1424,15 +1469,15 @@ static PyObject * struct_class_with_field(PyObject * bases, PyObject * keywords)
 static void test_a_raw_tp_setattro_co_base_does_not_divert_the_struct_slot(void) {
 	TEST_ASSERT_EQUAL_INT(0, PyType_Ready(&SwallowingType));
 
-	PyObject * const salix = PyImport_ImportModule("salix");
+	PY_OWNED(salix, PyImport_ImportModule("salix"));
 	TEST_ASSERT_NOT_NULL(salix);
 
-	PyObject * const struct_base = PyObject_GetAttrString(salix, "Struct");
+	PY_OWNED(struct_base, PyObject_GetAttrString(salix, "Struct"));
 	TEST_ASSERT_NOT_NULL(struct_base);
 
 	PY_OWNED(struct_bases, PyTuple_Pack(1, struct_base));
 	PY_OWNED(mutable_keywords, PyDict_New());
-	PyDict_SetItemString(mutable_keywords, "frozen", Py_False);
+	TEST_ASSERT_EQUAL_INT(0, PyDict_SetItemString(mutable_keywords, "frozen", Py_False));
 
 	PY_OWNED(mutable_base, struct_class_with_field(struct_bases, mutable_keywords));
 	TEST_ASSERT_NOT_NULL(mutable_base);
@@ -1440,10 +1485,6 @@ static void test_a_raw_tp_setattro_co_base_does_not_divert_the_struct_slot(void)
 	PY_OWNED(raw_bases, PyTuple_Pack(2, (PyObject *) &SwallowingType, mutable_base));
 	PY_OWNED(mutable_child, struct_class_with_field(raw_bases, NULL));
 	TEST_ASSERT_NOT_NULL(mutable_child);
-	TEST_ASSERT_EQUAL_PTR(
-		PyBaseObject_Type.tp_setattro,
-		((PyTypeObject *) mutable_child)->tp_setattro
-	);
 
 	PY_OWNED(instance, PyObject_CallFunction(mutable_child, "i", 1));
 	TEST_ASSERT_NOT_NULL(instance);
@@ -1453,6 +1494,7 @@ static void test_a_raw_tp_setattro_co_base_does_not_divert_the_struct_slot(void)
 
 	PY_OWNED(read_back, PyObject_GetAttr(instance, field_name));
 	TEST_ASSERT_EQUAL_INT(9, PyLong_AsLong(read_back));
+	TEST_ASSERT_EQUAL_INT(0, PyObject_DelAttr(instance, field_name));
 
 	PY_OWNED(frozen_base, struct_class_with_field(struct_bases, NULL));
 	TEST_ASSERT_NOT_NULL(frozen_base);
@@ -1471,9 +1513,6 @@ static void test_a_raw_tp_setattro_co_base_does_not_divert_the_struct_slot(void)
 	PyErr_Clear();
 	TEST_ASSERT_EQUAL_INT(-1, PyObject_DelAttr(frozen_instance, field_name));
 	PyErr_Clear();
-
-	Py_DECREF(salix);
-	Py_DECREF(struct_base);
 }
 
 void class_tests(void) {

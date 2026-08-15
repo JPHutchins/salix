@@ -17,6 +17,7 @@ static struct equality_source equality_from_the_co_bases(PyObject * bases, Py_ss
 static struct definition base_defines(PyObject * base, PyObject * name);
 static struct definition any_base_defines(PyObject * bases, Py_ssize_t first, PyObject * name);
 static struct options base_options(StructType const * base);
+static bool any_base_satisfies(PyObject * bases, bool (*carries)(PyTypeObject const *));
 
 StructType * find_struct_base(PyObject * const bases) {
 	StructType * widest = NULL;
@@ -194,6 +195,16 @@ bool any_struct_base_is_mutable(PyObject * const bases) {
 	return false;
 }
 
+static bool carries_fielded_frozen(PyTypeObject const * const base) {
+	if (!is_struct_class((PyObject *) base)) {
+		return false;
+	}
+
+	StructType const * const struct_base = (StructType *) base;
+
+	return struct_base->struct_field_count > 0 && struct_base->struct_options.frozen;
+}
+
 struct options inherited_options(
 	PyObject * const bases,
 	StructType const * const behaviour,
@@ -201,18 +212,7 @@ struct options inherited_options(
 ) {
 	struct options const from_behaviour = base_options(behaviour);
 
-	*promised_frozen = false;
-
-	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(bases); ++i) {
-		PyObject * const base = PyTuple_GET_ITEM(bases, i);
-		StructType const * const struct_base = (StructType *) base;
-
-		*promised_frozen |= (
-			is_struct_class(base) &&
-			struct_base->struct_field_count > 0 &&
-			struct_base->struct_options.frozen
-		);
-	}
+	*promised_frozen = any_base_satisfies(bases, carries_fielded_frozen);
 
 	return (struct options){
 		.frozen = from_behaviour.frozen || *promised_frozen,

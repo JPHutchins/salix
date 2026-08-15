@@ -129,8 +129,13 @@ def test_a_frozen_struct_may_strengthen_a_mutable_one():
     class Child(Mutable, frozen=True):
         pass
 
+    instance = Child(1)
+
     with pytest.raises(TypeError, match="does not support attribute assignment"):
-        Child(1).x = 9
+        instance.x = 9
+
+    assert instance == Child(1)
+    assert hash(instance) == hash(Child(1))
 
 
 def test_frozen_true_over_a_mutable_base_holds_beside_a_permissive_co_base():
