@@ -345,10 +345,11 @@ def test_a_class_is_weak_referenceable_only_where_its_bases_make_it_so():
 
     The "no less" half is CPython's and not worth claiming: an inherited
     `__weakref__` cannot be dropped, and a class that tried would be refused at
-    build time and caught by the size pin. What is salix's, and what this
-    catches, is the *other* direction -- a class becoming weak-referenceable
-    when nothing gave it a slot, whether by `build_slots` appending one over a
-    base that already has it or by a struct class growing a `__dict__`.
+    build time -- pinned by the single-base test below. What is salix's, and
+    what this catches, is the *other* direction -- a class becoming
+    weak-referenceable when nothing gave it a slot, whether by `build_slots`
+    appending one over a base that already has it or by a struct class growing
+    a `__dict__`.
     """
 
     def has_slot(cls: type) -> bool:
@@ -647,10 +648,19 @@ def test_the_frozen_pin_does_not_depend_on_the_order_of_the_bases():
     assert frozen_refusals_that_depend_on_order() == []
 
 
+def carries_a_weakref_slot(cls: type) -> bool:
+    try:
+        weakref.ref(instance(cls))
+    except TypeError:
+        return False
+
+    return True
+
+
 WITH_A_SLOT = tuple(
     (bases, cls)
     for bases, cls in (*ALL, *(((shape,), built) for shape, built in ALONE.items()))
-    if any(base.__weakrefoffset__ != 0 for base in bases)
+    if any(carries_a_weakref_slot(base) for base in bases)
 )
 
 
@@ -668,49 +678,26 @@ def weakref_requests_ignored(combinations: tuple[Combination, ...]) -> list[str]
     return ignored
 
 
-@pytest.mark.xfail(strict=True, reason="#78: weakref is recorded from one base and slotted from another")
 def test_the_weakref_option_and_the_slot_agree():
     """CPython cannot take an inherited `__weakref__` away, so `weakref=False`
-    over a base that has one is a request salix cannot honour -- and accepting
-    it silently leaves the class recording one answer and giving another.
+    over a base that has one is a request salix cannot honour: every member of
+    this bucket must refuse rather than accept and drop the request.
 
-    `Weak` alone is in here beside the arrangements because the single base is
-    the smallest form of it: `class C(Weak, weakref=False)` builds today and
-    the reference still works. A fix aimed only at the multi-base reading would
-    turn every other case here red and leave that one passing unexercised.
+    `Weak` alone sits beside the arrangements as the refusal's smallest form,
+    pinned on its own by the test below.
     """
 
     assert weakref_requests_ignored(WITH_A_SLOT) == []
 
 
-def test_every_class_carrying_an_inherited_slot_really_does_ignore_the_request():
-    """The bound that gives the xfail above a size, for the same reason the
-    #76 buckets have one: an aggregate `== []` over a bucket where everything
-    already fails flips only on a *complete* fix.
-
-    Without this, a partial fix for #78 -- one that refuses `weakref=False` for
-    some arrangements and not others -- shrinks the violation list while the
-    xfail stays failed-as-expected, and so stays green. A refusal makes
-    `is_a_class` false and drops the combination silently; here that shows up
-    as the count no longer matching the bucket.
-    """
-
-    assert len(weakref_requests_ignored(WITH_A_SLOT)) == len(WITH_A_SLOT)
-
-
-@pytest.mark.xfail(strict=True, reason="#78: weakref is recorded from one base and slotted from another")
 def test_a_single_base_asking_to_drop_an_inherited_weakref_slot_is_the_same_bug():
     """#78's smallest form, stated on its own so that it is covered whether or
     not the sweep above still reaches it. The slot is inherited and cannot be
     removed, so the request is one salix should refuse rather than accept and
-    drop; today it is accepted and dropped.
+    drop.
     """
 
     without = build((Weak,), field="fresh", weakref=False)
 
-    assert not isinstance(without, Impossible)
-
-    if isinstance(without, Refused):
-        assert "weakref" in without.message
-    else:
-        assert observe(without).weakref is False
+    assert isinstance(without, Refused)
+    assert "weakref" in without.message
