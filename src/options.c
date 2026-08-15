@@ -260,6 +260,7 @@ static void test_a_carried_weakref_slot_refuses_the_explicit_drop(void) {
 	struct options_request const refused = options_read(keywords, options_initial(), false, true);
 
 	TEST_ASSERT_EQUAL_INT(OPTIONS_REJECTED, refused.tag);
+	TEST_ASSERT_TRUE(PyErr_ExceptionMatches(PyExc_TypeError));
 	PyErr_Clear();
 
 	Py_DECREF(keywords);

@@ -679,13 +679,11 @@ def weakref_requests_ignored(combinations: tuple[Combination, ...]) -> list[str]
 
 def test_the_weakref_option_and_the_slot_agree():
     """CPython cannot take an inherited `__weakref__` away, so `weakref=False`
-    over a base that has one is a request salix cannot honour -- and accepting
-    it silently leaves the class recording one answer and giving another.
+    over a base that has one is a request salix cannot honour: every member of
+    this bucket must refuse rather than accept and drop the request.
 
-    `Weak` alone is in here beside the arrangements because the single base is
-    the smallest form of it: `class C(Weak, weakref=False)` builds today and
-    the reference still works. A fix aimed only at the multi-base reading would
-    turn every other case here red and leave that one passing unexercised.
+    `Weak` alone sits beside the arrangements as the refusal's smallest form,
+    pinned on its own by the test below.
     """
 
     assert weakref_requests_ignored(WITH_A_SLOT) == []

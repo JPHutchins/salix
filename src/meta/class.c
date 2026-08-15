@@ -176,6 +176,7 @@ PyObject * build_struct_class(
 		return NULL;
 	}
 
+	bool const weakref_requested = request.options.weakref;
 	request.options.weakref |= weakref_carried;
 
 	PyTypeObject * const handoff = winning_metatype(metatype, bases);
@@ -196,7 +197,7 @@ PyObject * build_struct_class(
 			return NULL;
 		}
 
-		verdict = chain_probe(chain, keywords, request.options.weakref);
+		verdict = chain_probe(chain, keywords, weakref_requested);
 
 		if (verdict.accepts_all < 0) {
 			return NULL;
@@ -204,7 +205,7 @@ PyObject * build_struct_class(
 
 		if (verdict.accepts_all == 1) {
 			forwarded_keywords = keywords;
-		} else if (request.options.weakref && verdict.accepts_weakref == 1) {
+		} else if (weakref_requested && verdict.accepts_weakref == 1) {
 			weakref_only = PyDict_New();
 
 			if (
@@ -1480,7 +1481,16 @@ static void test_a_raw_tp_setattro_co_base_does_not_divert_the_struct_slot(void)
 static PyObject * struct_class_empty(PyObject * bases, PyObject * keywords) {
 	PY_OWNED(name, PyUnicode_FromString("Built"));
 	PY_OWNED(namespace, PyDict_New());
+
+	if (name == NULL || namespace == NULL) {
+		return NULL;
+	}
+
 	PY_OWNED(args, PyTuple_Pack(3, name, bases, namespace));
+
+	if (args == NULL) {
+		return NULL;
+	}
 
 	return PyObject_Call((PyObject *) &StructMeta_Type, args, keywords);
 }
@@ -1493,6 +1503,8 @@ static void test_a_later_bases_slot_forces_the_record(void) {
 	TEST_ASSERT_NOT_NULL(struct_base);
 
 	PY_OWNED(struct_bases, PyTuple_Pack(1, struct_base));
+	TEST_ASSERT_NOT_NULL(struct_bases);
+
 	PY_OWNED(weak_keywords, PyDict_New());
 	TEST_ASSERT_EQUAL_INT(0, PyDict_SetItemString(weak_keywords, "weakref", Py_True));
 
@@ -1503,6 +1515,8 @@ static void test_a_later_bases_slot_forces_the_record(void) {
 	TEST_ASSERT_NOT_NULL(plain_base);
 
 	PY_OWNED(mixed_bases, PyTuple_Pack(2, plain_base, weak_base));
+	TEST_ASSERT_NOT_NULL(mixed_bases);
+
 	PY_OWNED(mixed_child, struct_class_empty(mixed_bases, NULL));
 	TEST_ASSERT_NOT_NULL(mixed_child);
 
