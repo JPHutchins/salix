@@ -116,14 +116,10 @@ def msgspec_names_for_them_may_not_be_assigned_either() -> None:
 
 class AFieldMayNotTakeOneOfTheMetadataNames(Struct):
     """Declaring the four names Final is what makes a checker refuse them as
-    field names, and that refusal is deliberate rather than a side effect.
+    field names, and the runtime refuses them now too: the reservation is
+    real in both, so this class cannot be built either way.
 
-    The runtime still builds this class -- #82 is the decision about whether it
-    should -- and until that is settled the two answers differ: a checker says
-    no and salix says yes. The direction is the safe one, since the class it
-    builds reports the metadata when read from the class and the field when
-    read from an instance, so the refusal here is the reservation being real
-    somewhere. Stated in this file so that it is checked rather than assumed.
+    Stated in this file so that the refusal is checked rather than assumed.
     """
 
     _struct_fields_: int  # type: ignore[assignment,misc]

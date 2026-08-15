@@ -245,6 +245,7 @@ PyObject * build_struct_class(
 	}
 
 	if (
+		refuse_reserved_metadata_names(original_namespace, plan.new_names) != RESULT_OK ||
 		refuse_colliding_methods(original_namespace, plan.all_names, name) != RESULT_OK ||
 		refuse_mixin_method_fields(plan.all_names) != RESULT_OK ||
 		refuse_slot_name_fields(plan.new_names) != RESULT_OK ||
