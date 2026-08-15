@@ -31,13 +31,15 @@ static PyObject * accepted_keywords(void);
 struct options_request options_read(
 	PyObject * const keywords,
 	struct options const inherited,
-	bool const fielded_base_is_frozen
+	bool const fielded_base_is_frozen,
+	bool const weakref_slot_carried
 ) {
 	if (keywords == NULL) {
 		return (struct options_request){.tag = OPTIONS_RESOLVED, .options = inherited};
 	}
 
 	struct options requested = inherited;
+	bool weakref_written = false;
 	PyObject * keyword;
 	PyObject * value;
 	Py_ssize_t position = 0;
@@ -58,7 +60,14 @@ struct options_request options_read(
 			return (struct options_request){.tag = OPTIONS_REJECTED};
 		}
 
+		weakref_written |= found.option == OPTION_WEAKREF;
 		requested = with_option(requested, found.option, truth != 0);
+	}
+
+	if (weakref_written && !requested.weakref && weakref_slot_carried) {
+		PyErr_SetString(PyExc_TypeError, "weakref=False cannot drop a weakref slot a base carries");
+
+		return (struct options_request){.tag = OPTIONS_REJECTED};
 	}
 
 	return checked(requested, fielded_base_is_frozen);
@@ -176,7 +185,7 @@ static void test_no_keywords_inherit_the_base(void) {
 	struct options inherited = options_initial();
 	inherited.eq = false;
 
-	struct options_request const request = options_read(NULL, inherited, false);
+	struct options_request const request = options_read(NULL, inherited, false, false);
 
 	TEST_ASSERT_EQUAL_INT(OPTIONS_RESOLVED, request.tag);
 	TEST_ASSERT_FALSE(request.options.eq);
@@ -185,7 +194,7 @@ static void test_no_keywords_inherit_the_base(void) {
 
 static void test_a_keyword_replaces_only_the_flag_it_names(void) {
 	PyObject * const keywords = keywords_of("order", true);
-	struct options_request const request = options_read(keywords, options_initial(), false);
+	struct options_request const request = options_read(keywords, options_initial(), false, false);
 
 	TEST_ASSERT_EQUAL_INT(OPTIONS_RESOLVED, request.tag);
 	TEST_ASSERT_TRUE(request.options.order);
@@ -197,7 +206,7 @@ static void test_a_keyword_replaces_only_the_flag_it_names(void) {
 
 static void test_an_unknown_keyword_is_rejected(void) {
 	PyObject * const keywords = keywords_of("frozn", true);
-	struct options_request const request = options_read(keywords, options_initial(), false);
+	struct options_request const request = options_read(keywords, options_initial(), false, false);
 
 	TEST_ASSERT_EQUAL_INT(OPTIONS_REJECTED, request.tag);
 	TEST_ASSERT_TRUE(PyErr_ExceptionMatches(PyExc_TypeError));
@@ -211,7 +220,7 @@ static void test_ordering_without_equality_is_rejected(void) {
 	struct options inherited = options_initial();
 	inherited.eq = false;
 
-	struct options_request const request = options_read(keywords, inherited, false);
+	struct options_request const request = options_read(keywords, inherited, false, false);
 
 	TEST_ASSERT_EQUAL_INT(OPTIONS_REJECTED, request.tag);
 	TEST_ASSERT_TRUE(PyErr_ExceptionMatches(PyExc_TypeError));
@@ -222,12 +231,17 @@ static void test_ordering_without_equality_is_rejected(void) {
 
 static void test_a_fielded_frozen_base_pins_frozen(void) {
 	PyObject * const keywords = keywords_of("frozen", false);
-	struct options_request const constrained = options_read(keywords, options_initial(), true);
+	struct options_request const constrained = options_read(
+		keywords,
+		options_initial(),
+		true,
+		false
+	);
 
 	TEST_ASSERT_EQUAL_INT(OPTIONS_REJECTED, constrained.tag);
 	PyErr_Clear();
 
-	struct options_request const free = options_read(keywords, options_initial(), false);
+	struct options_request const free = options_read(keywords, options_initial(), false, false);
 
 	TEST_ASSERT_EQUAL_INT(OPTIONS_RESOLVED, free.tag);
 	TEST_ASSERT_FALSE(free.options.frozen);
@@ -235,9 +249,19 @@ static void test_a_fielded_frozen_base_pins_frozen(void) {
 	Py_DECREF(keywords);
 }
 
+static void test_a_carried_weakref_slot_refuses_the_explicit_drop(void) {
+	PyObject * const keywords = keywords_of("weakref", false);
+	struct options_request const refused = options_read(keywords, options_initial(), false, true);
+
+	TEST_ASSERT_EQUAL_INT(OPTIONS_REJECTED, refused.tag);
+	PyErr_Clear();
+
+	Py_DECREF(keywords);
+}
+
 static void test_frozen_true_resolves_over_the_fielded_promise(void) {
 	PyObject * const keywords = keywords_of("frozen", true);
-	struct options_request const request = options_read(keywords, options_initial(), true);
+	struct options_request const request = options_read(keywords, options_initial(), true, false);
 
 	TEST_ASSERT_EQUAL_INT(OPTIONS_RESOLVED, request.tag);
 	TEST_ASSERT_TRUE(request.options.frozen);
@@ -254,6 +278,7 @@ void options_tests(void) {
 	RUN_TEST(test_an_unknown_keyword_is_rejected);
 	RUN_TEST(test_ordering_without_equality_is_rejected);
 	RUN_TEST(test_a_fielded_frozen_base_pins_frozen);
+	RUN_TEST(test_a_carried_weakref_slot_refuses_the_explicit_drop);
 	RUN_TEST(test_frozen_true_resolves_over_the_fielded_promise);
 }
 

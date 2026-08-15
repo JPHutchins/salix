@@ -637,18 +637,16 @@ class TestAMetaclassSubclass:
 
         assert built.__match_args__ == ("first",)
 
-    def test_a_weakref_base_keeps_its_slot_when_the_delegate_turns_weakref_off(self):
-        """weakref=False is metadata; the fresh path also inherits the base's
-        slot, so the settle accepts the class as-is.
+    def test_a_weakref_base_refuses_the_delegate_that_turns_weakref_off(self):
+        """weakref=False over a base carrying the slot is a drop salix
+        refuses, through the delegate's hand-off too.
         """
 
         class Base(Struct, metaclass=Forwarding, weakref=True):
             x: int
 
-        built = META("Built", (Base,), {"__annotations__": {"y": int}}, weakref=False)
-        instance = built(1, 2)
-
-        assert weakref.ref(instance)() is instance
+        with pytest.raises(TypeError, match="weakref=False cannot drop"):
+            META("Built", (Base,), {"__annotations__": {"y": int}}, weakref=False)
 
     def test_a_delegate_can_add_the_weakref_slot_the_call_planned(self):
         """The keywords ride the hand-off, so the re-entered build plans the

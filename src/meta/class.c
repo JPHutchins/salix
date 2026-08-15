@@ -168,12 +168,14 @@ PyObject * build_struct_class(
 	StructType const * const behaviour = find_behaviour_base(bases);
 	bool promised_frozen = false;
 	struct options const inherited = inherited_options(bases, behaviour, &promised_frozen);
-	struct options_request const request =
-		options_read(keywords, inherited, promised_frozen);
+	struct options_request request =
+		options_read(keywords, inherited, promised_frozen, any_base_has_weakref_slot(bases));
 
 	if (request.tag == OPTIONS_REJECTED) {
 		return NULL;
 	}
+
+	request.options.weakref |= any_base_has_weakref_slot(bases);
 
 	PyTypeObject * const handoff = winning_metatype(metatype, bases);
 	PyObject * forwarded_keywords = NULL;

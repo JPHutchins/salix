@@ -668,7 +668,6 @@ def weakref_requests_ignored(combinations: tuple[Combination, ...]) -> list[str]
     return ignored
 
 
-@pytest.mark.xfail(strict=True, reason="#78: weakref is recorded from one base and slotted from another")
 def test_the_weakref_option_and_the_slot_agree():
     """CPython cannot take an inherited `__weakref__` away, so `weakref=False`
     over a base that has one is a request salix cannot honour -- and accepting
@@ -683,22 +682,6 @@ def test_the_weakref_option_and_the_slot_agree():
     assert weakref_requests_ignored(WITH_A_SLOT) == []
 
 
-def test_every_class_carrying_an_inherited_slot_really_does_ignore_the_request():
-    """The bound that gives the xfail above a size, for the same reason the
-    #76 buckets have one: an aggregate `== []` over a bucket where everything
-    already fails flips only on a *complete* fix.
-
-    Without this, a partial fix for #78 -- one that refuses `weakref=False` for
-    some arrangements and not others -- shrinks the violation list while the
-    xfail stays failed-as-expected, and so stays green. A refusal makes
-    `is_a_class` false and drops the combination silently; here that shows up
-    as the count no longer matching the bucket.
-    """
-
-    assert len(weakref_requests_ignored(WITH_A_SLOT)) == len(WITH_A_SLOT)
-
-
-@pytest.mark.xfail(strict=True, reason="#78: weakref is recorded from one base and slotted from another")
 def test_a_single_base_asking_to_drop_an_inherited_weakref_slot_is_the_same_bug():
     """#78's smallest form, stated on its own so that it is covered whether or
     not the sweep above still reaches it. The slot is inherited and cannot be
@@ -708,9 +691,5 @@ def test_a_single_base_asking_to_drop_an_inherited_weakref_slot_is_the_same_bug(
 
     without = build((Weak,), field="fresh", weakref=False)
 
-    assert not isinstance(without, Impossible)
-
-    if isinstance(without, Refused):
-        assert "weakref" in without.message
-    else:
-        assert observe(without).weakref is False
+    assert isinstance(without, Refused)
+    assert "weakref" in without.message
