@@ -345,10 +345,11 @@ def test_a_class_is_weak_referenceable_only_where_its_bases_make_it_so():
 
     The "no less" half is CPython's and not worth claiming: an inherited
     `__weakref__` cannot be dropped, and a class that tried would be refused at
-    build time and caught by the size pin. What is salix's, and what this
-    catches, is the *other* direction -- a class becoming weak-referenceable
-    when nothing gave it a slot, whether by `build_slots` appending one over a
-    base that already has it or by a struct class growing a `__dict__`.
+    build time -- pinned by the single-base test below. What is salix's, and
+    what this catches, is the *other* direction -- a class becoming
+    weak-referenceable when nothing gave it a slot, whether by `build_slots`
+    appending one over a base that already has it or by a struct class growing
+    a `__dict__`.
     """
 
     def has_slot(cls: type) -> bool:

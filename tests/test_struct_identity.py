@@ -19,6 +19,15 @@ class Plain(META):
     def __new__(metacls, name, bases, namespace):
         return super().__new__(metacls, name, bases, namespace)
 
+
+def WeakrefDefaulting(metatype: type) -> type:
+    class Defaulting(metatype):
+        def __new__(metacls, name, bases, namespace, *, weakref=False):
+            return super().__new__(metacls, name, bases, namespace, weakref=weakref)
+
+    return Defaulting
+
+
 # Both spellings of both, in one place: two literals drifted apart is a test
 # that silently stops covering a name.
 METADATA_NAMES = (
@@ -315,11 +324,7 @@ class TestAMetaclassSubclass:
         assert weakref.ref(held)() is held
 
     def test_a_keyword_only_delegate_that_names_weakref_can_add_the_slot(self):
-        class KwOnly(META):
-            def __new__(metacls, name, bases, namespace, *, weakref=False):
-                return super().__new__(metacls, name, bases, namespace, weakref=weakref)
-
-        class Base(Struct, metaclass=KwOnly):
+        class Base(Struct, metaclass=WeakrefDefaulting(META)):
             x: int
 
         built = META("Built", (Base,), {"__annotations__": {"y": int}}, weakref=True)
@@ -332,11 +337,7 @@ class TestAMetaclassSubclass:
         takes the keyword-less path and the settle restores it.
         """
 
-        class KwOnly(META):
-            def __new__(metacls, name, bases, namespace, *, weakref=False):
-                return super().__new__(metacls, name, bases, namespace, weakref=weakref)
-
-        class Base(Struct, metaclass=KwOnly):
+        class Base(Struct, metaclass=WeakrefDefaulting(META)):
             x: int
 
         built = META("Built", (Base,), {"__annotations__": {"y": int}}, weakref=True, eq=False)
@@ -417,11 +418,7 @@ class TestAMetaclassSubclass:
         builds without any hand-off from salix.
         """
 
-        class KwOnly(META):
-            def __new__(metacls, name, bases, namespace, *, weakref=False):
-                return super().__new__(metacls, name, bases, namespace, weakref=weakref)
-
-        class Base(Struct, metaclass=KwOnly):
+        class Base(Struct, metaclass=WeakrefDefaulting(META)):
             x: int
 
         class Built(Base, weakref=True):
@@ -641,15 +638,26 @@ class TestAMetaclassSubclass:
         """The delegate fills its own weakref=False default and forwards it,
         and the build honours the request it received: the drop refuses."""
 
-        class Defaulting(META):
-            def __new__(metacls, name, bases, namespace, *, weakref=False):
-                return super().__new__(metacls, name, bases, namespace, weakref=weakref)
-
         class Base(Struct, metaclass=Forwarding, weakref=True):
             x: int
 
         with pytest.raises(TypeError, match="weakref=False cannot drop"):
-            Defaulting("Built", (Base,), {"__annotations__": {}})
+            WeakrefDefaulting(META)("Built", (Base,), {"__annotations__": {}})
+
+    def test_the_defaulting_delegate_refuses_over_a_later_base_carrying_the_slot(self):
+        """The refusal keys on the keywords the build receives, not on which
+        base carries the slot: the delegate's own default over a record-false
+        first base and a carrying later base is the same refusal.
+        """
+
+        class Fielded(Struct, metaclass=Forwarding):
+            x: int
+
+        class Weak(Struct, metaclass=Forwarding, weakref=True):
+            y: int
+
+        with pytest.raises(TypeError, match="weakref=False cannot drop"):
+            WeakrefDefaulting(META)("Built", (Fielded, Weak), {"__annotations__": {}})
 
     def test_a_weakref_base_refuses_the_delegate_that_turns_weakref_off(self):
         """weakref=False over a base carrying the slot is a drop salix
@@ -661,6 +669,17 @@ class TestAMetaclassSubclass:
 
         with pytest.raises(TypeError, match="weakref=False cannot drop"):
             META("Built", (Base,), {"__annotations__": {"y": int}}, weakref=False)
+
+    def test_weakref_false_without_a_carrying_base_still_builds(self):
+        """Without a carrying base the same request is not a drop: the class
+        builds and its instances reject weak references.
+        """
+
+        class Slotless(Struct, weakref=False):
+            x: int
+
+        with pytest.raises(TypeError):
+            weakref.ref(Slotless(1))
 
     def test_a_delegate_can_add_the_weakref_slot_the_call_planned(self):
         """The keywords ride the hand-off, so the re-entered build plans the

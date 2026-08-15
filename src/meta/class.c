@@ -1521,6 +1521,7 @@ static void test_a_later_bases_slot_forces_the_record(void) {
 	TEST_ASSERT_NOT_NULL(mixed_child);
 
 	TEST_ASSERT_TRUE(((StructType *) mixed_child)->struct_options.weakref);
+	TEST_ASSERT_TRUE(carries_weakref_slot((PyTypeObject *) mixed_child));
 }
 
 void class_tests(void) {

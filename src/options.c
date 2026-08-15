@@ -266,6 +266,16 @@ static void test_a_carried_weakref_slot_refuses_the_explicit_drop(void) {
 	Py_DECREF(keywords);
 }
 
+static void test_weakref_false_without_a_carried_slot_still_resolves(void) {
+	PyObject * const keywords = keywords_of("weakref", false);
+	struct options_request const request = options_read(keywords, options_initial(), false, false);
+
+	TEST_ASSERT_EQUAL_INT(OPTIONS_RESOLVED, request.tag);
+	TEST_ASSERT_FALSE(request.options.weakref);
+
+	Py_DECREF(keywords);
+}
+
 static void test_frozen_true_resolves_over_the_fielded_promise(void) {
 	PyObject * const keywords = keywords_of("frozen", true);
 	struct options_request const request = options_read(keywords, options_initial(), true, false);
@@ -286,6 +296,7 @@ void options_tests(void) {
 	RUN_TEST(test_ordering_without_equality_is_rejected);
 	RUN_TEST(test_a_fielded_frozen_base_pins_frozen);
 	RUN_TEST(test_a_carried_weakref_slot_refuses_the_explicit_drop);
+	RUN_TEST(test_weakref_false_without_a_carried_slot_still_resolves);
 	RUN_TEST(test_frozen_true_resolves_over_the_fielded_promise);
 }
 
