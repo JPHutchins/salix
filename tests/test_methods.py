@@ -943,6 +943,45 @@ class TestDefaultsThatAreCallable:
 
         assert WithBound().handler is bound
 
+    def test_a_bound_method_of_a_same_named_foreign_class_still_defaults_a_field(self):
+        class Colliding:
+            def handler(self):
+                return 1
+
+        bound = Colliding().handler
+
+        built = type(Struct)(
+            "Colliding", (Struct,), {"__annotations__": {"handler": object}, "handler": bound}
+        )
+
+        assert built().handler() == 1
+
+    def test_a_partial_of_a_same_named_foreign_function_still_defaults_a_field(self):
+        class Colliding:
+            def handler(self, first):
+                return first
+
+        partialled = functools.partial(Colliding().handler, 1)
+
+        built = type(Struct)(
+            "Colliding", (Struct,), {"__annotations__": {"handler": object}, "handler": partialled}
+        )
+
+        assert built().handler() == 1
+
+    def test_a_nested_class_of_a_same_named_foreign_class_still_defaults_a_field(self):
+        class Colliding:
+            class x:
+                pass
+
+        foreign = Colliding
+
+        built = type(Struct)(
+            "Colliding", (Struct,), {"__annotations__": {"x": object}, "x": foreign.x}
+        )
+
+        assert built().x is foreign.x
+
     def test_a_type_defaults_a_field(self):
         class WithType(Struct):
             kind: object = int
@@ -998,42 +1037,99 @@ class TestRefusalsWiderThanTheDefect:
             class Colliding(Struct):
                 handler: object = Colliding.handler
 
+    def test_a_cache_wrapped_method_of_a_same_named_foreign_class_is_refused(self):
+        """The wrapper carries the wrapped function's qualname, so the known
+        same-name limitation reaches the wrapped spelling too.
+        """
 
-class TestCollisionsStillNotRefused:
-    """The wrapped spellings the four-spelling rule does not reach, pinned so
-    the silent defaulting cannot regress unnoticed. #54's refusal covers a
-    `def` and the three decorators; a `functools` wrapper is neither a
-    `property` subclass nor a function, so it is dropped and becomes the
-    field's default exactly as before -- a required field silently turning
-    optional, which is the corruption #54 describes.
+        class Colliding:
+            def handler(self) -> int:
+                return 1
 
-    Not widened here because no version-stable test separates these from a
-    default someone means: `functools.partial` is a descriptor from 3.13 and
-    not before, and a bound method is one on every version. Tracked as its
-    own issue.
+        with pytest.raises(TypeError, match=r"'handler' is a field"):
+
+            class Colliding(Struct):
+                handler: object = functools.cache(Colliding.handler)
+
+
+class TestTheFunctoolsSpellingsAreRefused:
+    """A functools wrapper under a field's name is neither a `property`
+    subclass nor a function, so the four-spelling rule misses it and the
+    wrapper becomes the field's default. The body-binding carve-out fetches
+    the wrapped function's `__qualname__` -- `functools.wraps` copies it, and
+    `cached_property` carries it on `func` -- so the same tail-match rule
+    refuses these spellings too. Bound methods, types, and callables escape
+    the fetch; the same-named controls live in
+    `TestDefaultsThatAreCallable`.
     """
 
-    def test_a_cached_property_named_after_a_field_still_becomes_its_default(self):
-        class Cached(Struct):
+    def test_a_cached_property_named_after_a_field_is_refused(self):
+        with pytest.raises(TypeError, match="is a field, and the class body binds"):
+            class Cached(Struct):
+                x: int
+
+                @functools.cached_property
+                def x(self) -> int:
+                    return 99
+
+    def test_a_cache_wrapped_method_named_after_a_field_is_refused(self):
+        with pytest.raises(TypeError, match="is a field, and the class body binds"):
+            class Wrapped(Struct):
+                y: int
+
+                @functools.cache  # noqa: B019 -- the wrapper is the subject, not the caching
+                def y(self) -> int:
+                    return 99
+
+    def test_a_cache_wrapped_foreign_function_still_defaults_a_field(self):
+        class WithForeign(Struct):
+            handler: object = functools.cache(module_level_handler)
+
+        assert WithForeign().handler(1) == 1
+
+    def test_a_partial_over_a_body_method_still_defaults_the_field(self):
+        """The ruling's escape: a partial is callable and carries no qualname,
+        so it stays a default even when it wraps this body's own method.
+        """
+
+        class Partialled(Struct):
             x: int
 
-            @functools.cached_property
-            def x(self) -> int:
+            def x(self):
                 return 99
 
-        (default,) = Cached._struct_defaults_
+            x = functools.partial(x)
 
-        assert isinstance(default, functools.cached_property)
-        assert Cached().x is default
+        assert isinstance(Partialled().x, functools.partial)
 
-    def test_a_cache_wrapped_method_named_after_a_field_does_the_same(self):
-        class Wrapped(Struct):
-            y: int
+    def test_a_wrapper_of_a_callable_wrapper_still_defaults_the_field(self):
+        """The hop resolves one wrapper level, so a composition whose inner
+        wrapper is callable (a partial) stays the ruling's escape.
+        """
 
-            @functools.cache  # noqa: B019 -- the wrapper is the subject, not the caching
-            def y(self) -> int:
+        class Composed(Struct):
+            x: int
+
+            def x(self):
                 return 99
 
-        (default,) = Wrapped._struct_defaults_
+            x = functools.cached_property(functools.partial(x))
 
-        assert Wrapped().y is default
+        assert isinstance(Composed().x, functools.cached_property)
+
+    def test_a_raising_qualname_propagates(self):
+        """The fetch runs the author's own attribute code; a raising one is
+        their error and propagates.
+        """
+
+        class Hostile:
+            def __getattr__(self, name):
+                if name == "__qualname__":
+                    raise ValueError("nope")
+
+                raise AttributeError(name)
+
+        with pytest.raises(ValueError, match="nope"):
+            type(Struct)(
+                "H", (Struct,), {"__annotations__": {"handler": object}, "handler": Hostile()}
+            )
