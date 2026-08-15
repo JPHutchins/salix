@@ -106,7 +106,9 @@ static inline PyObject * dict_value_ref(PyObject * const mapping, PyObject * con
 
 	return PyDict_GetItemRef(mapping, key, &value) < 0 ? NULL : value;
 #else
-	return Py_XNewRef(PyDict_GetItem(mapping, key));
+	PyObject * const value = PyDict_GetItemWithError(mapping, key);
+
+	return value != NULL ? Py_XNewRef(value) : NULL;
 #endif
 }
 

@@ -260,6 +260,8 @@ PyObject * build_struct_class(
 	int const defines_eq = dict_has_string(original_namespace, "__eq__");
 
 	if (defines_eq < 0) {
+		field_plan_clear(&plan);
+
 		return NULL;
 	}
 
@@ -681,6 +683,29 @@ static int settle_candidates(
 /* What the class's MRO hands out below the class's own dict for the three
  * names, asked after the class exists so the answer is the real resolution,
  * in one walk, with the defining entry tracked for each. */
+static enum result resolve_dunder(
+	PyObject * const dict,
+	PyObject * const name,
+	PyObject * * const resolved,
+	PyTypeObject * const entry,
+	PyTypeObject * * const owner
+) {
+	if (*resolved != NULL) {
+		return RESULT_OK;
+	}
+
+	PY_MOVABLE(found, dict_value_ref(dict, name));
+
+	if (found == NULL) {
+		return PyErr_Occurred() ? RESULT_ERROR : RESULT_OK;
+	}
+
+	*resolved = py_move(&found);
+	*owner = entry;
+
+	return RESULT_OK;
+}
+
 static enum result mro_dunders_of(
 	PyTypeObject * const type,
 	PyObject * * const resolved_eq,
@@ -715,31 +740,12 @@ static enum result mro_dunders_of(
 			return RESULT_ERROR;
 		}
 
-		if (*resolved_eq == NULL) {
-			PyObject * const found = PyDict_GetItem(dict, eq_name);
-
-			if (found != NULL) {
-				*resolved_eq = Py_NewRef(found);
-				*eq_owner = entry;
-			}
-		}
-
-		if (*resolved_ne == NULL) {
-			PyObject * const found = PyDict_GetItem(dict, ne_name);
-
-			if (found != NULL) {
-				*resolved_ne = Py_NewRef(found);
-				*ne_owner = entry;
-			}
-		}
-
-		if (*resolved_repr == NULL) {
-			PyObject * const found = PyDict_GetItem(dict, repr_name);
-
-			if (found != NULL) {
-				*resolved_repr = Py_NewRef(found);
-				*repr_owner = entry;
-			}
+		if (
+			resolve_dunder(dict, eq_name, resolved_eq, entry, eq_owner) != RESULT_OK ||
+			resolve_dunder(dict, ne_name, resolved_ne, entry, ne_owner) != RESULT_OK ||
+			resolve_dunder(dict, repr_name, resolved_repr, entry, repr_owner) != RESULT_OK
+		) {
+			return RESULT_ERROR;
 		}
 
 		if (*resolved_eq != NULL && *resolved_ne != NULL && *resolved_repr != NULL) {
@@ -1061,13 +1067,22 @@ static enum result settle_planned(
 	for (char const * const * const * tables = settle_tables; *tables != NULL; tables += 1) {
 		for (char const * const * name = *tables; *name != NULL; name += 1) {
 			int const in_class = dict_has_string(class_dict, *name);
-			int const in_body = dict_has_string(original_namespace, *name);
 
-			if (in_class < 0 || in_body < 0) {
+			if (in_class < 0) {
 				return RESULT_ERROR;
 			}
 
-			if (in_class == 1 && in_body == 0 && !settled_by_the_plan(*name, bindings)) {
+			if (in_class == 0) {
+				continue;
+			}
+
+			int const in_body = dict_has_string(original_namespace, *name);
+
+			if (in_body < 0) {
+				return RESULT_ERROR;
+			}
+
+			if (in_body == 0 && !settled_by_the_plan(*name, bindings)) {
 				return refuse_unplanned(struct_class);
 			}
 		}
