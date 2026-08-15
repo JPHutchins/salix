@@ -253,6 +253,7 @@ static enum result append_declared(
 		if (
 			declared_default != NULL &&
 			(
+				refuse_reserved_name(field_name) != RESULT_OK ||
 				PyDict_SetItem(default_by_name, field_name, declared_default) < 0 ||
 				refuse_shared_mutable_contents(field_name, declared_default) != RESULT_OK
 			)
@@ -604,10 +605,6 @@ static PyObject * build_defaults(PyObject * const all_names, PyObject * const de
 		}
 
 		if (has_default) {
-			if (refuse_reserved_name(field_name) != RESULT_OK) {
-				return NULL;
-			}
-
 			first_default = first_default == field_count ? i : first_default;
 		} else if (first_default != field_count) {
 			if (refuse_reserved_name(field_name) != RESULT_OK) {

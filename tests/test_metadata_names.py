@@ -205,6 +205,21 @@ def test_a_reserved_name_with_a_default_gets_the_reserved_refusal(name):
 
 
 @pytest.mark.parametrize("name", SALIX + MSGSPEC)
+def test_a_reserved_name_with_a_shared_mutable_default_gets_the_reserved_refusal(name):
+    """A shared-mutable default would otherwise surface its own refusal
+    first, and its advice cannot help a name that cannot be a field at all;
+    the reserved message fires instead.
+    """
+
+    with pytest.raises(TypeError, match="is reserved for salix's metadata"):
+        type(Struct)(
+            "Shadowed",
+            (Struct,),
+            {"__annotations__": {name: tuple, "x": int}, name: ([1],)},
+        )
+
+
+@pytest.mark.parametrize("name", SALIX + MSGSPEC)
 def test_a_reserved_name_in_slots_gets_the_reserved_refusal(name):
     """The __slots__ advice ("declare it as a field") leads straight into
     the reservation, so the reserved message fires instead.

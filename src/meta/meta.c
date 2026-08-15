@@ -187,6 +187,8 @@ static int StructMeta_clear(PyObject * const self) {
 #ifdef TESTING
 
 #	include "../testing.h"
+#	include "../fields.h"
+#	include "../mixin.h"
 
 /* find_member reads a PyMemberDef array, which is trivially fabricated -- and
  * the miss is the branch that turns into a RuntimeError nothing else exercises. */
@@ -235,6 +237,44 @@ static void test_the_search_respects_the_declared_count(void) {
 	Py_DECREF(name);
 }
 
+static PyGetSetDef const * getset_named(
+	PyGetSetDef const * const getsets,
+	char const * const name
+) {
+	for (PyGetSetDef const * entry = getsets; entry->name != NULL; ++entry) {
+		if (strcmp(entry->name, name) == 0) {
+			return entry;
+		}
+	}
+
+	return NULL;
+}
+
+static bool reserved_set_contains(char const * const name) {
+	for (char const * const * reserved = reserved_metadata_names; *reserved != NULL; ++reserved) {
+		if (strcmp(*reserved, name) == 0) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+static void test_the_reservation_and_the_getset_tables_agree(void) {
+	for (PyGetSetDef const * entry = StructMeta_Type.tp_getset; entry->name != NULL; ++entry) {
+		TEST_ASSERT_TRUE(reserved_set_contains(entry->name));
+	}
+
+	for (PyGetSetDef const * entry = StructMixin_Type.tp_getset; entry->name != NULL; ++entry) {
+		TEST_ASSERT_TRUE(reserved_set_contains(entry->name));
+	}
+
+	for (char const * const * reserved = reserved_metadata_names; *reserved != NULL; ++reserved) {
+		TEST_ASSERT_NOT_NULL(getset_named(StructMeta_Type.tp_getset, *reserved));
+		TEST_ASSERT_NOT_NULL(getset_named(StructMixin_Type.tp_getset, *reserved));
+	}
+}
+
 void meta_tests(void) {
 	/* Unity takes its file from UNITY_BEGIN, which is the runner's. */
 	Unity.TestFile = __FILE__;
@@ -243,6 +283,7 @@ void meta_tests(void) {
 	RUN_TEST(test_a_non_ascii_member_yields_its_offset);
 	RUN_TEST(test_an_undeclared_member_is_missing);
 	RUN_TEST(test_the_search_respects_the_declared_count);
+	RUN_TEST(test_the_reservation_and_the_getset_tables_agree);
 }
 
 #endif
