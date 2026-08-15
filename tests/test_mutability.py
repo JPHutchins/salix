@@ -180,6 +180,55 @@ def test_a_fieldless_frozen_base_promises_nothing_to_a_mutable_class():
         assert instance.x == 9
 
 
+def test_a_mutable_struct_lets_a_co_base_hook_observe_writes():
+    observed = []
+
+    class Observing:
+        def __setattr__(self, name: str, value: object) -> None:
+            observed.append((name, value))
+            object.__setattr__(self, name, value)
+
+    class Child(Observing, Mutable):
+        pass
+
+    child = Child(1)
+    child.x = 9
+
+    assert ("x", 9) in observed
+    assert child.x == 9
+
+
+def test_a_mutable_struct_lets_its_own_body_delattr_observe_deletion():
+    deleted = []
+
+    class Child(Mutable):
+        def __delattr__(self, name: str) -> None:
+            deleted.append(name)
+            object.__delattr__(self, name)
+
+    child = Child(1)
+    del child.x
+
+    assert "x" in deleted
+
+
+def test_a_frozen_class_with_an_escape_hatch_is_unhashable():
+    """The body __setattr__ hatch admits writes, so the hash pairs with the
+    mutability it admits rather than the frozen record."""
+
+    class Child(Mutable, frozen=True):
+        def __setattr__(self, name: str, value: object) -> None:
+            object.__setattr__(self, name, value)
+
+    child = Child(1)
+    child.x = 9
+
+    assert child.x == 9
+
+    with pytest.raises(TypeError, match="unhashable"):
+        hash(child)
+
+
 def test_a_fielded_frozen_base_refuses_a_mutable_child_in_either_order():
     class FrozenOther(Struct):
         other: object

@@ -73,7 +73,8 @@ struct binding_plan binding_plan(
 	bool body_defines_eq,
 	bool inherits_body_eq,
 	bool derive_not_equal,
-	bool body_defines_hash
+	bool body_defines_hash,
+	bool body_defines_setattr
 );
 
 extern char const * const rebind_comparison[];
