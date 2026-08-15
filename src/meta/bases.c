@@ -270,10 +270,6 @@ bool weakref_expected(struct options const options, PyObject * const bases) {
 	return options.weakref || any_base_satisfies(bases, carries_weakref_slot);
 }
 
-bool weakref_slot_is_new(struct options const options, PyObject * const bases) {
-	return options.weakref && !any_base_satisfies(bases, carries_weakref_slot);
-}
-
 bool any_base_has_instance_dict(PyObject * const bases) {
 	return any_base_satisfies(bases, carries_instance_dict);
 }

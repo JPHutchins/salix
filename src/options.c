@@ -64,13 +64,19 @@ struct options_request options_read(
 		requested = with_option(requested, found.option, truth != 0);
 	}
 
+	struct options_request const checked_request = checked(requested, fielded_base_is_frozen);
+
+	if (checked_request.tag == OPTIONS_REJECTED) {
+		return checked_request;
+	}
+
 	if (weakref_written && !requested.weakref && weakref_slot_carried) {
 		PyErr_SetString(PyExc_TypeError, "weakref=False cannot drop a weakref slot a base carries");
 
 		return (struct options_request){.tag = OPTIONS_REJECTED};
 	}
 
-	return checked(requested, fielded_base_is_frozen);
+	return checked_request;
 }
 
 static struct option_lookup find_option(PyObject * const keyword) {

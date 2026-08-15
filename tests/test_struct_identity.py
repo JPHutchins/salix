@@ -637,6 +637,20 @@ class TestAMetaclassSubclass:
 
         assert built.__match_args__ == ("first",)
 
+    def test_a_delegate_that_defaults_weakref_off_refuses_a_slot_carrying_base(self):
+        """The delegate fills its own weakref=False default and forwards it,
+        and the build honours the request it received: the drop refuses."""
+
+        class Defaulting(META):
+            def __new__(metacls, name, bases, namespace, *, weakref=False):
+                return super().__new__(metacls, name, bases, namespace, weakref=weakref)
+
+        class Base(Struct, metaclass=Forwarding, weakref=True):
+            x: int
+
+        with pytest.raises(TypeError, match="weakref=False cannot drop"):
+            Defaulting("Built", (Base,), {"__annotations__": {}})
+
     def test_a_weakref_base_refuses_the_delegate_that_turns_weakref_off(self):
         """weakref=False over a base carrying the slot is a drop salix
         refuses, through the delegate's hand-off too.

@@ -647,10 +647,19 @@ def test_the_frozen_pin_does_not_depend_on_the_order_of_the_bases():
     assert frozen_refusals_that_depend_on_order() == []
 
 
+def carries_a_weakref_slot(cls: type) -> bool:
+    try:
+        weakref.ref(instance(cls))
+    except TypeError:
+        return False
+
+    return True
+
+
 WITH_A_SLOT = tuple(
     (bases, cls)
     for bases, cls in (*ALL, *(((shape,), built) for shape, built in ALONE.items()))
-    if any(base.__weakrefoffset__ != 0 for base in bases)
+    if any(carries_a_weakref_slot(base) for base in bases)
 )
 
 
@@ -686,7 +695,7 @@ def test_a_single_base_asking_to_drop_an_inherited_weakref_slot_is_the_same_bug(
     """#78's smallest form, stated on its own so that it is covered whether or
     not the sweep above still reaches it. The slot is inherited and cannot be
     removed, so the request is one salix should refuse rather than accept and
-    drop; today it is accepted and dropped.
+    drop.
     """
 
     without = build((Weak,), field="fresh", weakref=False)

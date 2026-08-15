@@ -167,15 +167,16 @@ PyObject * build_struct_class(
 ) {
 	StructType const * const behaviour = find_behaviour_base(bases);
 	bool promised_frozen = false;
+	bool const weakref_carried = any_base_has_weakref_slot(bases);
 	struct options const inherited = inherited_options(bases, behaviour, &promised_frozen);
 	struct options_request request =
-		options_read(keywords, inherited, promised_frozen, any_base_has_weakref_slot(bases));
+		options_read(keywords, inherited, promised_frozen, weakref_carried);
 
 	if (request.tag == OPTIONS_REJECTED) {
 		return NULL;
 	}
 
-	request.options.weakref |= any_base_has_weakref_slot(bases);
+	request.options.weakref |= weakref_carried;
 
 	PyTypeObject * const handoff = winning_metatype(metatype, bases);
 	PyObject * forwarded_keywords = NULL;
@@ -218,7 +219,8 @@ PyObject * build_struct_class(
 	}
 
 	if (
-		weakref_slot_is_new(request.options, bases) &&
+		request.options.weakref &&
+		!weakref_carried &&
 		handoff->tp_new != StructMeta_new &&
 		verdict.accepts_weakref == 0
 	) {
@@ -1475,11 +1477,44 @@ static void test_a_raw_tp_setattro_co_base_does_not_divert_the_struct_slot(void)
 	TEST_ASSERT_EQUAL_INT(2, swallow_calls);
 }
 
+static PyObject * struct_class_empty(PyObject * bases, PyObject * keywords) {
+	PY_OWNED(name, PyUnicode_FromString("Built"));
+	PY_OWNED(namespace, PyDict_New());
+	PY_OWNED(args, PyTuple_Pack(3, name, bases, namespace));
+
+	return PyObject_Call((PyObject *) &StructMeta_Type, args, keywords);
+}
+
+static void test_a_later_bases_slot_forces_the_record(void) {
+	PY_OWNED(salix, PyImport_ImportModule("salix"));
+	TEST_ASSERT_NOT_NULL(salix);
+
+	PY_OWNED(struct_base, PyObject_GetAttrString(salix, "Struct"));
+	TEST_ASSERT_NOT_NULL(struct_base);
+
+	PY_OWNED(struct_bases, PyTuple_Pack(1, struct_base));
+	PY_OWNED(weak_keywords, PyDict_New());
+	TEST_ASSERT_EQUAL_INT(0, PyDict_SetItemString(weak_keywords, "weakref", Py_True));
+
+	PY_OWNED(weak_base, struct_class_empty(struct_bases, weak_keywords));
+	TEST_ASSERT_NOT_NULL(weak_base);
+
+	PY_OWNED(plain_base, struct_class_with_field(struct_bases, NULL));
+	TEST_ASSERT_NOT_NULL(plain_base);
+
+	PY_OWNED(mixed_bases, PyTuple_Pack(2, plain_base, weak_base));
+	PY_OWNED(mixed_child, struct_class_empty(mixed_bases, NULL));
+	TEST_ASSERT_NOT_NULL(mixed_child);
+
+	TEST_ASSERT_TRUE(((StructType *) mixed_child)->struct_options.weakref);
+}
+
 void class_tests(void) {
 	/* Unity takes its file from UNITY_BEGIN, which is the runner's. */
 	Unity.TestFile = __FILE__;
 
 	RUN_TEST(test_a_raw_tp_setattro_co_base_does_not_divert_the_struct_slot);
+	RUN_TEST(test_a_later_bases_slot_forces_the_record);
 }
 
 #endif
