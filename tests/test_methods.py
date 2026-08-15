@@ -1037,6 +1037,20 @@ class TestRefusalsWiderThanTheDefect:
             class Colliding(Struct):
                 handler: object = Colliding.handler
 
+    def test_a_cache_wrapped_method_of_a_same_named_foreign_class_is_refused(self):
+        """The wrapper carries the wrapped function's qualname, so the known
+        same-name limitation reaches the wrapped spelling too.
+        """
+
+        class Colliding:
+            def handler(self) -> int:
+                return 1
+
+        with pytest.raises(TypeError, match=r"'handler' is a field"):
+
+            class Colliding(Struct):
+                handler: object = functools.cache(Colliding.handler)
+
 
 class TestTheFunctoolsSpellingsAreRefused:
     """A functools wrapper under a field's name is neither a `property`
@@ -1072,3 +1086,50 @@ class TestTheFunctoolsSpellingsAreRefused:
             handler: object = functools.cache(module_level_handler)
 
         assert WithForeign().handler(1) == 1
+
+    def test_a_partial_over_a_body_method_still_defaults_the_field(self):
+        """The ruling's escape: a partial is callable and carries no qualname,
+        so it stays a default even when it wraps this body's own method.
+        """
+
+        class Partialled(Struct):
+            x: int
+
+            def x(self):
+                return 99
+
+            x = functools.partial(x)
+
+        assert isinstance(Partialled().x, functools.partial)
+
+    def test_a_wrapper_of_a_callable_wrapper_still_defaults_the_field(self):
+        """The hop resolves one wrapper level, so a composition whose inner
+        wrapper is callable (a partial) stays the ruling's escape.
+        """
+
+        class Composed(Struct):
+            x: int
+
+            def x(self):
+                return 99
+
+            x = functools.cached_property(functools.partial(x))
+
+        assert isinstance(Composed().x, functools.cached_property)
+
+    def test_a_raising_qualname_propagates(self):
+        """The fetch runs the author's own attribute code; a raising one is
+        their error and propagates.
+        """
+
+        class Hostile:
+            def __getattr__(self, name):
+                if name == "__qualname__":
+                    raise ValueError("nope")
+
+                raise AttributeError(name)
+
+        with pytest.raises(ValueError, match="nope"):
+            type(Struct)(
+                "H", (Struct,), {"__annotations__": {"handler": object}, "handler": Hostile()}
+            )
