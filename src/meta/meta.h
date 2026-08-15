@@ -108,6 +108,7 @@ enum result refuse_colliding_methods(
 );
 enum result refuse_mixin_method_fields(PyObject * all_names);
 enum result refuse_slot_name_fields(PyObject * all_names);
+enum result refuse_reserved_metadata_names(PyObject * original_namespace, PyObject * all_names);
 
 PyObject * build_struct_class(
 	PyTypeObject * metatype,

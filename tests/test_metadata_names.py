@@ -4,7 +4,6 @@ from salix import Struct
 
 SALIX = ("_struct_fields_", "_struct_defaults_")
 MSGSPEC = ("__struct_fields__", "__struct_defaults__")
-FIELD_NAMES = (SALIX[0], MSGSPEC[0])
 EXPECTED = (
     ("_struct_fields_", ("x", "y")),
     ("__struct_fields__", ("x", "y")),
@@ -67,46 +66,76 @@ def test_salix_writes_no_spelling_into_the_classes_it_builds(name):
 
 
 @pytest.mark.parametrize("name", SALIX + MSGSPEC)
-def test_a_body_that_takes_one_of_these_names_is_read_two_ways(name):
-    """Reserving the names did not make them unusable, and a class that uses
-    one anyway answers differently depending on where it is read.
-
-    The metaclass getset is a data descriptor, so it wins on the class. On an
-    instance the class's own binding is what the lookup reaches first -- the
-    slot descriptor for a field, or the value for a plain assignment -- so the
-    metadata is what the class says and the body is what the instance says.
-
-    This is not new with the sunder: `__struct_fields__` as a field name has
-    always done it. What is new is that two more names now behave this way,
-    which is the cost of reserving them. Filed as #82; pinned here so that a
-    decision about it is a decision rather than a discovery.
+def test_a_field_named_any_of_them_is_refused(name):
+    """The reservation is real: a field that takes one of the four names is
+    refused, because the class would answer with the metadata while the
+    instance answered with the field. What #82 settled rather than left as a
+    discovery.
     """
 
-    shadowed = type(Struct)(
-        "Shadowed", (Struct,), {"__annotations__": {name: int, "x": int}}
-    )
-    metadata = (name, "x") if name in FIELD_NAMES else ()
-
-    assert getattr(shadowed, name) == metadata
-    assert getattr(shadowed(5, 6), name) == 5
+    with pytest.raises(TypeError, match="is reserved for salix's metadata"):
+        type(Struct)("Shadowed", (Struct,), {"__annotations__": {name: int, "x": int}})
 
 
 @pytest.mark.parametrize("name", SALIX + MSGSPEC)
-def test_a_plain_class_variable_of_that_name_is_read_two_ways_too(name):
+def test_a_plain_class_variable_of_that_name_is_refused_too(name):
     """The other half of the same shape, and it arrives by a different route:
     `drop_class_variables` strips only names the body annotated, so an
-    unannotated assignment stays in the class dict and the instance finds it
-    there.
+    unannotated assignment would have stayed in the class dict and the
+    instance would have found it there.
     """
 
-    shadowed = type(Struct)(
-        "Shadowed", (Struct,), {"__annotations__": {"x": int}, name: 999}
-    )
-    metadata = ("x",) if name in FIELD_NAMES else ()
+    with pytest.raises(TypeError, match="is reserved for salix's metadata"):
+        type(Struct)("Shadowed", (Struct,), {"__annotations__": {"x": int}, name: 999})
 
-    assert vars(shadowed)[name] == 999
-    assert getattr(shadowed, name) == metadata
-    assert getattr(shadowed(1), name) == 999
+
+@pytest.mark.parametrize("name", SALIX + MSGSPEC)
+def test_a_method_named_any_of_them_is_refused_too(name):
+    """A body binding need not be a field: a method that takes one of the
+    names reads two ways the same, so it is refused the same.
+    """
+
+    def method(self):
+        return 1
+
+    with pytest.raises(TypeError, match="is reserved for salix's metadata"):
+        type(Struct)(
+            "Shadowed", (Struct,), {"__annotations__": {"x": int}, name: method}
+        )
+
+
+@pytest.mark.parametrize("name", SALIX + MSGSPEC)
+def test_a_subclass_binding_one_is_refused(name):
+    """The refusal keys on the class that writes the binding, so a subclass
+    cannot shadow the metadata its base reports.
+    """
+
+    class Base(Struct):
+        x: int
+
+    with pytest.raises(TypeError, match="is reserved for salix's metadata"):
+        type(Struct)("Shadowed", (Base,), {name: 999})
+
+
+@pytest.mark.parametrize(
+    "name",
+    (
+        "_struct_fields",
+        "_struct_fields__",
+        "struct_fields_",
+        "_struct_defaults",
+        "_struct_defaults__",
+    ),
+)
+def test_neighbouring_names_are_ordinary(name):
+    """The check is exact: neighbours of the four reserved names build and
+    read back as fields, and the metadata still answers.
+    """
+
+    built = type(Struct)("Built", (Struct,), {"__annotations__": {name: int, "x": int}})
+
+    assert built._struct_fields_ == (name, "x")
+    assert getattr(built(5, 6), name) == 5
 
 
 def test_a_subclass_reports_its_own_fields_under_both_names():

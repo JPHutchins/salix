@@ -215,6 +215,46 @@ enum result refuse_slot_name_fields(PyObject * const all_names) {
 	return RESULT_OK;
 }
 
+static char const * const reserved_metadata_names[] = {
+	"_struct_fields_",
+	"_struct_defaults_",
+	"__struct_fields__",
+	"__struct_defaults__",
+	NULL,
+};
+
+enum result refuse_reserved_metadata_names(
+	PyObject * const original_namespace,
+	PyObject * const all_names
+) {
+	for (char const * const * reserved = reserved_metadata_names; *reserved != NULL; ++reserved) {
+		PY_OWNED(name, PyUnicode_InternFromString(*reserved));
+
+		if (name == NULL) {
+			return RESULT_ERROR;
+		}
+
+		int const taken_as_a_field = PySequence_Contains(all_names, name);
+
+		if (taken_as_a_field < 0) {
+			return RESULT_ERROR;
+		}
+
+		if (taken_as_a_field == 1 || PyDict_GetItemString(original_namespace, *reserved) != NULL) {
+			PyErr_Format(
+				PyExc_TypeError,
+				"'%U' is reserved for salix's metadata and cannot be a field "
+				"or a class-body binding",
+				name
+			);
+
+			return RESULT_ERROR;
+		}
+	}
+
+	return RESULT_OK;
+}
+
 static PyObject * build_slots(
 	PyObject * const new_names,
 	bool const weakref,
