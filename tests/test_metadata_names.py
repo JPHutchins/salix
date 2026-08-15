@@ -1,3 +1,5 @@
+from typing import ClassVar
+
 import pytest
 
 from salix import Struct
@@ -78,29 +80,18 @@ def test_a_field_named_any_of_them_is_refused(name):
 
 
 @pytest.mark.parametrize("name", SALIX + MSGSPEC)
-def test_a_plain_class_variable_of_that_name_is_refused_too(name):
+@pytest.mark.parametrize("binding", (999, lambda self: 1))
+def test_a_body_binding_of_any_of_them_is_refused(name, binding):
     """The other half of the same shape, and it arrives by a different route:
     `drop_class_variables` strips only names the body annotated, so an
     unannotated assignment would have stayed in the class dict and the
-    instance would have found it there.
+    instance would have found it there. Any value is refused the same -- the
+    probe checks the name, not what is bound to it.
     """
-
-    with pytest.raises(TypeError, match="is reserved for salix's metadata"):
-        type(Struct)("Shadowed", (Struct,), {"__annotations__": {"x": int}, name: 999})
-
-
-@pytest.mark.parametrize("name", SALIX + MSGSPEC)
-def test_a_method_named_any_of_them_is_refused_too(name):
-    """A body binding need not be a field: a method that takes one of the
-    names reads two ways the same, so it is refused the same.
-    """
-
-    def method(self):
-        return 1
 
     with pytest.raises(TypeError, match="is reserved for salix's metadata"):
         type(Struct)(
-            "Shadowed", (Struct,), {"__annotations__": {"x": int}, name: method}
+            "Shadowed", (Struct,), {"__annotations__": {"x": int}, name: binding}
         )
 
 
@@ -156,22 +147,27 @@ def test_an_unannotated_binding_of_an_ordinary_name_stays_in_the_class_dict():
     assert Shadowed(1).stray == 999
 
 
-def test_a_class_statement_taking_a_reserved_name_is_refused():
+@pytest.mark.parametrize("name", SALIX + MSGSPEC)
+def test_a_class_statement_taking_a_reserved_name_is_refused(name):
     """The refusal holds on the syntax users write, not only the metaclass
-    call: a plain body binding of the dunder spelling is refused.
+    call: a plain body binding of any of the four spellings is refused.
     """
 
     with pytest.raises(TypeError, match="is reserved for salix's metadata"):
-        class Shadowed(Struct):
-            x: int
-            __struct_fields__ = 999
+        exec(
+            f"class Shadowed(Struct):\n"
+            f"    x: int\n"
+            f"    {name} = 999",
+            {"Struct": Struct},
+        )
 
 
 def test_a_class_statement_mangles_the_closest_dunder_neighbour_into_a_field():
     """The closest neighbour of a reserved dunder takes CPython's mangling in
     a real class body: `__struct_fields` becomes `_Shadowed__struct_fields`
-    and builds as an ordinary field, which is why the type()-path near-miss
-    list stops short of it.
+    and builds as an ordinary field there. The type() path mangles the slot
+    set the same way and the build dies with a slot-offset RuntimeError,
+    which is why the near-miss list stops short of it.
     """
 
     class Shadowed(Struct):
@@ -180,6 +176,52 @@ def test_a_class_statement_mangles_the_closest_dunder_neighbour_into_a_field():
 
     assert Shadowed._struct_fields_ == ("x", "_Shadowed__struct_fields")
     assert Shadowed(5, 6)._Shadowed__struct_fields == 6
+
+
+@pytest.mark.parametrize("name", SALIX + MSGSPEC)
+def test_a_reserved_name_annotated_classvar_gets_the_reserved_refusal(name):
+    """The ClassVar advice ("write it below the fields, without an
+    annotation") leads straight into the reservation's binding refusal, so
+    the reserved message fires instead.
+    """
+
+    with pytest.raises(TypeError, match="is reserved for salix's metadata"):
+        type(Struct)(
+            "Shadowed", (Struct,), {"__annotations__": {name: ClassVar[int], "x": int}}
+        )
+
+
+@pytest.mark.parametrize("name", SALIX + MSGSPEC)
+def test_a_reserved_name_with_a_default_gets_the_reserved_refusal(name):
+    """A defaulted reserved field followed by a non-default one would
+    otherwise surface a reorder error first, and reordering only surfaces
+    the reservation; the reserved message fires instead.
+    """
+
+    with pytest.raises(TypeError, match="is reserved for salix's metadata"):
+        type(Struct)(
+            "Shadowed", (Struct,), {"__annotations__": {name: int, "x": int}, name: 7}
+        )
+
+
+@pytest.mark.parametrize("name", SALIX + MSGSPEC)
+def test_a_reserved_name_in_slots_gets_the_reserved_refusal(name):
+    """The __slots__ advice ("declare it as a field") leads straight into
+    the reservation, so the reserved message fires instead.
+    """
+
+    with pytest.raises(TypeError, match="is reserved for salix's metadata"):
+        type(Struct)("Shadowed", (Struct,), {"__slots__": (name,), "x": int})
+
+
+def test_the_name_quartet_agrees_with_the_other_file_that_owns_it():
+    """test_struct_identity.py owns the quartet for its msgspec-alias pins;
+    the two copies must agree or one side silently stops covering names.
+    """
+
+    import test_struct_identity
+
+    assert SALIX + MSGSPEC == test_struct_identity.METADATA_NAMES
 
 
 def test_a_subclass_reports_its_own_fields_under_both_names():

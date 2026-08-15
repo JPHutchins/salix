@@ -55,6 +55,41 @@ static struct special_form const INIT_VAR_FORM = {
 	.name = "InitVar",
 	.instead = "take the value in a custom __init__ and write the fields with set_field",
 };
+
+char const * const reserved_metadata_names[] = {
+	"_struct_fields_",
+	"_struct_defaults_",
+	"__struct_fields__",
+	"__struct_defaults__",
+	NULL,
+};
+
+char const * reserved_metadata_name_of(PyObject * const name) {
+	for (char const * const * reserved = reserved_metadata_names; *reserved != NULL; ++reserved) {
+		if (PyUnicode_CompareWithASCIIString(name, *reserved) == 0) {
+			return *reserved;
+		}
+	}
+
+	return NULL;
+}
+
+static enum result refuse_reserved_name(PyObject * const field_name) {
+	char const * const reserved = reserved_metadata_name_of(field_name);
+
+	if (reserved == NULL) {
+		return RESULT_OK;
+	}
+
+	PyErr_Format(
+		PyExc_TypeError,
+		"'%s' is reserved for salix's metadata and cannot be a field "
+		"or a class-body binding",
+		reserved
+	);
+
+	return RESULT_ERROR;
+}
 static PyObject * build_defaults(PyObject * all_names, PyObject * default_by_name);
 static enum result reject_unsafe_default(PyObject * field_name, PyObject * value);
 static PyObject * checked_annotations(PyObject * namespace);
@@ -244,6 +279,10 @@ static enum result append_declared(
 		}
 
 		if (special.name != NULL) {
+			if (refuse_reserved_name(field_name) != RESULT_OK) {
+				return RESULT_ERROR;
+			}
+
 			PyErr_Format(
 				PyExc_TypeError,
 				"'%U' is annotated %s, which salix does not support; %s",
@@ -565,8 +604,16 @@ static PyObject * build_defaults(PyObject * const all_names, PyObject * const de
 		}
 
 		if (has_default) {
+			if (refuse_reserved_name(field_name) != RESULT_OK) {
+				return NULL;
+			}
+
 			first_default = first_default == field_count ? i : first_default;
 		} else if (first_default != field_count) {
+			if (refuse_reserved_name(field_name) != RESULT_OK) {
+				return NULL;
+			}
+
 			PyErr_Format(
 				PyExc_TypeError,
 				"non-default field '%U' follows a field with a default",

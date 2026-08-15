@@ -3,6 +3,7 @@
 #include <stddef.h>
 
 #include "meta.h"
+#include "../fields.h"
 #include "../mixin.h"
 #include "../options.h"
 #include "../owned.h"
@@ -176,6 +177,17 @@ enum result refuse_displaced_slots(
 			continue;
 		}
 
+		if (reserved_metadata_name_of(entry) != NULL) {
+			PyErr_Format(
+				PyExc_TypeError,
+				"'%U' is reserved for salix's metadata and cannot be named "
+				"in __slots__",
+				entry
+			);
+
+			return RESULT_ERROR;
+		}
+
 		PyErr_Format(
 			PyExc_TypeError,
 			"__slots__ names %R, which is not a field of this class; a struct's "
@@ -215,43 +227,41 @@ enum result refuse_slot_name_fields(PyObject * const all_names) {
 	return RESULT_OK;
 }
 
-static char const * const reserved_metadata_names[] = {
-	"_struct_fields_",
-	"_struct_defaults_",
-	"__struct_fields__",
-	"__struct_defaults__",
-	NULL,
-};
-
 enum result refuse_reserved_metadata_names(
 	PyObject * const original_namespace,
-	PyObject * const all_names
+	PyObject * const new_names
 ) {
+	for (Py_ssize_t i = 0; i < PyList_GET_SIZE(new_names); ++i) {
+		PyObject * const field_name = PyList_GET_ITEM(new_names, i);
+		char const * const reserved = reserved_metadata_name_of(field_name);
+
+		if (reserved == NULL) {
+			continue;
+		}
+
+		PyErr_Format(
+			PyExc_TypeError,
+			"'%s' is reserved for salix's metadata and cannot be a field "
+			"or a class-body binding",
+			reserved
+		);
+
+		return RESULT_ERROR;
+	}
+
 	for (char const * const * reserved = reserved_metadata_names; *reserved != NULL; ++reserved) {
-		PY_OWNED(name, PyUnicode_InternFromString(*reserved));
+		PyObject * const bound = PyDict_GetItemString(original_namespace, *reserved);
 
-		if (name == NULL) {
+		if (PyErr_Occurred()) {
 			return RESULT_ERROR;
 		}
 
-		int const taken_as_a_field = PySequence_Contains(all_names, name);
-
-		if (taken_as_a_field < 0) {
-			return RESULT_ERROR;
-		}
-
-		int const bound = PyDict_Contains(original_namespace, name);
-
-		if (bound < 0) {
-			return RESULT_ERROR;
-		}
-
-		if (taken_as_a_field == 1 || bound == 1) {
+		if (bound != NULL) {
 			PyErr_Format(
 				PyExc_TypeError,
-				"'%U' is reserved for salix's metadata and cannot be a field "
+				"'%s' is reserved for salix's metadata and cannot be a field "
 				"or a class-body binding",
-				name
+				*reserved
 			);
 
 			return RESULT_ERROR;
