@@ -166,9 +166,10 @@ PyObject * build_struct_class(
 	PyObject * const keywords
 ) {
 	StructType const * const behaviour = find_behaviour_base(bases);
-	struct options const inherited = inherited_options(bases, behaviour);
+	bool promised_frozen = false;
+	struct options const inherited = inherited_options(bases, behaviour, &promised_frozen);
 	struct options_request const request =
-		options_read(keywords, inherited, base != NULL && base->struct_field_count > 0);
+		options_read(keywords, inherited, promised_frozen);
 
 	if (request.tag == OPTIONS_REJECTED) {
 		return NULL;
@@ -329,7 +330,8 @@ PyObject * build_struct_class(
 				body_defines_eq,
 				inherits_body_eq,
 				inherited_equality.needs_derived_not_equal,
-				PyDict_GetItemString(original_namespace, rebind_hash[0]) != NULL
+				PyDict_GetItemString(original_namespace, rebind_hash[0]) != NULL,
+				PyDict_GetItemString(original_namespace, "__setattr__") != NULL
 			);
 
 			if (
@@ -607,7 +609,6 @@ static int struct_base_count(PyObject * const bases) {
 
 static PyObject * mixin_bindings[7];
 static PyObject * object_bindings[7];
-
 static int settle_candidates(
 	PyObject * * const mixin_eq,
 	PyObject * * const object_eq,
@@ -793,11 +794,28 @@ static enum result settle_mro_bindings(
 	struct binding_plan const bindings,
 	struct options const options
 ) {
+	PyTypeObject * const type = (PyTypeObject *) struct_class;
+
+	/* A co-base carrying its own C-level tp_setattro can divert the child's
+	 * slot away from the frozen block, so the block's wrappers are rebound
+	 * into the class dict — the same rebind machinery every other dunder
+	 * repair uses — and the MRO-dispatching slot honours them. A body
+	 * __setattr__ or __delattr__ is skipped per name, so the escape hatch
+	 * works for either half. In a re-entered build the namespace carries the
+	 * outer build's rebind injections rather than the true body, and the
+	 * outer settle is the source of truth. The mutable column needs no
+	 * repair: CPython's own dispatch honours hooks and foreign C-level slots
+	 * exactly as it does for plain classes. */
+	if (options.frozen && type->tp_setattro != StructMixin_Type.tp_setattro) {
+		if (settle_rebind(struct_class, original_namespace, rebind_mutability, true) != RESULT_OK) {
+			return RESULT_ERROR;
+		}
+	}
+
 	if (struct_base_count(bases) <= 1) {
 		return RESULT_OK;
 	}
 
-	PyTypeObject * const type = (PyTypeObject *) struct_class;
 	PyTypeObject * const first_struct = (PyTypeObject *) find_behaviour_base(bases);
 
 	PY_MOVABLE(mixin_eq, NULL);
@@ -996,7 +1014,8 @@ static enum result settle_planned(
 		body_defines_eq,
 		inherits_body_eq,
 		derive_not_equal,
-		PyDict_GetItemString(original_namespace, rebind_hash[0]) != NULL
+		PyDict_GetItemString(original_namespace, rebind_hash[0]) != NULL,
+		PyDict_GetItemString(original_namespace, "__setattr__") != NULL
 	);
 
 	for (char const * const * const * tables = settle_tables; *tables != NULL; tables += 1) {
@@ -1367,3 +1386,98 @@ static Py_ssize_t * resolve_member_offsets(
 
 	return offsets;
 }
+
+#ifdef TESTING
+
+#	include "../testing.h"
+
+static Py_ssize_t swallow_calls = 0;
+
+static int swallowing_setattro(PyObject * self, PyObject * name, PyObject * value) {
+	swallow_calls += 1;
+
+	return 0;
+}
+
+static PyTypeObject SwallowingType = {
+	PyVarObject_HEAD_INIT(NULL, 0)
+	.tp_name = "tests.Swallowing",
+	.tp_basicsize = sizeof(PyObject),
+	.tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
+	.tp_setattro = swallowing_setattro,
+};
+
+static PyObject * struct_class_with_field(PyObject * bases, PyObject * keywords) {
+	PY_OWNED(name, PyUnicode_FromString("Built"));
+	PY_OWNED(namespace, PyDict_New());
+	PY_OWNED(annotations, PyDict_New());
+
+	if (
+		PyDict_SetItemString(annotations, "x", (PyObject *) &PyLong_Type) < 0 ||
+		PyDict_SetItemString(namespace, "__annotations__", annotations) < 0
+	) {
+		return NULL;
+	}
+
+	PY_OWNED(args, PyTuple_Pack(3, name, bases, namespace));
+
+	return PyObject_Call((PyObject *) &StructMeta_Type, args, keywords);
+}
+
+static void test_a_raw_tp_setattro_co_base_does_not_divert_the_struct_slot(void) {
+	TEST_ASSERT_EQUAL_INT(0, PyType_Ready(&SwallowingType));
+
+	PY_OWNED(salix, PyImport_ImportModule("salix"));
+	TEST_ASSERT_NOT_NULL(salix);
+
+	PY_OWNED(struct_base, PyObject_GetAttrString(salix, "Struct"));
+	TEST_ASSERT_NOT_NULL(struct_base);
+
+	PY_OWNED(struct_bases, PyTuple_Pack(1, struct_base));
+	PY_OWNED(mutable_keywords, PyDict_New());
+	TEST_ASSERT_EQUAL_INT(0, PyDict_SetItemString(mutable_keywords, "frozen", Py_False));
+
+	PY_OWNED(mutable_base, struct_class_with_field(struct_bases, mutable_keywords));
+	TEST_ASSERT_NOT_NULL(mutable_base);
+
+	PY_OWNED(raw_bases, PyTuple_Pack(2, (PyObject *) &SwallowingType, mutable_base));
+	PY_OWNED(mutable_child, struct_class_with_field(raw_bases, NULL));
+	TEST_ASSERT_NOT_NULL(mutable_child);
+
+	PY_OWNED(instance, PyObject_CallFunction(mutable_child, "i", 1));
+	TEST_ASSERT_NOT_NULL(instance);
+	PY_OWNED(nine, PyLong_FromLong(9));
+	PY_OWNED(field_name, PyUnicode_FromString("x"));
+	TEST_ASSERT_EQUAL_INT(0, PyObject_SetAttr(instance, field_name, nine));
+	TEST_ASSERT_EQUAL_INT(1, swallow_calls);
+	TEST_ASSERT_EQUAL_INT(0, PyObject_DelAttr(instance, field_name));
+	TEST_ASSERT_EQUAL_INT(2, swallow_calls);
+
+	PY_OWNED(frozen_base, struct_class_with_field(struct_bases, NULL));
+	TEST_ASSERT_NOT_NULL(frozen_base);
+
+	PY_OWNED(frozen_bases, PyTuple_Pack(2, (PyObject *) &SwallowingType, frozen_base));
+	PY_OWNED(frozen_child, struct_class_with_field(frozen_bases, NULL));
+	TEST_ASSERT_NOT_NULL(frozen_child);
+	TEST_ASSERT_EQUAL_PTR(
+		StructMixin_Type.tp_setattro,
+		((PyTypeObject *) frozen_child)->tp_setattro
+	);
+
+	PY_OWNED(frozen_instance, PyObject_CallFunction(frozen_child, "i", 1));
+	TEST_ASSERT_NOT_NULL(frozen_instance);
+	TEST_ASSERT_EQUAL_INT(-1, PyObject_SetAttr(frozen_instance, field_name, nine));
+	PyErr_Clear();
+	TEST_ASSERT_EQUAL_INT(-1, PyObject_DelAttr(frozen_instance, field_name));
+	PyErr_Clear();
+	TEST_ASSERT_EQUAL_INT(2, swallow_calls);
+}
+
+void class_tests(void) {
+	/* Unity takes its file from UNITY_BEGIN, which is the runner's. */
+	Unity.TestFile = __FILE__;
+
+	RUN_TEST(test_a_raw_tp_setattro_co_base_does_not_divert_the_struct_slot);
+}
+
+#endif

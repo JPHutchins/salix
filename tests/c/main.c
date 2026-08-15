@@ -29,6 +29,7 @@ int main(void) {
 
 	UNITY_BEGIN();
 
+	class_tests();
 	construct_tests();
 	fields_tests();
 	meta_tests();

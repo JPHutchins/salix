@@ -42,5 +42,5 @@ static inline struct options options_initial(void) {
 struct options_request options_read(
 	PyObject * keywords,
 	struct options inherited,
-	bool base_is_constraining
+	bool fielded_base_is_frozen
 );

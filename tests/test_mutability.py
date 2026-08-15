@@ -121,11 +121,147 @@ def test_a_mutable_struct_may_not_inherit_from_a_frozen_one():
             pass
 
 
-def test_a_frozen_struct_may_not_inherit_from_a_mutable_one():
-    with pytest.raises(TypeError, match="frozen struct cannot inherit from a mutable one"):
+def test_a_frozen_struct_may_strengthen_a_mutable_one():
+    """A fieldless frozen base imposes nothing, and frozen=True is a
+    strengthening the caller asks for — the promise flows in from the caller
+    rather than the widest base."""
 
-        class Child(Mutable, frozen=True):
-            pass
+    class Child(Mutable, frozen=True):
+        pass
+
+    instance = Child(1)
+
+    with pytest.raises(TypeError, match="does not support attribute assignment"):
+        instance.x = 9
+
+    assert instance == Child(1)
+    assert hash(instance) == hash(Child(1))
+
+
+def test_frozen_true_over_a_mutable_base_holds_beside_a_permissive_co_base():
+    """The block is enforced by the mixin's tp_setattro, which the MRO reaches
+    before any co-base, in either order, for writes and deletes."""
+
+    class Permissive:
+        def __setattr__(self, name: str, value: object) -> None:
+            object.__setattr__(self, name, value)
+
+    class Ahead(Mutable, Permissive, frozen=True):
+        pass
+
+    class Behind(Permissive, Mutable, frozen=True):
+        pass
+
+    for Child in (Ahead, Behind):
+        with pytest.raises(TypeError, match="does not support attribute"):
+            Child(1).x = 9
+
+        with pytest.raises(TypeError, match="does not support attribute"):
+            del Child(1).x
+
+
+def test_a_fieldless_frozen_base_promises_nothing_to_a_mutable_class():
+    """A fieldless frozen base made no promise, so frozen=False over one is
+    free, in either order."""
+
+    class FrozenFieldless(Struct):
+        pass
+
+    class Ahead(FrozenFieldless, Mutable, frozen=False):
+        pass
+
+    class Behind(Mutable, FrozenFieldless, frozen=False):
+        pass
+
+    for Child in (Ahead, Behind):
+        instance = Child(1)
+        instance.x = 9
+
+        assert instance.x == 9
+
+
+def test_a_mutable_struct_lets_a_co_base_hook_observe_writes():
+    observed = []
+
+    class Observing:
+        def __setattr__(self, name: str, value: object) -> None:
+            observed.append((name, value))
+            object.__setattr__(self, name, value)
+
+    class Child(Observing, Mutable):
+        pass
+
+    child = Child(1)
+    child.x = 9
+
+    assert ("x", 9) in observed
+    assert child.x == 9
+
+
+def test_a_mutable_struct_lets_its_own_body_delattr_observe_deletion():
+    deleted = []
+
+    class Child(Mutable):
+        def __delattr__(self, name: str) -> None:
+            deleted.append(name)
+            object.__delattr__(self, name)
+
+    child = Child(1)
+    del child.x
+
+    assert "x" in deleted
+
+
+def test_a_frozen_structs_body_delattr_keeps_answering():
+    """The escape hatch works for either half: a body __delattr__ is skipped
+    by the rebind per name, so deletes reach the hook while writes stay
+    refused. What the hook does with the deletion is its own business."""
+
+    deleted = []
+
+    class Single(Struct):
+        x: int
+
+        def __delattr__(self, name: str) -> None:
+            deleted.append(name)
+
+    class Strengthened(Mutable, frozen=True):
+        def __delattr__(self, name: str) -> None:
+            deleted.append(name)
+
+    for Child in (Single, Strengthened):
+        with pytest.raises(TypeError):
+            Child(1).x = 9
+
+        del Child(1).x
+
+    assert deleted == ["x", "x"]
+
+
+def test_a_frozen_class_with_an_escape_hatch_is_unhashable():
+    """The body __setattr__ hatch admits writes, so the hash pairs with the
+    mutability it admits rather than the frozen record."""
+
+    class Child(Mutable, frozen=True):
+        def __setattr__(self, name: str, value: object) -> None:
+            object.__setattr__(self, name, value)
+
+    child = Child(1)
+    child.x = 9
+
+    assert child.x == 9
+
+    with pytest.raises(TypeError, match="unhashable"):
+        hash(child)
+
+
+def test_a_fielded_frozen_base_refuses_a_mutable_child_in_either_order():
+    class FrozenOther(Struct):
+        other: object
+
+    for order in ((Frozen, FrozenOther), (FrozenOther, Frozen)):
+        with pytest.raises(TypeError, match="mutable struct cannot inherit from a frozen one"):
+            type(Struct)("Child", order, {}, frozen=False)
 
 
 def test_a_base_with_no_fields_imposes_nothing():

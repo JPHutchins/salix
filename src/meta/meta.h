@@ -54,7 +54,11 @@ struct equality_source {
 StructType * find_struct_base(PyObject * bases);
 StructType * find_behaviour_base(PyObject * bases);
 struct equality_source resolves_body_equality(PyObject * bases);
-struct options inherited_options(PyObject * bases, StructType const * behaviour);
+struct options inherited_options(
+	PyObject * bases,
+	StructType const * behaviour,
+	bool * promised_frozen
+);
 bool any_struct_base_is_mutable(PyObject * bases);
 bool any_base_has_weakref_slot(PyObject * bases);
 bool carries_weakref_slot(PyTypeObject const * type);
@@ -69,7 +73,8 @@ struct binding_plan binding_plan(
 	bool body_defines_eq,
 	bool inherits_body_eq,
 	bool derive_not_equal,
-	bool body_defines_hash
+	bool body_defines_hash,
+	bool body_defines_setattr
 );
 
 extern char const * const rebind_comparison[];

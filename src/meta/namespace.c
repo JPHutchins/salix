@@ -265,7 +265,8 @@ struct binding_plan binding_plan(
 	bool const body_defines_eq,
 	bool const inherits_body_eq,
 	bool const derive_not_equal,
-	bool const body_defines_hash
+	bool const body_defines_hash,
+	bool const body_defines_setattr
 ) {
 	struct binding_plan plan = {
 		.answered_by_body = body_defines_eq || derive_not_equal,
@@ -280,7 +281,7 @@ struct binding_plan binding_plan(
 		plan.hash = HASH_BODY_DEFINED;
 	} else if (inherits_body_eq) {
 		plan.hash = HASH_INHERITED_EQ;
-	} else if (body_defines_eq || (options.eq && !options.frozen)) {
+	} else if (body_defines_eq || (options.eq && (!options.frozen || body_defines_setattr))) {
 		plan.hash = HASH_NONE;
 	} else {
 		plan.hash = HASH_BIND;
@@ -305,7 +306,8 @@ static enum result apply_options(
 		body_defines_eq,
 		inherits_body_eq,
 		derive_not_equal,
-		PyDict_GetItemString(namespace, "__hash__") != NULL
+		PyDict_GetItemString(namespace, "__hash__") != NULL,
+		PyDict_GetItemString(namespace, "__setattr__") != NULL
 	);
 
 	if (
