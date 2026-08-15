@@ -125,17 +125,45 @@ def test_a_subclass_binding_one_is_refused(name):
         "struct_fields_",
         "_struct_defaults",
         "_struct_defaults__",
+        "struct_defaults_",
     ),
 )
 def test_neighbouring_names_are_ordinary(name):
-    """The check is exact: neighbours of the four reserved names build and
-    read back as fields, and the metadata still answers.
+    """The check is exact: a neighbour that differs in its underscores and
+    does not trip CPython's slot-name mangling builds and reads back as a
+    field, and the metadata still answers.
     """
 
     built = type(Struct)("Built", (Struct,), {"__annotations__": {name: int, "x": int}})
 
     assert built._struct_fields_ == (name, "x")
     assert getattr(built(5, 6), name) == 5
+
+
+def test_a_class_statement_taking_a_reserved_name_is_refused():
+    """The refusal holds on the syntax users write, not only the metaclass
+    call: a plain body binding of the dunder spelling is refused.
+    """
+
+    with pytest.raises(TypeError, match="is reserved for salix's metadata"):
+        class Shadowed(Struct):
+            x: int
+            __struct_fields__ = 999
+
+
+def test_a_class_statement_mangles_the_closest_dunder_neighbour_into_a_field():
+    """The closest neighbour of a reserved dunder takes CPython's mangling in
+    a real class body: `__struct_fields` becomes `_Shadowed__struct_fields`
+    and builds as an ordinary field, which is why the type()-path near-miss
+    list stops short of it.
+    """
+
+    class Shadowed(Struct):
+        x: int
+        __struct_fields: int
+
+    assert Shadowed._struct_fields_ == ("x", "_Shadowed__struct_fields")
+    assert Shadowed(5, 6)._Shadowed__struct_fields == 6
 
 
 def test_a_subclass_reports_its_own_fields_under_both_names():

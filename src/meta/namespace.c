@@ -240,16 +240,26 @@ enum result refuse_reserved_metadata_names(
 			return RESULT_ERROR;
 		}
 
-		if (taken_as_a_field == 1 || PyDict_GetItemString(original_namespace, *reserved) != NULL) {
-			PyErr_Format(
-				PyExc_TypeError,
-				"'%U' is reserved for salix's metadata and cannot be a field "
-				"or a class-body binding",
-				name
-			);
+		PY_OWNED(bound, dict_value_ref(original_namespace, name));
 
-			return RESULT_ERROR;
+		if (bound == NULL) {
+			if (PyErr_Occurred()) {
+				return RESULT_ERROR;
+			}
+
+			if (taken_as_a_field == 0) {
+				continue;
+			}
 		}
+
+		PyErr_Format(
+			PyExc_TypeError,
+			"'%U' is reserved for salix's metadata and cannot be a field "
+			"or a class-body binding",
+			name
+		);
+
+		return RESULT_ERROR;
 	}
 
 	return RESULT_OK;
