@@ -999,41 +999,44 @@ class TestRefusalsWiderThanTheDefect:
                 handler: object = Colliding.handler
 
 
-class TestCollisionsStillNotRefused:
-    """The wrapped spellings the four-spelling rule does not reach, pinned so
-    the silent defaulting cannot regress unnoticed. #54's refusal covers a
-    `def` and the three decorators; a `functools` wrapper is neither a
-    `property` subclass nor a function, so it is dropped and becomes the
-    field's default exactly as before -- a required field silently turning
-    optional, which is the corruption #54 describes.
-
-    Not widened here because no version-stable test separates these from a
-    default someone means: `functools.partial` is a descriptor from 3.13 and
-    not before, and a bound method is one on every version. Tracked as its
-    own issue.
+class TestTheFunctoolsSpellingsAreRefused:
+    """A functools wrapper under a field's name is neither a `property`
+    subclass nor a function, so the four-spelling rule misses it and the
+    wrapper becomes the field's default. The body-binding carve-out fetches
+    the wrapped function's `__qualname__` -- `functools.wraps` copies it, and
+    `cached_property` carries it on `func` -- so the same tail-match rule
+    refuses these spellings too, along with a nested class, whose qualname is
+    the same shape.
     """
 
-    def test_a_cached_property_named_after_a_field_still_becomes_its_default(self):
-        class Cached(Struct):
-            x: int
+    def test_a_cached_property_named_after_a_field_is_refused(self):
+        with pytest.raises(TypeError, match="is a field, and the class body binds"):
+            class Cached(Struct):
+                x: int
 
-            @functools.cached_property
-            def x(self) -> int:
-                return 99
+                @functools.cached_property
+                def x(self) -> int:
+                    return 99
 
-        (default,) = Cached._struct_defaults_
+    def test_a_cache_wrapped_method_named_after_a_field_is_refused(self):
+        with pytest.raises(TypeError, match="is a field, and the class body binds"):
+            class Wrapped(Struct):
+                y: int
 
-        assert isinstance(default, functools.cached_property)
-        assert Cached().x is default
+                @functools.cache  # noqa: B019 -- the wrapper is the subject, not the caching
+                def y(self) -> int:
+                    return 99
 
-    def test_a_cache_wrapped_method_named_after_a_field_does_the_same(self):
-        class Wrapped(Struct):
-            y: int
+    def test_a_nested_class_named_after_a_field_is_refused(self):
+        with pytest.raises(TypeError, match="is a field, and the class body binds"):
+            class Nested(Struct):
+                x: int
 
-            @functools.cache  # noqa: B019 -- the wrapper is the subject, not the caching
-            def y(self) -> int:
-                return 99
+                class x:
+                    pass
 
-        (default,) = Wrapped._struct_defaults_
+    def test_a_cache_wrapped_foreign_function_still_defaults_a_field(self):
+        class WithForeign(Struct):
+            handler: object = functools.cache(module_level_handler)
 
-        assert Wrapped().y is default
+        assert WithForeign().handler(1) == 1

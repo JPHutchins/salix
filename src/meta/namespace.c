@@ -533,6 +533,38 @@ enum result refuse_colliding_methods(
 	return RESULT_OK;
 }
 
+static PyObject * qualname_of(PyObject * const value) {
+	if (PyFunction_Check(value)) {
+		return Py_XNewRef(((PyFunctionObject *) value)->func_qualname);
+	}
+
+	PY_MOVABLE(qualname, PyObject_GetAttrString(value, "__qualname__"));
+
+	if (qualname != NULL) {
+		return py_move(&qualname);
+	}
+
+	if (!PyErr_ExceptionMatches(PyExc_AttributeError)) {
+		return NULL;
+	}
+
+	PyErr_Clear();
+
+	PY_MOVABLE(func, PyObject_GetAttrString(value, "func"));
+
+	if (func == NULL) {
+		if (!PyErr_ExceptionMatches(PyExc_AttributeError)) {
+			return NULL;
+		}
+
+		PyErr_Clear();
+
+		return NULL;
+	}
+
+	return PyFunction_Check(func) ? Py_XNewRef(((PyFunctionObject *) func)->func_qualname) : NULL;
+}
+
 static int defines_a_method(
 	PyObject * const bound,
 	PyObject * const field_name,
@@ -547,16 +579,13 @@ static int defines_a_method(
 		return 1;
 	}
 
-	if (!PyFunction_Check(bound)) {
-		return 0;
+	PY_OWNED(qualname, qualname_of(bound));
+
+	if (qualname == NULL) {
+		return PyErr_Occurred() ? -1 : 0;
 	}
 
-	return defined_in_this_body(
-		((PyFunctionObject *) bound)->func_qualname,
-		field_name,
-		class_name,
-		spelling
-	);
+	return defined_in_this_body(qualname, field_name, class_name, spelling);
 }
 
 static int defined_in_this_body(
