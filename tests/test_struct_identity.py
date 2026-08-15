@@ -1029,3 +1029,21 @@ class TestAMetaclassSubclass:
 
         with pytest.raises(TypeError, match=r"Wrong\.__new__ returned .*is not a struct class"):
             META("Z", (Seeded,), {"__annotations__": {"b": int}})
+
+
+def test_a_hostile_namespace_key_propagates_instead_of_reading_as_absent():
+    """A namespace key whose __eq__ raises makes the dunder probes fail; a
+    probe that cannot see has not learned the name is absent, so the error
+    propagates instead of the class building as if it were.
+    """
+
+    class HostileKey(str):
+        __hash__ = str.__hash__
+
+        def __eq__(self, other):
+            raise ValueError("nope")
+
+    namespace = {"__annotations__": {"x": int}, HostileKey("__eq__"): 1}
+
+    with pytest.raises(ValueError, match="nope"):
+        type(Struct)("Hostile", (Struct,), namespace)

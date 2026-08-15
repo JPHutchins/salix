@@ -110,6 +110,35 @@ static inline PyObject * dict_value_ref(PyObject * const mapping, PyObject * con
 #endif
 }
 
+/* Presence without the doctrine's cost: -1 is a lookup error, which a bare
+ * PyDict_GetItemString would silently read as "absent" -- and on 3.14 it
+ * clears the error outright, so the StringRef spelling is required there. */
+static inline int dict_has_string(PyObject * const mapping, char const * const name) {
+#if PY_VERSION_HEX >= 0x030E0000
+	PyObject * value = NULL;
+
+	if (PyDict_GetItemStringRef(mapping, name, &value) < 0) {
+		return -1;
+	}
+
+	if (value != NULL) {
+		Py_DECREF(value);
+
+		return 1;
+	}
+
+	return 0;
+#else
+	PyObject * const value = PyDict_GetItemString(mapping, name);
+
+	if (value != NULL) {
+		return 1;
+	}
+
+	return PyErr_Occurred() ? -1 : 0;
+#endif
+}
+
 #if PY_VERSION_HEX < 0x030D0000
 #	define STRUCT_BEGIN_CRITICAL_SECTION(object) {
 #	define STRUCT_END_CRITICAL_SECTION() }

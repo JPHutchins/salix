@@ -355,6 +355,14 @@ static enum result apply_options(
 	bool const inherits_body_eq,
 	bool const derive_not_equal
 ) {
+	int const defines_hash = dict_has_string(namespace, "__hash__");
+	int const defines_setattr = dict_has_string(namespace, "__setattr__");
+	int const defines_ne = dict_has_string(namespace, "__ne__");
+
+	if (defines_hash < 0 || defines_setattr < 0 || defines_ne < 0) {
+		return RESULT_ERROR;
+	}
+
 	struct binding_plan const plan = binding_plan(
 		options,
 		inherited,
@@ -362,13 +370,13 @@ static enum result apply_options(
 		body_defines_eq,
 		inherits_body_eq,
 		derive_not_equal,
-		PyDict_GetItemString(namespace, "__hash__") != NULL,
-		PyDict_GetItemString(namespace, "__setattr__") != NULL
+		defines_hash == 1,
+		defines_setattr == 1
 	);
 
 	if (
 		plan.answered_by_body &&
-		PyDict_GetItemString(namespace, "__ne__") == NULL &&
+		defines_ne == 0 &&
 		rebind(namespace, rebind_not_equal, false) != RESULT_OK
 	) {
 		return RESULT_ERROR;
@@ -428,7 +436,13 @@ static enum result rebind(
 	);
 
 	for (char const * const * name = names; *name != NULL; ++name) {
-		if (PyDict_GetItemString(namespace, *name) != NULL) {
+		int const present = dict_has_string(namespace, *name);
+
+		if (present < 0) {
+			return RESULT_ERROR;
+		}
+
+		if (present == 1) {
 			continue;
 		}
 

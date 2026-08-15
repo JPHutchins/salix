@@ -257,7 +257,13 @@ PyObject * build_struct_class(
 		return NULL;
 	}
 
-	bool const body_defines_eq = PyDict_GetItemString(original_namespace, "__eq__") != NULL;
+	int const defines_eq = dict_has_string(original_namespace, "__eq__");
+
+	if (defines_eq < 0) {
+		return NULL;
+	}
+
+	bool const body_defines_eq = defines_eq == 1;
 
 	struct equality_source const inherited_equality = (
 		request.options.eq == inherited.eq && !body_defines_eq ? resolves_body_equality(bases) :
@@ -329,28 +335,35 @@ PyObject * build_struct_class(
 		if (settled != RESULT_OK) {
 			Py_CLEAR(struct_class);
 		} else {
-			struct binding_plan const bindings = binding_plan(
-				request.options,
-				inherited,
-				frozen_across_bases,
-				body_defines_eq,
-				inherits_body_eq,
-				inherited_equality.needs_derived_not_equal,
-				PyDict_GetItemString(original_namespace, rebind_hash[0]) != NULL,
-				PyDict_GetItemString(original_namespace, "__setattr__") != NULL
-			);
+			int const defines_hash = dict_has_string(original_namespace, rebind_hash[0]);
+			int const defines_setattr = dict_has_string(original_namespace, "__setattr__");
 
-			if (
-				settle_mro_bindings(
-					struct_class,
-					bases,
-					original_namespace,
-					bindings,
-					request.options
-				) !=
-				RESULT_OK
-			) {
+			if (defines_hash < 0 || defines_setattr < 0) {
 				Py_CLEAR(struct_class);
+			} else {
+				struct binding_plan const bindings = binding_plan(
+					request.options,
+					inherited,
+					frozen_across_bases,
+					body_defines_eq,
+					inherits_body_eq,
+					inherited_equality.needs_derived_not_equal,
+					defines_hash == 1,
+					defines_setattr == 1
+				);
+
+				if (
+					settle_mro_bindings(
+						struct_class,
+						bases,
+						original_namespace,
+						bindings,
+						request.options
+					) !=
+					RESULT_OK
+				) {
+					Py_CLEAR(struct_class);
+				}
 			}
 		}
 	}
