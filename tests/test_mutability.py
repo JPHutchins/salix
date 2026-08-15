@@ -212,6 +212,32 @@ def test_a_mutable_struct_lets_its_own_body_delattr_observe_deletion():
     assert "x" in deleted
 
 
+def test_a_frozen_structs_body_delattr_keeps_answering():
+    """The escape hatch works for either half: a body __delattr__ is skipped
+    by the rebind per name, so deletes reach the hook while writes stay
+    refused. What the hook does with the deletion is its own business."""
+
+    deleted = []
+
+    class Single(Struct):
+        x: int
+
+        def __delattr__(self, name: str) -> None:
+            deleted.append(name)
+
+    class Strengthened(Mutable, frozen=True):
+        def __delattr__(self, name: str) -> None:
+            deleted.append(name)
+
+    for Child in (Single, Strengthened):
+        with pytest.raises(TypeError):
+            Child(1).x = 9
+
+        del Child(1).x
+
+    assert deleted == ["x", "x"]
+
+
 def test_a_frozen_class_with_an_escape_hatch_is_unhashable():
     """The body __setattr__ hatch admits writes, so the hash pairs with the
     mutability it admits rather than the frozen record."""

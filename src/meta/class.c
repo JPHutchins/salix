@@ -797,18 +797,19 @@ static enum result settle_mro_bindings(
 	PyTypeObject * const type = (PyTypeObject *) struct_class;
 
 	/* A co-base carrying its own C-level tp_setattro can divert the child's
-	 * slot away from the frozen block, so the block is restored here, unless
-	 * the child's own body __setattr__ answers (the single-base escape
-	 * hatch). The mutable column needs no repair: CPython's own dispatch
-	 * honours body and co-base hooks and foreign C-level slots exactly as it
-	 * does for plain classes. Unlike the comparison repairs below, this runs
-	 * for every struct class, single or multi base. */
-	if (
-		options.frozen &&
-		PyDict_GetItemString(original_namespace, "__setattr__") == NULL &&
-		type->tp_setattro != StructMixin_Type.tp_setattro
-	) {
-		type->tp_setattro = StructMixin_Type.tp_setattro;
+	 * slot away from the frozen block, so the block's wrappers are rebound
+	 * into the class dict — the same rebind machinery every other dunder
+	 * repair uses — and the MRO-dispatching slot honours them. A body
+	 * __setattr__ or __delattr__ is skipped per name, so the escape hatch
+	 * works for either half. In a re-entered build the namespace carries the
+	 * outer build's rebind injections rather than the true body, and the
+	 * outer settle is the source of truth. The mutable column needs no
+	 * repair: CPython's own dispatch honours hooks and foreign C-level slots
+	 * exactly as it does for plain classes. */
+	if (options.frozen && type->tp_setattro != StructMixin_Type.tp_setattro) {
+		if (settle_rebind(struct_class, original_namespace, rebind_mutability, true) != RESULT_OK) {
+			return RESULT_ERROR;
+		}
 	}
 
 	if (struct_base_count(bases) <= 1) {

@@ -625,15 +625,14 @@ def frozen_refusals_that_depend_on_order() -> list[str]:
     asymmetric = []
 
     for bases in ARRANGEMENTS:
-        for wanted in (True, False):
-            forwards = build(bases, frozen=wanted)
-            backwards = build(tuple(reversed(bases)), frozen=wanted)
+        forwards = build(bases, frozen=False)
+        backwards = build(tuple(reversed(bases)), frozen=False)
 
-            if isinstance(forwards, Impossible) or isinstance(backwards, Impossible):
-                continue
+        if isinstance(forwards, Impossible) or isinstance(backwards, Impossible):
+            continue
 
-            if isinstance(forwards, Refused) != isinstance(backwards, Refused):
-                asymmetric.append(f"{named(bases)} frozen={wanted}")
+        if isinstance(forwards, Refused) != isinstance(backwards, Refused):
+            asymmetric.append(f"{named(bases)} frozen=False")
 
     return asymmetric
 
@@ -641,6 +640,8 @@ def frozen_refusals_that_depend_on_order() -> list[str]:
 def test_the_frozen_pin_does_not_depend_on_the_order_of_the_bases():
     """Whether a class may be frozen is a question about which of its bases
     made a promise, and no ordering of the same bases changes the answer.
+    Only the weakening direction can refuse; the strengthening direction
+    always builds, so the sweep asks it no question.
     """
 
     assert frozen_refusals_that_depend_on_order() == []
