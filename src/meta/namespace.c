@@ -240,26 +240,22 @@ enum result refuse_reserved_metadata_names(
 			return RESULT_ERROR;
 		}
 
-		PY_OWNED(bound, dict_value_ref(original_namespace, name));
+		int const bound = PyDict_Contains(original_namespace, name);
 
-		if (bound == NULL) {
-			if (PyErr_Occurred()) {
-				return RESULT_ERROR;
-			}
-
-			if (taken_as_a_field == 0) {
-				continue;
-			}
+		if (bound < 0) {
+			return RESULT_ERROR;
 		}
 
-		PyErr_Format(
-			PyExc_TypeError,
-			"'%U' is reserved for salix's metadata and cannot be a field "
-			"or a class-body binding",
-			name
-		);
+		if (taken_as_a_field == 1 || bound == 1) {
+			PyErr_Format(
+				PyExc_TypeError,
+				"'%U' is reserved for salix's metadata and cannot be a field "
+				"or a class-body binding",
+				name
+			);
 
-		return RESULT_ERROR;
+			return RESULT_ERROR;
+		}
 	}
 
 	return RESULT_OK;

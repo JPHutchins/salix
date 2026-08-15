@@ -106,8 +106,9 @@ def test_a_method_named_any_of_them_is_refused_too(name):
 
 @pytest.mark.parametrize("name", SALIX + MSGSPEC)
 def test_a_subclass_binding_one_is_refused(name):
-    """The refusal keys on the class that writes the binding, so a subclass
-    cannot shadow the metadata its base reports.
+    """The refusal keys on the class that writes the binding, so a struct
+    subclass cannot shadow the metadata its base reports through its own
+    body; a binding carried by a plain base is out of scope by the ruling.
     """
 
     class Base(Struct):
@@ -138,6 +139,21 @@ def test_neighbouring_names_are_ordinary(name):
 
     assert built._struct_fields_ == (name, "x")
     assert getattr(built(5, 6), name) == 5
+
+
+def test_an_unannotated_binding_of_an_ordinary_name_stays_in_the_class_dict():
+    """`drop_class_variables` strips only names the body annotated: an
+    unannotated assignment stays in the class dict and the instance finds
+    it there. Restated with an ordinary name now that the reserved ones are
+    refused, so the mechanism keeps a pin of its own.
+    """
+
+    class Shadowed(Struct):
+        x: int
+        stray = 999
+
+    assert vars(Shadowed)["stray"] == 999
+    assert Shadowed(1).stray == 999
 
 
 def test_a_class_statement_taking_a_reserved_name_is_refused():
