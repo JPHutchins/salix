@@ -533,9 +533,13 @@ enum result refuse_colliding_methods(
 	return RESULT_OK;
 }
 
-static PyObject * qualname_of(PyObject * const value) {
+static PyObject * qualname_direct(PyObject * const value) {
 	if (PyFunction_Check(value)) {
 		return Py_XNewRef(((PyFunctionObject *) value)->func_qualname);
+	}
+
+	if (PyMethod_Check(value) || PyType_Check(value)) {
+		return NULL;
 	}
 
 	PY_MOVABLE(qualname, PyObject_GetAttrString(value, "__qualname__"));
@@ -550,6 +554,20 @@ static PyObject * qualname_of(PyObject * const value) {
 
 	PyErr_Clear();
 
+	return NULL;
+}
+
+static PyObject * qualname_of(PyObject * const value) {
+	PY_MOVABLE(direct, qualname_direct(value));
+
+	if (direct != NULL || PyErr_Occurred()) {
+		return py_move(&direct);
+	}
+
+	if (PyCallable_Check(value)) {
+		return NULL;
+	}
+
 	PY_MOVABLE(func, PyObject_GetAttrString(value, "func"));
 
 	if (func == NULL) {
@@ -562,7 +580,7 @@ static PyObject * qualname_of(PyObject * const value) {
 		return NULL;
 	}
 
-	return PyFunction_Check(func) ? Py_XNewRef(((PyFunctionObject *) func)->func_qualname) : NULL;
+	return qualname_direct(func);
 }
 
 static int defines_a_method(

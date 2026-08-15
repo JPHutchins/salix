@@ -943,6 +943,45 @@ class TestDefaultsThatAreCallable:
 
         assert WithBound().handler is bound
 
+    def test_a_bound_method_of_a_same_named_foreign_class_still_defaults_a_field(self):
+        class Colliding:
+            def handler(self):
+                return 1
+
+        bound = Colliding().handler
+
+        built = type(Struct)(
+            "Colliding", (Struct,), {"__annotations__": {"handler": object}, "handler": bound}
+        )
+
+        assert built().handler() == 1
+
+    def test_a_partial_of_a_same_named_foreign_function_still_defaults_a_field(self):
+        class Colliding:
+            def handler(self, first):
+                return first
+
+        partialled = functools.partial(Colliding().handler, 1)
+
+        built = type(Struct)(
+            "Colliding", (Struct,), {"__annotations__": {"handler": object}, "handler": partialled}
+        )
+
+        assert built().handler() == 1
+
+    def test_a_nested_class_of_a_same_named_foreign_class_still_defaults_a_field(self):
+        class Colliding:
+            class x:
+                pass
+
+        foreign = Colliding
+
+        built = type(Struct)(
+            "Colliding", (Struct,), {"__annotations__": {"x": object}, "x": foreign.x}
+        )
+
+        assert built().x is foreign.x
+
     def test_a_type_defaults_a_field(self):
         class WithType(Struct):
             kind: object = int
@@ -1005,8 +1044,9 @@ class TestTheFunctoolsSpellingsAreRefused:
     wrapper becomes the field's default. The body-binding carve-out fetches
     the wrapped function's `__qualname__` -- `functools.wraps` copies it, and
     `cached_property` carries it on `func` -- so the same tail-match rule
-    refuses these spellings too, along with a nested class, whose qualname is
-    the same shape.
+    refuses these spellings too. Bound methods, types, and callables escape
+    the fetch; the same-named controls live in
+    `TestDefaultsThatAreCallable`.
     """
 
     def test_a_cached_property_named_after_a_field_is_refused(self):
@@ -1026,14 +1066,6 @@ class TestTheFunctoolsSpellingsAreRefused:
                 @functools.cache  # noqa: B019 -- the wrapper is the subject, not the caching
                 def y(self) -> int:
                     return 99
-
-    def test_a_nested_class_named_after_a_field_is_refused(self):
-        with pytest.raises(TypeError, match="is a field, and the class body binds"):
-            class Nested(Struct):
-                x: int
-
-                class x:
-                    pass
 
     def test_a_cache_wrapped_foreign_function_still_defaults_a_field(self):
         class WithForeign(Struct):
