@@ -1031,19 +1031,50 @@ class TestAMetaclassSubclass:
             META("Z", (Seeded,), {"__annotations__": {"b": int}})
 
 
-def test_a_hostile_namespace_key_propagates_instead_of_reading_as_absent():
-    """A namespace key whose __eq__ raises makes the dunder probes fail; a
-    probe that cannot see has not learned the name is absent, so the error
-    propagates instead of the class building as if it were.
+class HostileKey(str):
+    __hash__ = str.__hash__
+
+    def __eq__(self, other):
+        raise ValueError("nope")
+
+
+@pytest.mark.parametrize(
+    "probed",
+    (
+        "__eq__",
+        "__hash__",
+        "__setattr__",
+        "__slots__",
+        "__match_args__",
+        "_struct_fields_",
+        "_struct_defaults_",
+        "__struct_fields__",
+        "__struct_defaults__",
+    ),
+)
+def test_a_hostile_namespace_key_propagates_instead_of_reading_as_absent(probed):
+    """A namespace key whose __eq__ raises makes the class-build dict probes
+    fail; a probe that cannot see has not learned the name is absent, so the
+    error propagates instead of the class building as if it were. One name
+    per probe the minimal build always makes.
     """
 
-    class HostileKey(str):
-        __hash__ = str.__hash__
+    namespace = {"__annotations__": {"x": int}, HostileKey(probed): 1}
 
-        def __eq__(self, other):
-            raise ValueError("nope")
+    with pytest.raises(ValueError, match="nope"):
+        type(Struct)("Hostile", (Struct,), namespace)
 
-    namespace = {"__annotations__": {"x": int}, HostileKey("__eq__"): 1}
+
+def test_a_hostile_not_equal_key_propagates_when_the_body_answers_equality():
+    """The __ne__ probe runs only when the body answered equality; the same
+    hostile key then propagates there too.
+    """
+
+    namespace = {
+        "__annotations__": {"x": int},
+        "__eq__": lambda self, other: True,
+        HostileKey("__ne__"): 1,
+    }
 
     with pytest.raises(ValueError, match="nope"):
         type(Struct)("Hostile", (Struct,), namespace)

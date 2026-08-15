@@ -3,6 +3,7 @@
 
 #include "annotations.h"
 #include "owned.h"
+#include "types.h"
 
 /* annotationlib.Format. The numbering is the API. */
 enum annotation_format {
@@ -29,10 +30,14 @@ static bool context_slot_is_free(PyObject * error);
 #endif
 
 PyObject * struct_annotations(PyObject * const namespace) {
-	PyObject * const declared = PyDict_GetItemString(namespace, "__annotations__");
+	PyObject * const declared = dict_get_string(namespace, "__annotations__");
 
 	if (declared != NULL) {
 		return Py_NewRef(declared);
+	}
+
+	if (PyErr_Occurred()) {
+		return NULL;
 	}
 
 	/* Owned rather than borrowed: on 3.14+ evaluate imports a module, which runs
@@ -41,16 +46,20 @@ PyObject * struct_annotations(PyObject * const namespace) {
 	PY_OWNED(annotate, Py_XNewRef(borrow_annotate(namespace)));
 
 	if (annotate == NULL) {
-		return PyDict_New();
+		return PyErr_Occurred() ? NULL : PyDict_New();
 	}
 
 	return evaluate(annotate);
 }
 
 static PyObject * borrow_annotate(PyObject * const namespace) {
-	PyObject * const annotate = PyDict_GetItemString(namespace, "__annotate__");
+	PyObject * const annotate = dict_get_string(namespace, "__annotate__");
 
-	return annotate != NULL ? annotate : PyDict_GetItemString(namespace, "__annotate_func__");
+	if (annotate != NULL || PyErr_Occurred()) {
+		return annotate;
+	}
+
+	return dict_get_string(namespace, "__annotate_func__");
 }
 
 static PyObject * evaluate(PyObject * const annotate) {

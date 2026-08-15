@@ -583,7 +583,13 @@ static enum result settle_rebind(
 	);
 
 	for (char const * const * name = names; *name != NULL; name += 1) {
-		if (PyDict_GetItemString(original_namespace, *name) != NULL) {
+		int const present = dict_has_string(original_namespace, *name);
+
+		if (present < 0) {
+			return RESULT_ERROR;
+		}
+
+		if (present == 1) {
 			continue;
 		}
 
@@ -787,11 +793,19 @@ static int honours_a_body_comparison(
 		}
 
 		for (Py_ssize_t name = 0; name < 6; ++name) {
-			PyObject * const bound = PyDict_GetItemString(dict, (char const * const[6]){
+			PyObject * const bound = dict_get_string(dict, (char const * const[6]){
 				"__eq__", "__ne__", "__lt__", "__le__", "__gt__", "__ge__",
 			}[name]);
 
-			if (bound != NULL && bound != mixin_bindings[name] && bound != object_bindings[name]) {
+			if (bound == NULL) {
+				if (PyErr_Occurred()) {
+					return -1;
+				}
+
+				continue;
+			}
+
+			if (bound != mixin_bindings[name] && bound != object_bindings[name]) {
 				return 1;
 			}
 		}
@@ -1026,6 +1040,13 @@ static enum result settle_planned(
 		return refuse_unplanned(struct_class);
 	}
 
+	int const defines_hash = dict_has_string(original_namespace, rebind_hash[0]);
+	int const defines_setattr = dict_has_string(original_namespace, "__setattr__");
+
+	if (defines_hash < 0 || defines_setattr < 0) {
+		return RESULT_ERROR;
+	}
+
 	struct binding_plan const bindings = binding_plan(
 		options,
 		inherited,
@@ -1033,17 +1054,20 @@ static enum result settle_planned(
 		body_defines_eq,
 		inherits_body_eq,
 		derive_not_equal,
-		PyDict_GetItemString(original_namespace, rebind_hash[0]) != NULL,
-		PyDict_GetItemString(original_namespace, "__setattr__") != NULL
+		defines_hash == 1,
+		defines_setattr == 1
 	);
 
 	for (char const * const * const * tables = settle_tables; *tables != NULL; tables += 1) {
 		for (char const * const * name = *tables; *name != NULL; name += 1) {
-			if (
-				PyDict_GetItemString(class_dict, *name) != NULL &&
-				PyDict_GetItemString(original_namespace, *name) == NULL &&
-				!settled_by_the_plan(*name, bindings)
-			) {
+			int const in_class = dict_has_string(class_dict, *name);
+			int const in_body = dict_has_string(original_namespace, *name);
+
+			if (in_class < 0 || in_body < 0) {
+				return RESULT_ERROR;
+			}
+
+			if (in_class == 1 && in_body == 0 && !settled_by_the_plan(*name, bindings)) {
 				return refuse_unplanned(struct_class);
 			}
 		}
@@ -1073,12 +1097,19 @@ static enum result settle_planned(
 
 	/* bind_not_equal's answered case on a live class: the fresh build binds
 	 * object's __ne__ when the body answered equality itself. */
-	if (
-		bindings.answered_by_body &&
-		PyDict_GetItemString(original_namespace, rebind_not_equal[0]) == NULL &&
-		settle_rebind(struct_class, original_namespace, rebind_not_equal, false) != RESULT_OK
-	) {
-		return RESULT_ERROR;
+	if (bindings.answered_by_body) {
+		int const defines_ne = dict_has_string(original_namespace, rebind_not_equal[0]);
+
+		if (defines_ne < 0) {
+			return RESULT_ERROR;
+		}
+
+		if (
+			defines_ne == 0 &&
+			settle_rebind(struct_class, original_namespace, rebind_not_equal, false) != RESULT_OK
+		) {
+			return RESULT_ERROR;
+		}
 	}
 
 	if (
@@ -1129,15 +1160,14 @@ static enum result settle_planned(
 			return RESULT_ERROR;
 		}
 	} else {
-		PyObject * const body_match_args = PyDict_GetItemString(
-			original_namespace,
-			"__match_args__"
-		);
+		PyObject * const body_match_args = dict_get_string(original_namespace, "__match_args__");
 
 		if (body_match_args != NULL) {
 			if (PyDict_SetItemString(class_dict, "__match_args__", body_match_args) < 0) {
 				return RESULT_ERROR;
 			}
+		} else if (PyErr_Occurred()) {
+			return RESULT_ERROR;
 		} else if (PyDict_DelItemString(class_dict, "__match_args__") < 0) {
 			if (PyErr_ExceptionMatches(PyExc_KeyError)) {
 				PyErr_Clear();
@@ -1170,9 +1200,23 @@ static enum result restore_stripped(
 ) {
 	for (char const * const * const * table = tables; *table != NULL; table += 1) {
 		for (char const * const * name = *table; *name != NULL; name += 1) {
-			PyObject * const body_value = PyDict_GetItemString(original_namespace, *name);
+			PyObject * const body_value = dict_get_string(original_namespace, *name);
 
-			if (body_value == NULL || PyDict_GetItemString(class_dict, *name) == body_value) {
+			if (body_value == NULL) {
+				if (PyErr_Occurred()) {
+					return RESULT_ERROR;
+				}
+
+				continue;
+			}
+
+			PyObject * const class_value = dict_get_string(class_dict, *name);
+
+			if (class_value == NULL && PyErr_Occurred()) {
+				return RESULT_ERROR;
+			}
+
+			if (class_value == body_value) {
 				continue;
 			}
 

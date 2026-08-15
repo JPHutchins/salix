@@ -105,7 +105,7 @@ enum result refuse_displaced_slots(
 	PyObject * const bases,
 	struct options const options
 ) {
-	PyObject * const declared = PyDict_GetItemString(original_namespace, "__slots__");
+	PyObject * const declared = dict_get_string(original_namespace, "__slots__");
 
 	if (declared == NULL) {
 		return PyErr_Occurred() ? RESULT_ERROR : RESULT_OK;
@@ -250,13 +250,13 @@ enum result refuse_reserved_metadata_names(
 	}
 
 	for (char const * const * reserved = reserved_metadata_names; *reserved != NULL; ++reserved) {
-		PyObject * const bound = PyDict_GetItemString(original_namespace, *reserved);
+		int const bound = dict_has_string(original_namespace, *reserved);
 
-		if (PyErr_Occurred()) {
+		if (bound < 0) {
 			return RESULT_ERROR;
 		}
 
-		if (bound != NULL) {
+		if (bound == 1) {
 			PyErr_Format(
 				PyExc_TypeError,
 				"'%s' is reserved for salix's metadata and cannot be a field "
@@ -357,9 +357,8 @@ static enum result apply_options(
 ) {
 	int const defines_hash = dict_has_string(namespace, "__hash__");
 	int const defines_setattr = dict_has_string(namespace, "__setattr__");
-	int const defines_ne = dict_has_string(namespace, "__ne__");
 
-	if (defines_hash < 0 || defines_setattr < 0 || defines_ne < 0) {
+	if (defines_hash < 0 || defines_setattr < 0) {
 		return RESULT_ERROR;
 	}
 
@@ -374,12 +373,16 @@ static enum result apply_options(
 		defines_setattr == 1
 	);
 
-	if (
-		plan.answered_by_body &&
-		defines_ne == 0 &&
-		rebind(namespace, rebind_not_equal, false) != RESULT_OK
-	) {
-		return RESULT_ERROR;
+	if (plan.answered_by_body) {
+		int const defines_ne = dict_has_string(namespace, "__ne__");
+
+		if (defines_ne < 0) {
+			return RESULT_ERROR;
+		}
+
+		if (defines_ne == 0 && rebind(namespace, rebind_not_equal, false) != RESULT_OK) {
+			return RESULT_ERROR;
+		}
 	}
 
 	if (plan.rebind_comparison && rebind(namespace, rebind_comparison, options.eq) != RESULT_OK) {
