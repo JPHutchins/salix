@@ -9,7 +9,7 @@
 
 static int struct_exec(PyObject * module);
 static enum result add_struct_base(PyObject * module);
-static PyObject * create_struct_base(void);
+static PyObject * create_struct_base(PyObject * module);
 static void struct_free(void * module);
 
 /*
@@ -53,16 +53,30 @@ PyMODINIT_FUNC PyInit_salix(void) {
 	return PyModuleDef_Init(&struct_module);
 }
 
-struct salix_state * settle_state(void) {
-	PY_OWNED(name, PyUnicode_FromString(struct_module.m_name));
+PyModuleDef * salix_module_def(void) {
+	return &struct_module;
+}
 
-	if (name == NULL) {
-		return NULL;
+struct salix_state * settle_state(PyTypeObject * const type) {
+	PyObject * const mro = type->tp_mro;
+
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); ++i) {
+		PyTypeObject * const entry = (PyTypeObject *) PyTuple_GET_ITEM(mro, i);
+
+		if (!PyType_HasFeature(entry, Py_TPFLAGS_HEAPTYPE)) {
+			continue;
+		}
+
+		PyObject * const module = ((PyHeapTypeObject *) entry)->ht_module;
+
+		if (module != NULL && PyModule_GetDef(module) == salix_module_def()) {
+			return (struct salix_state *) PyModule_GetState(module);
+		}
 	}
 
-	PY_OWNED(module, PyImport_GetModule(name));
+	PyErr_Format(PyExc_SystemError, "%.200s was not built by the salix module", type->tp_name);
 
-	return module == NULL ? NULL : (struct salix_state *) PyModule_GetState(module);
+	return NULL;
 }
 
 static void struct_free(void * const module) {
@@ -87,17 +101,15 @@ static int struct_exec(PyObject * const module) {
 
 	struct salix_state * const state = (struct salix_state *) PyModule_GetState(module);
 
-	if (state == NULL) {
+	if (state == NULL || settle_cache_fill(state) != RESULT_OK) {
 		return RESULT_ERROR;
 	}
-
-	settle_cache_fill(state);
 
 	return add_struct_base(module);
 }
 
 static enum result add_struct_base(PyObject * const module) {
-	PyObject * const struct_base = create_struct_base();
+	PyObject * const struct_base = create_struct_base(module);
 
 	if (struct_base == NULL) {
 		return RESULT_ERROR;
@@ -109,7 +121,7 @@ static enum result add_struct_base(PyObject * const module) {
 	return added < 0 ? RESULT_ERROR : RESULT_OK;
 }
 
-static PyObject * create_struct_base(void) {
+static PyObject * create_struct_base(PyObject * const module) {
 	PY_OWNED(name, PyUnicode_FromString("Struct"));
 	PY_OWNED(module_name, PyUnicode_FromString(struct_module.m_name));
 	PY_OWNED(bases, PyTuple_Pack(1, (PyObject *) &StructMixin_Type));
@@ -123,5 +135,5 @@ static PyObject * create_struct_base(void) {
 		return NULL;
 	}
 
-	return struct_create_root(name, bases, namespace);
+	return struct_create_root(name, bases, namespace, module);
 }

@@ -706,8 +706,9 @@ static int struct_base_count(PyObject * const bases) {
 
 /* Filled once at module init, before any class can be built, so the settle
  * only ever reads these: no post-init mutation, no keying, no lock. The
- * arrays live in the module state, so each interpreter fills its own. */
-void settle_cache_fill(struct salix_state * const state) {
+ * arrays live in the module state, so each interpreter fills its own, and a
+ * failed fill fails the import -- the settle never meets a half-filled cache. */
+enum result settle_cache_fill(struct salix_state * const state) {
 	static char const * const names[SETTLE_BINDING_COUNT] = {
 		"__eq__",
 		"__ne__",
@@ -718,32 +719,30 @@ void settle_cache_fill(struct salix_state * const state) {
 		"__repr__",
 	};
 
-	for (Py_ssize_t i = 0; i < 7; ++i) {
+	for (Py_ssize_t i = 0; i < SETTLE_BINDING_COUNT; ++i) {
 		state->mixin_bindings[i] = PyObject_GetAttrString((PyObject *) &StructMixin_Type, names[i]);
 		state->object_bindings[i] = PyObject_GetAttrString(
 			(PyObject *) &PyBaseObject_Type,
 			names[i]
 		);
+
+		if (state->mixin_bindings[i] == NULL || state->object_bindings[i] == NULL) {
+			return RESULT_ERROR;
+		}
 	}
+
+	return RESULT_OK;
 }
 
 struct settle_targets {
 	PyObject * const * mixin;
 	PyObject * const * object;
-	bool readable;
 };
 
 static struct settle_targets settle_candidates(struct salix_state const * const state) {
-	for (Py_ssize_t i = 0; i < SETTLE_BINDING_COUNT; ++i) {
-		if (state->mixin_bindings[i] == NULL || state->object_bindings[i] == NULL) {
-			return (struct settle_targets){.readable = false};
-		}
-	}
-
 	return (struct settle_targets){
 		.mixin = state->mixin_bindings,
 		.object = state->object_bindings,
-		.readable = true,
 	};
 }
 
@@ -986,13 +985,10 @@ static enum result settle_mro_bindings(
 
 	PyTypeObject * const first_struct = (PyTypeObject *) find_behaviour_base(bases);
 
-	struct salix_state * const state = settle_state();
+	struct salix_state * const state = settle_state(type);
 
 	if (state == NULL) {
-		/* The module is absent from sys.modules without an error -- a loader
-		 * that builds classes outside the registry -- so the repair skips
-		 * rather than fail the build; a real lookup error propagates. */
-		return PyErr_Occurred() ? RESULT_ERROR : RESULT_OK;
+		return RESULT_ERROR;
 	}
 
 	struct settle_targets const targets = settle_candidates(state);
@@ -1011,12 +1007,6 @@ static enum result settle_mro_bindings(
 	PyTypeObject * le_owner = NULL;
 	PyTypeObject * gt_owner = NULL;
 	PyTypeObject * ge_owner = NULL;
-
-	if (!targets.readable) {
-		/* The exec-time fill failed, so there is no cache to settle against;
-		 * the class builds un-repaired rather than fail on a bookkeeping gap. */
-		return RESULT_OK;
-	}
 
 	if (
 		mro_dunders_of(
