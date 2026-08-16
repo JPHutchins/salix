@@ -20,6 +20,10 @@
 #include "../types.h"
 #include "../hash.h"
 
+#ifdef TESTING
+static PyTypeObject * frozen_column_repair_owner = NULL;
+#endif
+
 static StructType * create_class(
 	PyTypeObject * metatype,
 	PyTypeObject * handoff,
@@ -878,6 +882,9 @@ static enum result settle_mro_bindings(
 	 * CPython's own dispatch honours hooks and foreign C-level slots exactly
 	 * as it does for plain classes. */
 	if (options.frozen && type->tp_setattro != StructMixin_Type.tp_setattro) {
+#ifdef TESTING
+		frozen_column_repair_owner = type;
+#endif
 		if (settle_rebind(struct_class, original_namespace, rebind_mutability, true) != RESULT_OK) {
 			return RESULT_ERROR;
 		}
@@ -1518,14 +1525,19 @@ static PyTypeObject SwallowingType = {
 	.tp_setattro = swallowing_setattro,
 };
 
-static PyObject * struct_class_with_field(PyObject * bases, PyObject * keywords) {
+static PyObject * struct_class_with_field(
+	PyObject * bases,
+	PyObject * keywords,
+	bool const body_setattr
+) {
 	PY_OWNED(name, PyUnicode_FromString("Built"));
 	PY_OWNED(namespace, PyDict_New());
 	PY_OWNED(annotations, PyDict_New());
 
 	if (
 		PyDict_SetItemString(annotations, "x", (PyObject *) &PyLong_Type) < 0 ||
-		PyDict_SetItemString(namespace, "__annotations__", annotations) < 0
+		PyDict_SetItemString(namespace, "__annotations__", annotations) < 0 ||
+		(body_setattr && PyDict_SetItemString(namespace, "__setattr__", Py_None) < 0)
 	) {
 		return NULL;
 	}
@@ -1548,11 +1560,11 @@ static void test_a_raw_tp_setattro_co_base_does_not_divert_the_struct_slot(void)
 	PY_OWNED(mutable_keywords, PyDict_New());
 	TEST_ASSERT_EQUAL_INT(0, PyDict_SetItemString(mutable_keywords, "frozen", Py_False));
 
-	PY_OWNED(mutable_base, struct_class_with_field(struct_bases, mutable_keywords));
+	PY_OWNED(mutable_base, struct_class_with_field(struct_bases, mutable_keywords, false));
 	TEST_ASSERT_NOT_NULL(mutable_base);
 
 	PY_OWNED(raw_bases, PyTuple_Pack(2, (PyObject *) &SwallowingType, mutable_base));
-	PY_OWNED(mutable_child, struct_class_with_field(raw_bases, NULL));
+	PY_OWNED(mutable_child, struct_class_with_field(raw_bases, NULL, false));
 	TEST_ASSERT_NOT_NULL(mutable_child);
 	TEST_ASSERT_EQUAL_INT(
 		0,
@@ -1568,12 +1580,14 @@ static void test_a_raw_tp_setattro_co_base_does_not_divert_the_struct_slot(void)
 	TEST_ASSERT_EQUAL_INT(0, PyObject_DelAttr(instance, field_name));
 	TEST_ASSERT_EQUAL_INT(2, swallow_calls);
 
-	PY_OWNED(frozen_base, struct_class_with_field(struct_bases, NULL));
+	PY_OWNED(frozen_base, struct_class_with_field(struct_bases, NULL, false));
 	TEST_ASSERT_NOT_NULL(frozen_base);
 
+	frozen_column_repair_owner = NULL;
 	PY_OWNED(frozen_bases, PyTuple_Pack(2, (PyObject *) &SwallowingType, frozen_base));
-	PY_OWNED(frozen_child, struct_class_with_field(frozen_bases, NULL));
+	PY_OWNED(frozen_child, struct_class_with_field(frozen_bases, NULL, false));
 	TEST_ASSERT_NOT_NULL(frozen_child);
+	TEST_ASSERT_EQUAL_PTR(NULL, frozen_column_repair_owner);
 	TEST_ASSERT_EQUAL_PTR(
 		StructMixin_Type.tp_setattro,
 		((PyTypeObject *) frozen_child)->tp_setattro
@@ -1582,6 +1596,16 @@ static void test_a_raw_tp_setattro_co_base_does_not_divert_the_struct_slot(void)
 		1,
 		dict_has_string(((PyTypeObject *) frozen_child)->tp_dict, "__setattr__")
 	);
+
+	frozen_column_repair_owner = NULL;
+	PY_OWNED(escaped_child, struct_class_with_field(frozen_bases, NULL, true));
+	TEST_ASSERT_NOT_NULL(escaped_child);
+	TEST_ASSERT_EQUAL_PTR((PyObject *) escaped_child, (PyObject *) frozen_column_repair_owner);
+
+	PY_OWNED(escaped_instance, PyObject_CallFunction(escaped_child, "i", 1));
+	TEST_ASSERT_NOT_NULL(escaped_instance);
+	TEST_ASSERT_EQUAL_INT(-1, PyObject_DelAttr(escaped_instance, field_name));
+	PyErr_Clear();
 
 	PY_OWNED(frozen_instance, PyObject_CallFunction(frozen_child, "i", 1));
 	TEST_ASSERT_NOT_NULL(frozen_instance);
@@ -1625,7 +1649,7 @@ static void test_a_later_bases_slot_forces_the_record(void) {
 	PY_OWNED(weak_base, struct_class_empty(struct_bases, weak_keywords));
 	TEST_ASSERT_NOT_NULL(weak_base);
 
-	PY_OWNED(plain_base, struct_class_with_field(struct_bases, NULL));
+	PY_OWNED(plain_base, struct_class_with_field(struct_bases, NULL, false));
 	TEST_ASSERT_NOT_NULL(plain_base);
 
 	PY_OWNED(mixed_bases, PyTuple_Pack(2, plain_base, weak_base));
