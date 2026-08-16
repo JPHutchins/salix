@@ -360,15 +360,15 @@ class TestAMetaclassSubclass:
         assert built(1, 2) < built(1, 3)
 
     def test_a_delegate_that_cannot_take_the_options_cannot_add_the_weakref_slot(self):
-        """The ladder falls to the keyword-less rung, the re-entered build
-        carries the weakref name without the slot, and the displaced-slot
-        advice refuses it instead of blaming the delegate.
+        """A readable chain whose __new__ cannot take the keywords is refused
+        up front by the probe: the keywords cannot ride, and the refusal says
+        so instead of blaming the entry salix itself wrote.
         """
 
         class Base(Struct, metaclass=Plain):
             x: int
 
-        with pytest.raises(TypeError, match="carries no weakref slot"):
+        with pytest.raises(TypeError, match="cannot cross"):
             META("Built", (Base,), {"__annotations__": {"y": int}}, weakref=True)
 
     def test_a_c_slot_delegate_still_builds(self):
@@ -404,6 +404,31 @@ class TestAMetaclassSubclass:
 
             class Base(Struct, metaclass=ClassMethod):
                 x: int
+
+    def test_a_body_type_error_with_a_verbatim_binding_phrase_propagates(self):
+        """Even a verbatim CPython binding phrase in a body TypeError does
+        not make it one: readable chains are decided by the probe without
+        calling the body, and the body's own error propagates with it having
+        run once.
+        """
+
+        calls = []
+
+        class PhraseRaising(META):
+            def __new__(metacls, name, bases, namespace, **keywords):
+                if keywords:
+                    calls.append(1)
+                    raise TypeError("got an unexpected keyword argument 'inner'")
+
+                return super().__new__(metacls, name, bases, namespace)
+
+        class Base(Struct, metaclass=PhraseRaising):
+            x: int
+
+        with pytest.raises(TypeError, match="got an unexpected keyword argument"):
+            META("Built", (Base,), {"__annotations__": {"y": int}}, order=True)
+
+        assert calls == [1]
 
     def test_a_validation_type_error_with_binding_words_propagates(self):
         """A delegate body that raises a TypeError whose message merely

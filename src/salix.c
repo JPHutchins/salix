@@ -123,17 +123,13 @@ static PyObject * build_handoff_machinery(struct salix_state * const state) {
 		"        tb = error.__traceback__\n"
 		"        while tb is not None and tb.tb_next is not None:\n"
 		"            tb = tb.tb_next\n"
-		"        message = str(error)\n"
 		"        if (\n"
 		"            tb is not None\n"
 		"            and tb.tb_frame is not None\n"
 		"            and tb.tb_frame.f_code.co_name == own_name\n"
 		"            and tb.tb_frame.f_code.co_filename == \"<salix handoff>\"\n"
-		"        ) or (\n"
-		"            \"got an unexpected keyword argument\" in message\n"
-		"            or \"got multiple values for keyword argument\" in message\n"
 		"        ):\n"
-		"            raise declined(message) from None\n"
+		"            raise declined(str(error)).with_traceback(error.__traceback__) from None\n"
 		"        raise\n";
 
 	PY_OWNED(code, Py_CompileString(source, "<salix handoff>", Py_file_input));

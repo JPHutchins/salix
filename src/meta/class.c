@@ -33,11 +33,22 @@ static StructType * create_class(
 	PyObject * namespace,
 	PyObject * const * keyword_rungs,
 	Py_ssize_t keyword_rung_count,
+	PyObject * forwarded_keywords,
+	bool laddered,
 	PyObject * handoff_attempt,
 	PyObject * handoff_declined,
 	PyObject * handoff_new
 );
 static PyTypeObject * winning_metatype(PyTypeObject * requested, PyObject * bases);
+
+struct chain_verdict {
+	int accepts_all;
+	int accepts_weakref;
+	bool readable;
+};
+static int code_accepts_keyword(PyCodeObject * code, PyObject * varnames, char const * keyword);
+static PyObject * metaclass_chain(PyTypeObject * winner);
+static struct chain_verdict chain_probe(PyObject * chain, PyObject * keywords, bool weakref_column);
 
 static enum result install_fields(
 	StructType * struct_class,
@@ -232,10 +243,14 @@ PyObject * build_struct_class(
 	request.options.weakref |= weakref_carried;
 
 	PyTypeObject * const handoff = winning_metatype(metatype, bases);
+	PyObject * forwarded_keywords = NULL;
 	PY_MOVABLE(weakref_only, NULL);
+	PY_MOVABLE(chain, NULL);
 	PyObject * keyword_rungs_storage[3] = {NULL, NULL, NULL};
 	PyObject * const * keyword_rungs = keyword_rungs_storage;
 	Py_ssize_t keyword_rung_count = 1;
+	bool laddered = false;
+	struct chain_verdict verdict = {.accepts_all = 1, .accepts_weakref = 1, .readable = true};
 
 	if (
 		handoff != metatype &&
@@ -243,26 +258,74 @@ PyObject * build_struct_class(
 		keywords != NULL &&
 		PyDict_GET_SIZE(keywords) > 0
 	) {
-		keyword_rungs_storage[0] = keywords;
+		chain = metaclass_chain(handoff);
 
-		if (weakref_requested) {
-			weakref_only = PyDict_New();
+		if (chain == NULL) {
+			return NULL;
+		}
 
-			if (
-				weakref_only == NULL ||
-				PyDict_SetItemString(weakref_only, option_keywords[OPTION_WEAKREF], Py_True) < 0
-			) {
-				return NULL;
+		verdict = chain_probe(chain, keywords, weakref_requested);
+
+		if (verdict.accepts_all < 0) {
+			return NULL;
+		}
+
+		if (verdict.readable) {
+			if (verdict.accepts_all == 1) {
+				forwarded_keywords = keywords;
+			} else if (weakref_requested && verdict.accepts_weakref == 1) {
+				weakref_only = PyDict_New();
+
+				if (
+					weakref_only == NULL ||
+					PyDict_SetItemString(weakref_only, option_keywords[OPTION_WEAKREF], Py_True) <
+						0
+				) {
+					return NULL;
+				}
+
+				forwarded_keywords = weakref_only;
 			}
-
-			keyword_rungs_storage[1] = weakref_only;
-			keyword_rung_count = 3;
 		} else {
-			keyword_rung_count = 2;
+			keyword_rungs_storage[0] = keywords;
+			laddered = true;
+
+			if (weakref_requested) {
+				weakref_only = PyDict_New();
+
+				if (
+					weakref_only == NULL ||
+					PyDict_SetItemString(weakref_only, option_keywords[OPTION_WEAKREF], Py_True) <
+						0
+				) {
+					return NULL;
+				}
+
+				keyword_rungs_storage[1] = weakref_only;
+				keyword_rung_count = 3;
+			} else {
+				keyword_rung_count = 2;
+			}
 		}
 	}
 
-	struct field_plan plan = field_plan_build(base, original_namespace);
+	if (
+		request.options.weakref &&
+		!weakref_carried &&
+		handoff->tp_new != StructMeta_new &&
+		verdict.readable &&
+		verdict.accepts_weakref == 0
+	) {
+		PyErr_SetString(
+			PyExc_TypeError,
+			"weakref=True cannot cross a metaclass __new__ that hands the build "
+			"off: the re-entered call cannot add the weakref slot"
+		);
+
+		return NULL;
+	}
+
+struct field_plan plan = field_plan_build(base, original_namespace);
 
 	if (field_plan_failed(&plan)) {
 		return NULL;
@@ -333,6 +396,8 @@ PyObject * build_struct_class(
 			namespace,
 			keyword_rungs,
 			keyword_rung_count,
+			forwarded_keywords,
+			laddered,
 			state->handoff_attempt,
 			state->handoff_declined,
 			state->handoff_new
@@ -407,6 +472,145 @@ PyObject * build_struct_class(
 	return (PyObject *) struct_class;
 }
 
+static int code_accepts_keyword(
+	PyCodeObject * const code,
+	PyObject * const varnames,
+	char const * const keyword
+) {
+	Py_ssize_t const named = code->co_argcount + code->co_kwonlyargcount;
+
+	for (Py_ssize_t i = code->co_posonlyargcount; i < named; ++i) {
+		int const compared = PyUnicode_CompareWithASCIIString(
+			PyTuple_GET_ITEM(varnames, i),
+			keyword
+		);
+
+		if (compared == 0) {
+			return 1;
+		}
+
+		if (compared < 0 && PyErr_Occurred()) {
+			return -1;
+		}
+	}
+
+	return 0;
+}
+
+static struct chain_verdict chain_probe(
+	PyObject * const chain,
+	PyObject * const keywords,
+	bool const weakref_column
+) {
+	struct chain_verdict verdict = {.accepts_all = 1, .accepts_weakref = 1, .readable = true};
+
+	for (Py_ssize_t i = 0; i < PyList_GET_SIZE(chain); ++i) {
+		PyObject * const link = PyList_GET_ITEM(chain, i);
+
+		if (!PyFunction_Check(link)) {
+			verdict.readable = false;
+			verdict.accepts_all = 0;
+			verdict.accepts_weakref = 0;
+			continue;
+		}
+
+		PyCodeObject * const code = (PyCodeObject *) ((PyFunctionObject *) link)->func_code;
+
+		if ((code->co_flags & CO_VARKEYWORDS) != 0) {
+			continue;
+		}
+
+#if PY_VERSION_HEX >= 0x030B0000
+		PY_OWNED(varnames, PyCode_GetVarnames(code));
+#else
+		PyObject * const varnames = code->co_varnames;
+#endif
+
+		if (varnames == NULL) {
+			verdict.accepts_all = -1;
+
+			return verdict;
+		}
+
+		Py_ssize_t position = 0;
+		PyObject * key;
+		PyObject * value;
+
+		while (PyDict_Next(keywords, &position, &key, &value)) {
+			char const * const name = PyUnicode_AsUTF8(key);
+
+			if (name == NULL) {
+				verdict.accepts_all = -1;
+
+				return verdict;
+			}
+
+			int const accepts = code_accepts_keyword(code, varnames, name);
+
+			if (accepts < 0) {
+				verdict.accepts_all = -1;
+
+				return verdict;
+			}
+
+			if (accepts == 0) {
+				verdict.accepts_all = 0;
+				break;
+			}
+		}
+
+		if (weakref_column) {
+			int const accepts_weakref = code_accepts_keyword(
+				code,
+				varnames,
+				option_keywords[OPTION_WEAKREF]
+			);
+
+			if (accepts_weakref < 0) {
+				verdict.accepts_all = -1;
+
+				return verdict;
+			}
+
+			if (accepts_weakref == 0) {
+				verdict.accepts_weakref = 0;
+			}
+		}
+	}
+
+	return verdict;
+}
+
+static PyObject * metaclass_chain(PyTypeObject * const winner) {
+	PY_MOVABLE(chain, PyList_New(0));
+
+	if (chain == NULL) {
+		return NULL;
+	}
+
+	PyObject * const mro = winner->tp_mro;
+
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); ++i) {
+		PyTypeObject * const link = (PyTypeObject *) PyTuple_GET_ITEM(mro, i);
+
+		if (link == &StructMeta_Type || link == &PyType_Type) {
+			break;
+		}
+
+		if (link->tp_new == StructMeta_new) {
+			continue;
+		}
+
+		PY_OWNED(new, PyObject_GetAttrString((PyObject *) link, "__new__"));
+
+		if (new == NULL || PyList_Append(chain, new) < 0) {
+			return NULL;
+		}
+	}
+
+	return py_move(&chain);
+}
+
 static StructType * create_class(
 	PyTypeObject * const metatype,
 	PyTypeObject * const handoff,
@@ -415,6 +619,8 @@ static StructType * create_class(
 	PyObject * const namespace,
 	PyObject * const * const keyword_rungs,
 	Py_ssize_t const keyword_rung_count,
+	PyObject * forwarded_keywords,
+	bool const laddered,
 	PyObject * const handoff_attempt,
 	PyObject * const handoff_declined,
 	PyObject * const handoff_new
@@ -428,7 +634,19 @@ static StructType * create_class(
 	PyTypeObject * const builder = handoff->tp_new == StructMeta_new ? handoff : metatype;
 	PyObject * created = NULL;
 
-	for (Py_ssize_t attempt = 0; created == NULL && attempt < keyword_rung_count; ++attempt) {
+	if (!laddered) {
+		created = PyType_Type.tp_new(
+			builder,
+			type_args,
+			builder == handoff ? NULL : forwarded_keywords
+		);
+	}
+
+	for (
+		Py_ssize_t attempt = 0;
+		created == NULL && laddered && attempt < keyword_rung_count;
+		++attempt
+	) {
 		created = PyObject_CallFunctionObjArgs(
 			handoff_attempt,
 			handoff_new,
@@ -461,15 +679,7 @@ static StructType * create_class(
 		}
 
 		if (declined) {
-			PY_OWNED(message, PyObject_Str(exception_value));
-			Py_XDECREF(exception_type);
-			Py_XDECREF(exception_value);
-			Py_XDECREF(exception_tb);
-
-			if (message != NULL) {
-				PyErr_SetObject(PyExc_TypeError, message);
-			}
-
+			PyErr_Restore(exception_type, exception_value, exception_tb);
 			break;
 		}
 
