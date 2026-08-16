@@ -633,12 +633,6 @@ static PyObject * build_defaults(PyObject * const all_names, PyObject * const de
 		PY_OWNED(value, dict_value_ref(default_by_name, field_name));
 
 		if (value == NULL) {
-			if (PyErr_Occurred()) {
-				Py_DECREF(defaults);
-
-				return NULL;
-			}
-
 			Py_DECREF(defaults);
 
 			return NULL;

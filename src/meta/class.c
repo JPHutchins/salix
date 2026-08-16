@@ -119,6 +119,36 @@ static char const * const * const settle_tables[] = {
 	NULL,
 };
 
+/* An exact-str key answers a probe by identity or in C, so a namespace of
+ * them cannot fail the sweep; anything else might. The sweep is what turns
+ * a poisoned lookup into a propagated error before type.__new__ misreads it
+ * as absence and silently builds a half-settled class. */
+static enum result verify_settle_names_readable(PyObject * const original_namespace) {
+	Py_ssize_t position = 0;
+	PyObject * key;
+	PyObject * value;
+
+	while (PyDict_Next(original_namespace, &position, &key, &value)) {
+		if (!PyUnicode_CheckExact(key)) {
+			for (
+				char const * const * const * tables = settle_tables;
+				*tables != NULL;
+				tables += 1
+			) {
+				for (char const * const * name = *tables; *name != NULL; name += 1) {
+					if (dict_has_string(original_namespace, *name) < 0) {
+						return RESULT_ERROR;
+					}
+				}
+			}
+
+			return RESULT_OK;
+		}
+	}
+
+	return RESULT_OK;
+}
+
 static bool table_names(char const * const * const names, char const * const name) {
 	for (char const * const * entry = names; *entry != NULL; entry += 1) {
 		if (strcmp(*entry, name) == 0) {
@@ -245,6 +275,7 @@ PyObject * build_struct_class(
 	}
 
 	if (
+		verify_settle_names_readable(original_namespace) != RESULT_OK ||
 		refuse_reserved_metadata_names(original_namespace, plan.new_names) != RESULT_OK ||
 		refuse_colliding_methods(original_namespace, plan.all_names, name) != RESULT_OK ||
 		refuse_mixin_method_fields(plan.all_names) != RESULT_OK ||

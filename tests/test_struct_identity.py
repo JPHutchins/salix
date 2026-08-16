@@ -1042,8 +1042,18 @@ class HostileKey(str):
     "probed",
     (
         "__eq__",
+        "__ne__",
+        "__lt__",
+        "__le__",
+        "__gt__",
+        "__ge__",
         "__hash__",
+        "__repr__",
         "__setattr__",
+        "__delattr__",
+        "__init__",
+        "__post_init__",
+        "__new__",
         "__slots__",
         "__match_args__",
         "_struct_fields_",
@@ -1056,7 +1066,8 @@ def test_a_hostile_namespace_key_propagates_instead_of_reading_as_absent(probed)
     """A namespace key whose __eq__ raises makes the class-build dict probes
     fail; a probe that cannot see has not learned the name is absent, so the
     error propagates instead of the class building as if it were. One name
-    per probe the minimal build always makes.
+    per probe the minimal build always makes, plus every settle-table name
+    the pre-build sweep reads.
     """
 
     namespace = {"__annotations__": {"x": int}, HostileKey(probed): 1}
@@ -1078,3 +1089,56 @@ def test_a_hostile_not_equal_key_propagates_when_the_body_answers_equality():
 
     with pytest.raises(ValueError, match="nope"):
         type(Struct)("Hostile", (Struct,), namespace)
+
+
+def test_a_handoff_build_with_a_hostile_settle_name_propagates():
+    """The settle tables own __init__, and the handoff build used to hand a
+    body key that poisons its lookup to type.__new__, which misread the
+    failure as absence and built a half-settled class with no error.
+    """
+
+    class Delegating(META):
+        pass
+
+    class Base(Struct, metaclass=Delegating):
+        x: int
+
+    namespace = {"__annotations__": {"y": int}, HostileKey("__init__"): 1}
+
+    with pytest.raises(ValueError, match="nope"):
+        META("Built", (Base,), namespace, order=True)
+
+
+def test_a_hostile_key_for_a_defaulted_field_name_propagates():
+    """append_declared probes the namespace for each declared field name to
+    pick up its default; a key that poisons that probe propagates.
+    """
+
+    namespace = {"__annotations__": {"y": int}, HostileKey("y"): 5}
+
+    with pytest.raises(ValueError, match="nope"):
+        type(Struct)("Hostile", (Struct,), namespace)
+
+
+def test_a_hostile_annotations_key_propagates():
+    namespace = {HostileKey("__annotations__"): 1}
+
+    with pytest.raises(ValueError, match="nope"):
+        type(Struct)("Hostile", (Struct,), namespace)
+
+
+def test_a_hostile_key_injected_by_a_metaclass_new_propagates():
+    """A metaclass __new__ can write into the namespace before the build sees
+    it; a hostile key injected there is refused by the same sweep instead of
+    reaching type.__new__.
+    """
+
+    class Injecting(META):
+        def __new__(cls, name, bases, namespace, **kwargs):
+            namespace[HostileKey("__init__")] = 1
+
+            return super().__new__(cls, name, bases, namespace, **kwargs)
+
+    with pytest.raises(ValueError, match="nope"):
+        class Base(Struct, metaclass=Injecting):
+            x: int
