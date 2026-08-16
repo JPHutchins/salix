@@ -88,7 +88,8 @@ enum result ensure_singleton(StructType * const struct_class) {
 		struct_class->struct_options.frozen &&
 		!struct_class->struct_options.weakref &&
 		struct_class->struct_field_count == 0 &&
-		!defines_own_init(struct_class)
+		!defines_own_init(struct_class) &&
+		Py_TYPE(struct_class)->tp_call == StructMeta_Type.tp_call
 	);
 
 	if (!qualifies) {
@@ -101,14 +102,18 @@ enum result ensure_singleton(StructType * const struct_class) {
 		return RESULT_OK;
 	}
 
-	/* PyObject_Call requires args non-NULL; an empty tuple is the empty call. */
-	PY_OWNED(call_args, PyTuple_New(0));
-	PY_MOVABLE(
-		singleton,
-		call_args != NULL ? PyObject_Call((PyObject *) struct_class, call_args, NULL) : NULL
-	);
+	PY_MOVABLE(singleton, PyObject_CallNoArgs((PyObject *) struct_class));
 
 	if (singleton == NULL) {
+		return RESULT_ERROR;
+	}
+
+	if (Py_TYPE(singleton) != (PyTypeObject *) struct_class) {
+		PyErr_SetString(
+			PyExc_SystemError,
+			"salix internal error: the singleton build returned a different type"
+		);
+
 		return RESULT_ERROR;
 	}
 
