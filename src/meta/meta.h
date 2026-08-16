@@ -76,7 +76,6 @@ struct salix_state {
 };
 
 enum result settle_cache_fill(struct salix_state * state);
-struct salix_state * settle_state(PyTypeObject * type);
 PyModuleDef * salix_module_def(void);
 bool any_base_has_weakref_slot(PyObject * bases);
 bool any_base_diverts_setattro(PyObject * bases);

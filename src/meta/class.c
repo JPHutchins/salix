@@ -406,6 +406,7 @@ struct field_plan plan = field_plan_build(base, original_namespace);
 	);
 
 	if (struct_class != NULL) {
+		struct_class->struct_state = base != NULL ? base->struct_state : NULL;
 		enum result const settled = (
 			struct_class->struct_field_names == NULL ? install_fields(
 				struct_class,
@@ -679,7 +680,28 @@ static StructType * create_class(
 		}
 
 		if (declined) {
-			PyErr_Restore(exception_type, exception_value, exception_tb);
+			PyObject * const original_tb = PyException_GetTraceback(exception_value);
+			PY_OWNED(message, PyObject_Str(exception_value));
+			Py_XDECREF(exception_type);
+			Py_XDECREF(exception_value);
+			Py_XDECREF(exception_tb);
+
+			if (message != NULL) {
+				PyErr_SetObject(PyExc_TypeError, message);
+
+				if (original_tb != NULL) {
+					PyObject * exc_type = NULL;
+					PyObject * exc_value = NULL;
+					PyObject * exc_tb = NULL;
+					PyErr_Fetch(&exc_type, &exc_value, &exc_tb);
+					PyException_SetTraceback(exc_value, Py_NewRef(original_tb));
+					PyErr_Restore(exc_type, exc_value, exc_tb);
+					Py_DECREF(original_tb);
+				}
+			} else {
+				Py_XDECREF(original_tb);
+			}
+
 			break;
 		}
 
@@ -1071,12 +1093,7 @@ static enum result settle_mro_bindings(
 	}
 
 	PyTypeObject * const first_struct = (PyTypeObject *) find_behaviour_base(bases);
-
-	struct salix_state * const state = settle_state(type);
-
-	if (state == NULL) {
-		return RESULT_ERROR;
-	}
+	struct salix_state * const state = struct_class->struct_state;
 
 	PY_MOVABLE(resolved_eq, NULL);
 	PY_MOVABLE(resolved_ne, NULL);

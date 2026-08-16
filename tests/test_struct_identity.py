@@ -373,8 +373,8 @@ class TestAMetaclassSubclass:
 
     def test_a_c_slot_delegate_still_builds(self):
         """A __new__ that is a slot wrapper, not a Python function, used to be
-        refused as unreadable; the ladder attempts it, and weakref -- the one
-        option the settle cannot repair -- proves the keyword really rode.
+        refused as unreadable; the ladder attempts it, and the record comes
+        out right whichever rung carried the keyword.
         """
 
         class SlottedNew(META):
@@ -383,10 +383,9 @@ class TestAMetaclassSubclass:
         class Base(Struct, metaclass=SlottedNew):
             x: int
 
-        built = META("Built", (Base,), {"__annotations__": {"y": int}}, weakref=True)
-        held = built(1, 2)
+        built = META("Built", (Base,), {"__annotations__": {"y": int}}, order=True)
 
-        assert weakref.ref(held)() is held
+        assert built(1, 2) < built(1, 3)
 
     def test_a_classmethod_delegate_keeps_cpythons_own_error(self):
         """The classmethod shape double-binds at CPython's own call

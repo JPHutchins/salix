@@ -21,6 +21,7 @@ enum { SLOT_MEMBER_TYPE = Py_T_OBJECT_EX };
 
 typedef struct StructType {
 	PyHeapTypeObject heap_type;
+	struct salix_state * struct_state;
 
 	PyObject * struct_field_names;
 	PyObject * struct_defaults;

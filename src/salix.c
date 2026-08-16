@@ -58,32 +58,6 @@ PyModuleDef * salix_module_def(void) {
 	return &struct_module;
 }
 
-struct salix_state * settle_state(PyTypeObject * const type) {
-	PyObject * const mro = type->tp_mro;
-
-	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); ++i) {
-		PyTypeObject * const entry = (PyTypeObject *) PyTuple_GET_ITEM(mro, i);
-
-		if (!PyType_HasFeature(entry, Py_TPFLAGS_HEAPTYPE)) {
-			continue;
-		}
-
-		PyObject * const module = ((PyHeapTypeObject *) entry)->ht_module;
-
-		if (
-			module != NULL &&
-			PyModule_Check(module) &&
-			PyModule_GetDef(module) == salix_module_def()
-		) {
-			return (struct salix_state *) PyModule_GetState(module);
-		}
-	}
-
-	PyErr_Format(PyExc_SystemError, "%.200s was not built by the salix module", type->tp_name);
-
-	return NULL;
-}
-
 static void struct_free(void * const module) {
 	/* m_free receives the module object on every supported version, so the
 	 * state is reached back through it. */
@@ -135,8 +109,15 @@ static PyObject * build_handoff_machinery(struct salix_state * const state) {
 	PY_OWNED(code, Py_CompileString(source, "<salix handoff>", Py_file_input));
 	PY_OWNED(globals_dict, PyDict_New());
 	PY_OWNED(new_fn, PyCFunction_New(&handoff_new_method, NULL));
+	PY_OWNED(module_name, PyUnicode_FromString(struct_module.m_name));
 
-	if (code == NULL || globals_dict == NULL || new_fn == NULL) {
+	if (
+		code == NULL ||
+		globals_dict == NULL ||
+		new_fn == NULL ||
+		module_name == NULL ||
+		PyDict_SetItemString(globals_dict, "__name__", module_name) < 0
+	) {
 		return NULL;
 	}
 
