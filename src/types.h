@@ -106,8 +106,37 @@ static inline PyObject * dict_value_ref(PyObject * const mapping, PyObject * con
 
 	return PyDict_GetItemRef(mapping, key, &value) < 0 ? NULL : value;
 #else
-	return Py_XNewRef(PyDict_GetItem(mapping, key));
+	PyObject * const value = PyDict_GetItemWithError(mapping, key);
+
+	return value != NULL ? Py_XNewRef(value) : NULL;
 #endif
+}
+
+/* The class-build dict probes share this pair: PyDict_GetItemString
+ * suppresses a lookup error on every version, so presence and value probes
+ * go through WithError, whose NULL reports a failure the caller must not
+ * read as absence. The value is borrowed -- the mapping outlives its use. */
+static inline PyObject * dict_get_string(PyObject * const mapping, char const * const name) {
+	PyObject * const key = PyUnicode_FromString(name);
+
+	if (key == NULL) {
+		return NULL;
+	}
+
+	PyObject * const value = PyDict_GetItemWithError(mapping, key);
+	Py_DECREF(key);
+
+	return value;
+}
+
+static inline int dict_has_string(PyObject * const mapping, char const * const name) {
+	PyObject * const value = dict_get_string(mapping, name);
+
+	if (value != NULL) {
+		return 1;
+	}
+
+	return PyErr_Occurred() ? -1 : 0;
 }
 
 #if PY_VERSION_HEX < 0x030D0000

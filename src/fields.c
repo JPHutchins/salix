@@ -248,15 +248,16 @@ static enum result append_declared(
 			return RESULT_ERROR;
 		}
 
-		PyObject * const declared_default = PyDict_GetItem(namespace, field_name);
+		PY_OWNED(declared_default, dict_value_ref(namespace, field_name));
 
-		if (
-			declared_default != NULL &&
-			(
-				refuse_reserved_name(field_name) != RESULT_OK ||
-				PyDict_SetItem(default_by_name, field_name, declared_default) < 0 ||
-				refuse_shared_mutable_contents(field_name, declared_default) != RESULT_OK
-			)
+		if (declared_default == NULL) {
+			if (PyErr_Occurred()) {
+				return RESULT_ERROR;
+			}
+		} else if (
+			refuse_reserved_name(field_name) != RESULT_OK ||
+			PyDict_SetItem(default_by_name, field_name, declared_default) < 0 ||
+			refuse_shared_mutable_contents(field_name, declared_default) != RESULT_OK
 		) {
 			return RESULT_ERROR;
 		}
@@ -629,7 +630,13 @@ static PyObject * build_defaults(PyObject * const all_names, PyObject * const de
 
 	for (Py_ssize_t i = first_default; i < field_count; ++i) {
 		PyObject * const field_name = PyList_GET_ITEM(all_names, i);
-		PyObject * const value = PyDict_GetItem(default_by_name, field_name);
+		PY_OWNED(value, dict_value_ref(default_by_name, field_name));
+
+		if (value == NULL) {
+			Py_DECREF(defaults);
+
+			return NULL;
+		}
 
 		/* Twice, on purpose. The first read is what raises in the ordinary case,
 		 * but its verdict is not final: it reads an object the module still
