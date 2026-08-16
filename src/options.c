@@ -24,22 +24,20 @@ char const * const option_keywords[OPTION_COUNT] = {
 
 static struct option_lookup find_option(PyObject * keyword);
 static struct options with_option(struct options options, enum option which, bool value);
-static struct options_request checked(struct options requested, bool fielded_base_is_frozen);
+static struct options_request checked(struct options requested, struct base_facts facts);
 static struct options_request reject_unknown(PyObject * keyword);
 static PyObject * accepted_keywords(void);
 
 struct options_request options_read(
 	PyObject * const keywords,
 	struct options const inherited,
-	bool const fielded_base_is_frozen,
-	bool const weakref_slot_carried
+	struct base_facts const facts
 ) {
 	if (keywords == NULL) {
 		return (struct options_request){.tag = OPTIONS_RESOLVED, .options = inherited};
 	}
 
 	struct options requested = inherited;
-	bool weakref_written = false;
 	PyObject * keyword;
 	PyObject * value;
 	Py_ssize_t position = 0;
@@ -60,23 +58,10 @@ struct options_request options_read(
 			return (struct options_request){.tag = OPTIONS_REJECTED};
 		}
 
-		weakref_written |= found.option == OPTION_WEAKREF;
 		requested = with_option(requested, found.option, truth != 0);
 	}
 
-	struct options_request const checked_request = checked(requested, fielded_base_is_frozen);
-
-	if (checked_request.tag == OPTIONS_REJECTED) {
-		return checked_request;
-	}
-
-	if (weakref_written && !requested.weakref && weakref_slot_carried) {
-		PyErr_SetString(PyExc_TypeError, "weakref=False cannot drop a weakref slot a base carries");
-
-		return (struct options_request){.tag = OPTIONS_REJECTED};
-	}
-
-	return checked_request;
+	return checked(requested, facts);
 }
 
 static struct option_lookup find_option(PyObject * const keyword) {
@@ -122,9 +107,9 @@ static struct options with_option(
 
 static struct options_request checked(
 	struct options const requested,
-	bool const fielded_base_is_frozen
+	struct base_facts const facts
 ) {
-	if (!requested.frozen && fielded_base_is_frozen) {
+	if (!requested.frozen && facts.fielded_frozen) {
 		PyErr_SetString(PyExc_TypeError, "mutable struct cannot inherit from a frozen one");
 
 		return (struct options_request){.tag = OPTIONS_REJECTED};
@@ -132,6 +117,12 @@ static struct options_request checked(
 
 	if (requested.order && !requested.eq) {
 		PyErr_SetString(PyExc_TypeError, "order=True needs eq=True");
+
+		return (struct options_request){.tag = OPTIONS_REJECTED};
+	}
+
+	if (!requested.weakref && facts.weakref_carried) {
+		PyErr_SetString(PyExc_TypeError, "weakref=False cannot drop a weakref slot a base carries");
 
 		return (struct options_request){.tag = OPTIONS_REJECTED};
 	}
@@ -191,7 +182,12 @@ static void test_no_keywords_inherit_the_base(void) {
 	struct options inherited = options_initial();
 	inherited.eq = false;
 
-	struct options_request const request = options_read(NULL, inherited, false, false);
+	struct options_request const request =
+		options_read(
+			NULL,
+			inherited,
+			(struct base_facts){.fielded_frozen = false, .weakref_carried = false}
+		);
 
 	TEST_ASSERT_EQUAL_INT(OPTIONS_RESOLVED, request.tag);
 	TEST_ASSERT_FALSE(request.options.eq);
@@ -200,7 +196,11 @@ static void test_no_keywords_inherit_the_base(void) {
 
 static void test_a_keyword_replaces_only_the_flag_it_names(void) {
 	PyObject * const keywords = keywords_of("order", true);
-	struct options_request const request = options_read(keywords, options_initial(), false, false);
+	struct options_request const request = options_read(
+		keywords,
+		options_initial(),
+		(struct base_facts){.fielded_frozen = false, .weakref_carried = false}
+	);
 
 	TEST_ASSERT_EQUAL_INT(OPTIONS_RESOLVED, request.tag);
 	TEST_ASSERT_TRUE(request.options.order);
@@ -212,7 +212,11 @@ static void test_a_keyword_replaces_only_the_flag_it_names(void) {
 
 static void test_an_unknown_keyword_is_rejected(void) {
 	PyObject * const keywords = keywords_of("frozn", true);
-	struct options_request const request = options_read(keywords, options_initial(), false, false);
+	struct options_request const request = options_read(
+		keywords,
+		options_initial(),
+		(struct base_facts){.fielded_frozen = false, .weakref_carried = false}
+	);
 
 	TEST_ASSERT_EQUAL_INT(OPTIONS_REJECTED, request.tag);
 	TEST_ASSERT_TRUE(PyErr_ExceptionMatches(PyExc_TypeError));
@@ -226,7 +230,11 @@ static void test_ordering_without_equality_is_rejected(void) {
 	struct options inherited = options_initial();
 	inherited.eq = false;
 
-	struct options_request const request = options_read(keywords, inherited, false, false);
+	struct options_request const request = options_read(
+		keywords,
+		inherited,
+		(struct base_facts){.fielded_frozen = false, .weakref_carried = false}
+	);
 
 	TEST_ASSERT_EQUAL_INT(OPTIONS_REJECTED, request.tag);
 	TEST_ASSERT_TRUE(PyErr_ExceptionMatches(PyExc_TypeError));
@@ -240,14 +248,17 @@ static void test_a_fielded_frozen_base_pins_frozen(void) {
 	struct options_request const constrained = options_read(
 		keywords,
 		options_initial(),
-		true,
-		false
+		(struct base_facts){.fielded_frozen = true, .weakref_carried = false}
 	);
 
 	TEST_ASSERT_EQUAL_INT(OPTIONS_REJECTED, constrained.tag);
 	PyErr_Clear();
 
-	struct options_request const free = options_read(keywords, options_initial(), false, false);
+	struct options_request const free = options_read(
+		keywords,
+		options_initial(),
+		(struct base_facts){.fielded_frozen = false, .weakref_carried = false}
+	);
 
 	TEST_ASSERT_EQUAL_INT(OPTIONS_RESOLVED, free.tag);
 	TEST_ASSERT_FALSE(free.options.frozen);
@@ -257,7 +268,11 @@ static void test_a_fielded_frozen_base_pins_frozen(void) {
 
 static void test_a_carried_weakref_slot_refuses_the_explicit_drop(void) {
 	PyObject * const keywords = keywords_of("weakref", false);
-	struct options_request const refused = options_read(keywords, options_initial(), false, true);
+	struct options_request const refused = options_read(
+		keywords,
+		options_initial(),
+		(struct base_facts){.fielded_frozen = false, .weakref_carried = true}
+	);
 
 	TEST_ASSERT_EQUAL_INT(OPTIONS_REJECTED, refused.tag);
 	TEST_ASSERT_TRUE(PyErr_ExceptionMatches(PyExc_TypeError));
@@ -268,7 +283,11 @@ static void test_a_carried_weakref_slot_refuses_the_explicit_drop(void) {
 
 static void test_weakref_false_without_a_carried_slot_still_resolves(void) {
 	PyObject * const keywords = keywords_of("weakref", false);
-	struct options_request const request = options_read(keywords, options_initial(), false, false);
+	struct options_request const request = options_read(
+		keywords,
+		options_initial(),
+		(struct base_facts){.fielded_frozen = false, .weakref_carried = false}
+	);
 
 	TEST_ASSERT_EQUAL_INT(OPTIONS_RESOLVED, request.tag);
 	TEST_ASSERT_FALSE(request.options.weakref);
@@ -278,10 +297,31 @@ static void test_weakref_false_without_a_carried_slot_still_resolves(void) {
 
 static void test_frozen_true_resolves_over_the_fielded_promise(void) {
 	PyObject * const keywords = keywords_of("frozen", true);
-	struct options_request const request = options_read(keywords, options_initial(), true, false);
+	struct options_request const request = options_read(
+		keywords,
+		options_initial(),
+		(struct base_facts){.fielded_frozen = true, .weakref_carried = false}
+	);
 
 	TEST_ASSERT_EQUAL_INT(OPTIONS_RESOLVED, request.tag);
 	TEST_ASSERT_TRUE(request.options.frozen);
+
+	Py_DECREF(keywords);
+}
+
+static void test_an_unwritten_weakref_over_a_carried_slot_resolves_forced(void) {
+	PyObject * const keywords = keywords_of("frozen", true);
+	struct options inherited = options_initial();
+	inherited.weakref = true;
+
+	struct options_request const request = options_read(
+		keywords,
+		inherited,
+		(struct base_facts){.fielded_frozen = false, .weakref_carried = true}
+	);
+
+	TEST_ASSERT_EQUAL_INT(OPTIONS_RESOLVED, request.tag);
+	TEST_ASSERT_TRUE(request.options.weakref);
 
 	Py_DECREF(keywords);
 }
@@ -298,6 +338,7 @@ void options_tests(void) {
 	RUN_TEST(test_a_carried_weakref_slot_refuses_the_explicit_drop);
 	RUN_TEST(test_weakref_false_without_a_carried_slot_still_resolves);
 	RUN_TEST(test_frozen_true_resolves_over_the_fielded_promise);
+	RUN_TEST(test_an_unwritten_weakref_over_a_carried_slot_resolves_forced);
 }
 
 #endif

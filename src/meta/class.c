@@ -229,18 +229,15 @@ PyObject * build_struct_class(
 	struct salix_state * const state
 ) {
 	StructType const * const behaviour = find_behaviour_base(bases);
-	bool promised_frozen = false;
-	bool const weakref_carried = any_base_has_weakref_slot(bases);
-	struct options const inherited = inherited_options(bases, behaviour, &promised_frozen);
-	struct options_request request =
-		options_read(keywords, inherited, promised_frozen, weakref_carried);
+	struct base_facts const facts = base_facts_of(bases);
+	struct options const inherited = inherited_options(bases, behaviour, facts);
+	struct options_request request = options_read(keywords, inherited, facts);
 
 	if (request.tag == OPTIONS_REJECTED) {
 		return NULL;
 	}
 
-	bool const weakref_requested = request.options.weakref;
-	request.options.weakref |= weakref_carried;
+	bool const weakref_requested = request.options.weakref && !facts.weakref_carried;
 
 	PyTypeObject * const handoff = winning_metatype(metatype, bases);
 	PyObject * forwarded_keywords = NULL;
@@ -310,8 +307,7 @@ PyObject * build_struct_class(
 	}
 
 	if (
-		request.options.weakref &&
-		!weakref_carried &&
+		weakref_requested &&
 		handoff->tp_new != StructMeta_new &&
 		verdict.readable &&
 		verdict.accepts_weakref == 0
@@ -378,7 +374,7 @@ struct field_plan plan = field_plan_build(base, original_namespace);
 			plan.new_names,
 			request.options,
 			base,
-			bases,
+			facts.weakref_carried,
 			inherited,
 			frozen_across_bases,
 			bases_divert_setattro,
@@ -1343,7 +1339,7 @@ static enum result settle_planned(
 
 	bool const carries_slot = carries_weakref_slot((PyTypeObject *) struct_class);
 
-	if (carries_slot != weakref_expected(options, bases)) {
+	if (carries_slot != options.weakref) {
 		return refuse_unplanned(struct_class);
 	}
 

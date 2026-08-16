@@ -59,10 +59,11 @@ struct equality_source {
 StructType * find_struct_base(PyObject * bases);
 StructType * find_behaviour_base(PyObject * bases);
 struct equality_source resolves_body_equality(PyObject * bases);
+struct base_facts base_facts_of(PyObject * bases);
 struct options inherited_options(
 	PyObject * bases,
 	StructType const * behaviour,
-	bool * promised_frozen
+	struct base_facts facts
 );
 bool any_struct_base_is_mutable(PyObject * bases);
 enum { SETTLE_BINDING_COUNT = 7 };
@@ -77,10 +78,8 @@ struct salix_state {
 
 enum result settle_cache_fill(struct salix_state * state);
 PyModuleDef * salix_module_def(void);
-bool any_base_has_weakref_slot(PyObject * bases);
 bool any_base_diverts_setattro(PyObject * bases);
 bool carries_weakref_slot(PyTypeObject const * type);
-bool weakref_expected(struct options options, PyObject * bases);
 bool any_base_has_instance_dict(PyObject * bases);
 
 struct binding_plan binding_plan(
@@ -107,7 +106,7 @@ PyObject * build_class_namespace(
 	PyObject * new_names,
 	struct options options,
 	StructType const * base,
-	PyObject * bases,
+	bool weakref_carried,
 	struct options inherited,
 	bool frozen_across_bases,
 	bool bases_divert_setattro,

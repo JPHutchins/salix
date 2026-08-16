@@ -32,7 +32,7 @@ static enum slot_name_owner slot_name_owner_of(PyObject * const name) {
 	return SLOT_NAME_NONE;
 }
 
-static PyObject * build_slots(PyObject * new_names, bool weakref, PyObject * bases);
+static PyObject * build_slots(PyObject * new_names, bool weakref, bool weakref_carried);
 static enum result set_match_args(PyObject * namespace, PyObject * all_names, bool wanted);
 static enum result apply_options(
 	PyObject * namespace,
@@ -67,7 +67,7 @@ PyObject * build_class_namespace(
 	PyObject * const new_names,
 	struct options const options,
 	StructType const * const base,
-	PyObject * const bases,
+	bool const weakref_carried,
 	struct options const inherited,
 	bool const frozen_across_bases,
 	bool const bases_divert_setattro,
@@ -75,7 +75,7 @@ PyObject * build_class_namespace(
 	bool const inherits_body_eq,
 	bool const derive_not_equal
 ) {
-	PY_OWNED(slots, build_slots(new_names, options.weakref, bases));
+	PY_OWNED(slots, build_slots(new_names, options.weakref, weakref_carried));
 	PY_MOVABLE(namespace, PyDict_Copy(original_namespace));
 
 	if (
@@ -114,7 +114,7 @@ enum result refuse_displaced_slots(
 		return PyErr_Occurred() ? RESULT_ERROR : RESULT_OK;
 	}
 
-	bool const carries_a_weakref_slot = weakref_expected(options, bases);
+	bool const carries_a_weakref_slot = options.weakref;
 	bool const carries_an_instance_dict = any_base_has_instance_dict(bases);
 
 	PY_OWNED(
@@ -277,7 +277,7 @@ enum result refuse_reserved_metadata_names(
 static PyObject * build_slots(
 	PyObject * const new_names,
 	bool const weakref,
-	PyObject * const bases
+	bool const weakref_carried
 ) {
 	PY_OWNED(names, PySequence_List(new_names));
 
@@ -285,7 +285,7 @@ static PyObject * build_slots(
 		return NULL;
 	}
 
-	if (weakref && !any_base_has_weakref_slot(bases)) {
+	if (weakref && !weakref_carried) {
 		PY_OWNED(weakref_name, PyUnicode_FromString(weakref_slot_name()));
 
 		if (weakref_name == NULL || PyList_Append(names, weakref_name) < 0) {

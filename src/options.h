@@ -17,6 +17,11 @@ struct options_request {
 	struct options options;
 };
 
+struct base_facts {
+	bool fielded_frozen;
+	bool weakref_carried;
+};
+
 enum option {
 	OPTION_FROZEN,
 	OPTION_EQ,
@@ -42,6 +47,5 @@ static inline struct options options_initial(void) {
 struct options_request options_read(
 	PyObject * keywords,
 	struct options inherited,
-	bool fielded_base_is_frozen,
-	bool weakref_slot_carried
+	struct base_facts facts
 );

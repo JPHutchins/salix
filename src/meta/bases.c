@@ -205,22 +205,37 @@ static bool carries_fielded_frozen(PyTypeObject const * const base) {
 	return struct_base->struct_field_count > 0 && struct_base->struct_options.frozen;
 }
 
+struct base_facts base_facts_of(PyObject * const bases) {
+	struct base_facts facts = {.fielded_frozen = false, .weakref_carried = false};
+
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(bases); ++i) {
+		PyObject * const base = PyTuple_GET_ITEM(bases, i);
+
+		if (!PyType_Check(base)) {
+			continue;
+		}
+
+		facts.fielded_frozen |= carries_fielded_frozen((PyTypeObject *) base);
+		facts.weakref_carried |= carries_weakref_slot((PyTypeObject *) base);
+	}
+
+	return facts;
+}
+
 struct options inherited_options(
 	PyObject * const bases,
 	StructType const * const behaviour,
-	bool * const promised_frozen
+	struct base_facts const facts
 ) {
 	struct options const from_behaviour = base_options(behaviour);
 
-	*promised_frozen = any_base_satisfies(bases, carries_fielded_frozen);
-
 	return (struct options){
-		.frozen = from_behaviour.frozen || *promised_frozen,
+		.frozen = from_behaviour.frozen || facts.fielded_frozen,
 		.eq = from_behaviour.eq,
 		.order = from_behaviour.order,
 		.repr = from_behaviour.repr,
 		.match_args = from_behaviour.match_args,
-		.weakref = from_behaviour.weakref,
+		.weakref = from_behaviour.weakref || facts.weakref_carried,
 	};
 }
 
@@ -271,14 +286,6 @@ static bool carries_diverting_setattro(PyTypeObject const * const base) {
 
 bool any_base_diverts_setattro(PyObject * const bases) {
 	return any_base_satisfies(bases, carries_diverting_setattro);
-}
-
-bool any_base_has_weakref_slot(PyObject * const bases) {
-	return any_base_satisfies(bases, carries_weakref_slot);
-}
-
-bool weakref_expected(struct options const options, PyObject * const bases) {
-	return options.weakref || any_base_satisfies(bases, carries_weakref_slot);
 }
 
 bool any_base_has_instance_dict(PyObject * const bases) {
