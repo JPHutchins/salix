@@ -1662,12 +1662,61 @@ static void test_a_later_bases_slot_forces_the_record(void) {
 	TEST_ASSERT_TRUE(carries_weakref_slot((PyTypeObject *) mixed_child));
 }
 
+static void test_every_settle_name_refuses_a_hostile_key(void) {
+	PY_OWNED(
+		hostile_class,
+		testing_evaluate(
+			"class HostileKey(str):\n"
+			"    __hash__ = str.__hash__\n"
+			"    def __eq__(self, other):\n"
+			"        raise ValueError('nope')\n"
+			"result = HostileKey\n"
+		)
+	);
+	TEST_ASSERT_NOT_NULL(hostile_class);
+
+	PY_OWNED(salix, PyImport_ImportModule("salix"));
+	TEST_ASSERT_NOT_NULL(salix);
+
+	PY_OWNED(struct_base, PyObject_GetAttrString(salix, "Struct"));
+	TEST_ASSERT_NOT_NULL(struct_base);
+
+	PY_OWNED(bases, PyTuple_Pack(1, struct_base));
+	TEST_ASSERT_NOT_NULL(bases);
+
+	PY_OWNED(class_name, PyUnicode_FromString("Hostile"));
+	TEST_ASSERT_NOT_NULL(class_name);
+
+	for (char const * const * const * tables = settle_tables; *tables != NULL; tables += 1) {
+		for (char const * const * name = *tables; *name != NULL; name += 1) {
+			PY_OWNED(namespace, PyDict_New());
+			PY_OWNED(annotations, PyDict_New());
+			PY_OWNED(hostile_key, PyObject_CallFunction(hostile_class, "s", *name));
+
+			if (
+				PyDict_SetItemString(annotations, "x", (PyObject *) &PyLong_Type) < 0 ||
+				PyDict_SetItemString(namespace, "__annotations__", annotations) < 0 ||
+				PyDict_SetItem(namespace, hostile_key, Py_True) < 0
+			) {
+				TEST_FAIL();
+			}
+
+			PY_OWNED(args, PyTuple_Pack(3, class_name, bases, namespace));
+			PY_OWNED(built, PyObject_Call((PyObject *) &StructMeta_Type, args, NULL));
+			TEST_ASSERT_NULL(built);
+			TEST_ASSERT_TRUE(PyErr_ExceptionMatches(PyExc_ValueError));
+			PyErr_Clear();
+		}
+	}
+}
+
 void class_tests(void) {
 	/* Unity takes its file from UNITY_BEGIN, which is the runner's. */
 	Unity.TestFile = __FILE__;
 
 	RUN_TEST(test_a_raw_tp_setattro_co_base_does_not_divert_the_struct_slot);
 	RUN_TEST(test_a_later_bases_slot_forces_the_record);
+	RUN_TEST(test_every_settle_name_refuses_a_hostile_key);
 }
 
 #endif
