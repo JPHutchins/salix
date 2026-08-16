@@ -22,6 +22,7 @@
 
 #ifdef TESTING
 static PyTypeObject * frozen_column_repair_owner = NULL;
+static bool settle_sweep_refused = false;
 #endif
 
 static StructType * create_class(
@@ -123,6 +124,33 @@ static char const * const * const settle_tables[] = {
 	NULL,
 };
 
+static void for_each_settle_name(
+	void (*visit)(char const * const name, void * const context),
+	void * const context
+) {
+	for (char const * const * const * tables = settle_tables; *tables != NULL; tables += 1) {
+		for (char const * const * name = *tables; *name != NULL; name += 1) {
+			visit(*name, context);
+		}
+	}
+}
+
+struct sweep_state {
+	PyObject * namespace;
+	bool failed;
+};
+
+static void probe_settle_name(char const * const name, void * const context) {
+	struct sweep_state * const state = context;
+
+	if (!state->failed && dict_has_string(state->namespace, name) < 0) {
+#ifdef TESTING
+		settle_sweep_refused = true;
+#endif
+		state->failed = true;
+	}
+}
+
 /* An exact-str key answers a probe by identity or in C, so a namespace of
  * them cannot fail the sweep; anything else might. The sweep is what turns
  * a poisoned lookup into a propagated error before type.__new__ misreads it
@@ -134,19 +162,11 @@ static enum result verify_settle_names_readable(PyObject * const original_namesp
 
 	while (PyDict_Next(original_namespace, &position, &key, &value)) {
 		if (!PyUnicode_CheckExact(key)) {
-			for (
-				char const * const * const * tables = settle_tables;
-				*tables != NULL;
-				tables += 1
-			) {
-				for (char const * const * name = *tables; *name != NULL; name += 1) {
-					if (dict_has_string(original_namespace, *name) < 0) {
-						return RESULT_ERROR;
-					}
-				}
-			}
+			struct sweep_state state = {.namespace = original_namespace, .failed = false};
 
-			return RESULT_OK;
+			for_each_settle_name(probe_settle_name, &state);
+
+			return state.failed ? RESULT_ERROR : RESULT_OK;
 		}
 	}
 
@@ -1662,12 +1682,85 @@ static void test_a_later_bases_slot_forces_the_record(void) {
 	TEST_ASSERT_TRUE(carries_weakref_slot((PyTypeObject *) mixed_child));
 }
 
+struct hostile_probe_state {
+	PyObject * hostile_class;
+	PyObject * bases;
+	PyObject * class_name;
+};
+
+static void probe_a_hostile_settle_name(char const * const name, void * const context) {
+	struct hostile_probe_state const * const state = context;
+
+	PY_OWNED(namespace, PyDict_New());
+	PY_OWNED(annotations, PyDict_New());
+	PY_OWNED(hostile_key, PyObject_CallFunction(state->hostile_class, "s", name));
+	TEST_ASSERT_NOT_NULL(namespace);
+	TEST_ASSERT_NOT_NULL(annotations);
+	TEST_ASSERT_NOT_NULL(hostile_key);
+
+	TEST_ASSERT_EQUAL_INT(0, PyDict_SetItemString(annotations, "x", (PyObject *) &PyLong_Type));
+	TEST_ASSERT_EQUAL_INT(0, PyDict_SetItemString(namespace, "__annotations__", annotations));
+	TEST_ASSERT_EQUAL_INT(0, PyDict_SetItem(namespace, hostile_key, Py_True));
+
+	PY_OWNED(args, PyTuple_Pack(3, state->class_name, state->bases, namespace));
+	TEST_ASSERT_NOT_NULL(args);
+
+	settle_sweep_refused = false;
+	PY_OWNED(built, PyObject_Call((PyObject *) &StructMeta_Type, args, NULL));
+	TEST_ASSERT_NULL(built);
+
+	PyObject * exception_type;
+	PyObject * exception_value;
+	PyObject * traceback;
+	PyErr_Fetch(&exception_type, &exception_value, &traceback);
+	TEST_ASSERT_TRUE(PyErr_GivenExceptionMatches(exception_value, PyExc_ValueError));
+	TEST_ASSERT_TRUE(settle_sweep_refused);
+	Py_XDECREF(exception_type);
+	Py_XDECREF(exception_value);
+	Py_XDECREF(traceback);
+}
+
+static void test_every_settle_name_refuses_a_hostile_key(void) {
+	PY_OWNED(
+		hostile_class,
+		testing_evaluate(
+			"class HostileKey(str):\n"
+			"    __hash__ = str.__hash__\n"
+			"    def __eq__(self, other):\n"
+			"        raise ValueError('nope')\n"
+			"result = HostileKey\n"
+		)
+	);
+	TEST_ASSERT_NOT_NULL(hostile_class);
+
+	PY_OWNED(salix, PyImport_ImportModule("salix"));
+	TEST_ASSERT_NOT_NULL(salix);
+
+	PY_OWNED(struct_base, PyObject_GetAttrString(salix, "Struct"));
+	TEST_ASSERT_NOT_NULL(struct_base);
+
+	PY_OWNED(bases, PyTuple_Pack(1, struct_base));
+	TEST_ASSERT_NOT_NULL(bases);
+
+	PY_OWNED(class_name, PyUnicode_FromString("Hostile"));
+	TEST_ASSERT_NOT_NULL(class_name);
+
+	struct hostile_probe_state const state = {
+		.hostile_class = hostile_class,
+		.bases = bases,
+		.class_name = class_name,
+	};
+
+	for_each_settle_name(probe_a_hostile_settle_name, (void *) &state);
+}
+
 void class_tests(void) {
 	/* Unity takes its file from UNITY_BEGIN, which is the runner's. */
 	Unity.TestFile = __FILE__;
 
 	RUN_TEST(test_a_raw_tp_setattro_co_base_does_not_divert_the_struct_slot);
 	RUN_TEST(test_a_later_bases_slot_forces_the_record);
+	RUN_TEST(test_every_settle_name_refuses_a_hostile_key);
 }
 
 #endif

@@ -1142,3 +1142,23 @@ def test_a_hostile_key_injected_by_a_metaclass_new_propagates():
     with pytest.raises(ValueError, match="nope"):
         class Base(Struct, metaclass=Injecting):
             x: int
+
+
+def test_a_hostile_key_injected_during_the_reentered_handoff_propagates():
+    """The injection above lands before the first build frame; this one lands
+    between the outer frame's sweep and the re-entered frame's, so only the
+    re-entered frame's sweep can refuse it.
+    """
+
+    class Injecting(META):
+        def __new__(cls, name, bases, namespace, **kwargs):
+            if "__slots__" in namespace:
+                namespace[HostileKey("__init__")] = 1
+
+            return super().__new__(cls, name, bases, namespace, **kwargs)
+
+    class Base(Struct, metaclass=Injecting):
+        x: int
+
+    with pytest.raises(ValueError, match="nope"):
+        META("Built", (Base,), {"__annotations__": {"y": int}}, order=True)
