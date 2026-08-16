@@ -360,15 +360,55 @@ class TestAMetaclassSubclass:
         assert built(1, 2) < built(1, 3)
 
     def test_a_delegate_that_cannot_take_the_options_cannot_add_the_weakref_slot(self):
-        """The keywords cannot ride a __new__ that does not take them, so the
-        refusal says so instead of blaming the entry salix itself wrote.
+        """The ladder falls to the keyword-less rung, the re-entered build
+        carries the weakref name without the slot, and the displaced-slot
+        advice refuses it instead of blaming the delegate.
         """
 
         class Base(Struct, metaclass=Plain):
             x: int
 
-        with pytest.raises(TypeError, match="cannot cross"):
+        with pytest.raises(TypeError, match="carries no weakref slot"):
             META("Built", (Base,), {"__annotations__": {"y": int}}, weakref=True)
+
+    def test_a_c_slot_delegate_still_builds(self):
+        """A __new__ that is a slot wrapper, not a Python function, used to be
+        refused as unreadable; the ladder attempts it and the keyword-less
+        rung catches it when it declines.
+        """
+
+        class SlottedNew(META):
+            __new__ = type.__new__
+
+        class Base(Struct, metaclass=SlottedNew):
+            x: int
+
+        built = META("Built", (Base,), {"__annotations__": {"y": int}}, order=True)
+
+        assert built(1, 2) < built(1, 3)
+
+    def test_a_body_type_error_propagates_without_a_retry(self):
+        """Only binding failures fall to the next rung; a TypeError the
+        delegate's body raises propagates, and the body ran exactly once.
+        """
+
+        calls = []
+
+        class BodyRaising(META):
+            def __new__(metacls, name, bases, namespace, **keywords):
+                if keywords:
+                    calls.append(1)
+                    raise TypeError("boom")
+
+                return super().__new__(metacls, name, bases, namespace)
+
+        class Base(Struct, metaclass=BodyRaising):
+            x: int
+
+        with pytest.raises(TypeError, match="boom"):
+            META("Built", (Base,), {"__annotations__": {"y": int}}, order=True)
+
+        assert calls == [1]
 
     def test_a_declining_chain_still_gets_the_frozen_record(self):
         """The declining delegate's chain drops the frozen keyword from the
