@@ -1152,7 +1152,7 @@ def test_a_hostile_key_injected_during_the_reentered_handoff_propagates():
 
     class Injecting(META):
         def __new__(cls, name, bases, namespace, **kwargs):
-            if kwargs:
+            if "__slots__" in namespace:
                 namespace[HostileKey("__init__")] = 1
 
             return super().__new__(cls, name, bases, namespace, **kwargs)
