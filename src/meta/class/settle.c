@@ -8,7 +8,9 @@
 #include "../../hash.h"
 #include "../meta.h"
 #include "../../mixin.h"
+#include "../../options.h"
 #include "../../owned.h"
+#include "../../result.h"
 #include "../../types.h"
 
 #ifdef TESTING

@@ -4,7 +4,9 @@
 #include "../../construct.h"
 #include "../../fields.h"
 #include "../meta.h"
+#include "../../options.h"
 #include "../../owned.h"
+#include "../../result.h"
 #include "../../types.h"
 
 static Py_ssize_t * resolve_slot_offsets(

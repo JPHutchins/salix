@@ -12,6 +12,7 @@
 #include "../../options.h"
 #include "../../owned.h"
 #include "../../result.h"
+#include "../../types.h"
 
 struct chain_verdict {
 	int accepts_all;
