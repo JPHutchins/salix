@@ -93,6 +93,7 @@ PyObject * build_class_namespace(
 	PyObject * bases,
 	struct options inherited,
 	bool frozen_across_bases,
+	bool bases_divert_setattro,
 	bool body_defines_eq,
 	bool inherits_body_eq,
 	bool derive_not_equal

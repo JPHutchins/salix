@@ -70,6 +70,7 @@ PyObject * build_class_namespace(
 	PyObject * const bases,
 	struct options const inherited,
 	bool const frozen_across_bases,
+	bool const bases_divert_setattro,
 	bool const body_defines_eq,
 	bool const inherits_body_eq,
 	bool const derive_not_equal
@@ -88,7 +89,7 @@ PyObject * build_class_namespace(
 				options,
 				inherited,
 				frozen_across_bases,
-				any_base_diverts_setattro(bases),
+				bases_divert_setattro,
 				body_defines_eq,
 				inherits_body_eq,
 				derive_not_equal
