@@ -55,6 +55,8 @@ enum result install_fields(
 
 	struct_class->struct_field_names = py_move(&field_names);
 	struct_class->struct_defaults = Py_NewRef(plan->defaults);
+	struct_class->struct_annotations = Py_NewRef(plan->annotations);
+	struct_class->struct_metadata = Py_NewRef(plan->metadata);
 	struct_class->struct_slot_offsets = offsets;
 	struct_class->struct_member_offsets = member_offsets;
 	struct_class->struct_member_count = member_count;

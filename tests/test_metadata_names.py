@@ -1,16 +1,20 @@
-from typing import ClassVar
+from typing import Annotated, ClassVar
 
 import pytest
 
 from salix import Struct
 
-SALIX = ("_struct_fields_", "_struct_defaults_")
-MSGSPEC = ("__struct_fields__", "__struct_defaults__")
+SALIX = ("_struct_fields_", "_struct_defaults_", "_struct_annotations_", "_struct_metadata_")
+MSGSPEC = ("__struct_fields__", "__struct_defaults__", "__struct_annotations__", "__struct_metadata__")
 EXPECTED = (
     ("_struct_fields_", ("x", "y")),
     ("__struct_fields__", ("x", "y")),
     ("_struct_defaults_", (2,)),
     ("__struct_defaults__", (2,)),
+    ("_struct_annotations_", (int, int)),
+    ("__struct_annotations__", (int, int)),
+    ("_struct_metadata_", ((), ())),
+    ("__struct_metadata__", ((), ())),
 )
 MIXIN = Struct.__mro__[1]
 META = type(Struct)
@@ -34,9 +38,8 @@ def test_every_spelling_reports_the_value_itself_on_the_class(name, expected):
 
 @pytest.mark.parametrize(("name", "expected"), EXPECTED)
 def test_every_spelling_reports_the_value_itself_on_an_instance(name, expected):
-    """Worth stating separately: the mixin wires the four names to four
-    different functions, so a crossed `which` enum shows up here and nowhere
-    else.
+    """Worth stating separately: the mixin wires each name to its own
+    function, so a crossed `which` enum shows up here and nowhere else.
     """
 
     assert getattr(Point(1), name) == expected
@@ -69,7 +72,7 @@ def test_salix_writes_no_spelling_into_the_classes_it_builds(name):
 
 @pytest.mark.parametrize("name", SALIX + MSGSPEC)
 def test_a_field_named_any_of_them_is_refused(name):
-    """The reservation is real: a field that takes one of the four names is
+    """The reservation is real: a field that takes one of the reserved names is
     refused, because the class would answer with the metadata while the
     instance answered with the field. What #82 settled rather than left as a
     discovery.
@@ -150,7 +153,7 @@ def test_an_unannotated_binding_of_an_ordinary_name_stays_in_the_class_dict():
 @pytest.mark.parametrize("name", SALIX + MSGSPEC)
 def test_a_class_statement_taking_a_reserved_name_is_refused(name):
     """The refusal holds on the syntax users write, not only the metaclass
-    call: a plain body binding of any of the four spellings is refused.
+    call: a plain body binding of any of the spellings is refused.
     """
 
     with pytest.raises(TypeError, match="is reserved for salix's metadata"):
@@ -247,3 +250,71 @@ def test_a_subclass_reports_its_own_fields_under_both_names():
     assert Extended.__struct_fields__ == ("x", "y", "z")
     assert Extended._struct_defaults_ == (2, 3)
     assert Extended.__struct_defaults__ == (2, 3)
+
+
+def test_annotated_splits_into_the_base_and_the_extras():
+    class Tagged(Struct):
+        name: Annotated[str, "meta"]
+        count: int = 0
+
+    assert Tagged.__struct_annotations__ == (str, int)
+    assert Tagged.__struct_metadata__ == (("meta",), ())
+
+
+def test_a_subclass_aligns_the_inherited_annotations_first():
+    class Base(Struct):
+        x: int
+
+    class Child(Base):
+        y: Annotated[str, 1]
+
+    assert Child.__struct_annotations__ == (int, str)
+    assert Child.__struct_metadata__ == ((), (1,))
+
+
+def test_a_generic_alias_stays_whole():
+    class Box(Struct):
+        values: list[int]
+
+    assert Box.__struct_annotations__ == (list[int],)
+    assert Box.__struct_metadata__ == ((),)
+
+
+def test_an_annotated_inside_optional_stays_whole():
+    class Unioned(Struct):
+        value: int | Annotated[str, "meta"] | None
+
+    assert Unioned.__struct_annotations__ == (int | Annotated[str, "meta"] | None,)
+    assert Unioned.__struct_metadata__ == ((),)
+
+
+def test_a_re_annotated_inherited_field_reports_the_bases_values():
+    class Base(Struct):
+        x: int
+
+    class Child(Base):
+        x: str
+
+    assert Child.__struct_annotations__ == (int,)
+    assert Child.__struct_metadata__ == ((),)
+
+
+def test_a_fake_annotated_without_an_origin_stays_whole_with_its_extras():
+    class MetadataOnly:
+        def __init__(self) -> None:
+            self.__metadata__ = ("meta",)
+
+    class Tagged(Struct):
+        v: MetadataOnly()
+
+    assert Tagged.__struct_annotations__[0].__class__ is MetadataOnly
+    assert Tagged.__struct_metadata__ == (("meta",),)
+
+
+def test_a_non_tuple_metadata_is_refused():
+    class MetadataOnly:
+        def __init__(self) -> None:
+            self.__metadata__ = "meta"
+
+    with pytest.raises(TypeError, match="Annotated metadata must be a tuple"):
+        type(Struct)("Tagged", (Struct,), {"__annotations__": {"v": MetadataOnly()}})

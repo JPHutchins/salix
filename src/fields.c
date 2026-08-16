@@ -36,7 +36,9 @@ enum inheritance : int {
 static enum result append_inherited(
 	StructType const * base,
 	PyObject * all_names,
-	PyObject * default_by_name
+	PyObject * default_by_name,
+	PyObject * annotation_values,
+	PyObject * metadata_values
 );
 static enum result append_declared(
 	StructType const * base,
@@ -44,7 +46,17 @@ static enum result append_declared(
 	PyObject * namespace,
 	PyObject * all_names,
 	PyObject * new_names,
-	PyObject * default_by_name
+	PyObject * default_by_name,
+	PyObject * annotation_values,
+	PyObject * metadata_values,
+	PyObject * empty_extras
+);
+static enum result append_annotation(
+	PyObject * annotation,
+	PyObject * annotation_values,
+	PyObject * metadata_values,
+	PyObject * empty_extras,
+	bool typing_loaded
 );
 
 static struct special_form const CLASS_VAR_FORM = {
@@ -61,6 +73,10 @@ char const * const reserved_metadata_names[] = {
 	"_struct_defaults_",
 	"__struct_fields__",
 	"__struct_defaults__",
+	"_struct_annotations_",
+	"_struct_metadata_",
+	"__struct_annotations__",
+	"__struct_metadata__",
 	NULL,
 };
 
@@ -116,21 +132,47 @@ struct field_plan field_plan_build(StructType const * const base, PyObject * con
 
 	PY_MOVABLE(all_names, PyList_New(0));
 	PY_MOVABLE(new_names, PyList_New(0));
+	PY_MOVABLE(annotation_values, PyList_New(0));
+	PY_MOVABLE(metadata_values, PyList_New(0));
 	PY_OWNED(default_by_name, PyDict_New());
+	PY_OWNED(empty_extras, PyTuple_New(0));
 
 	if (
 		all_names != NULL &&
 		new_names != NULL &&
+		annotation_values != NULL &&
+		metadata_values != NULL &&
 		default_by_name != NULL &&
-		append_inherited(base, all_names, default_by_name) == RESULT_OK &&
-		append_declared(base, annotations, namespace, all_names, new_names, default_by_name) ==
+		empty_extras != NULL &&
+		append_inherited(base, all_names, default_by_name, annotation_values, metadata_values) ==
+			RESULT_OK &&
+		append_declared(
+				base,
+				annotations,
+				namespace,
+				all_names,
+				new_names,
+				default_by_name,
+				annotation_values,
+				metadata_values,
+				empty_extras
+			) ==
 			RESULT_OK
 	) {
-		plan.defaults = build_defaults(all_names, default_by_name);
+		PyObject * built_defaults = build_defaults(all_names, default_by_name);
+		PyObject * built_annotations = PyList_AsTuple(annotation_values);
+		PyObject * built_metadata = PyList_AsTuple(metadata_values);
 
-		if (plan.defaults != NULL) {
+		if (built_defaults != NULL && built_annotations != NULL && built_metadata != NULL) {
+			plan.defaults = built_defaults;
+			plan.annotations = built_annotations;
+			plan.metadata = built_metadata;
 			plan.all_names = py_move(&all_names);
 			plan.new_names = py_move(&new_names);
+		} else {
+			Py_XDECREF(built_defaults);
+			Py_XDECREF(built_annotations);
+			Py_XDECREF(built_metadata);
 		}
 	}
 
@@ -141,6 +183,8 @@ void field_plan_clear(struct field_plan * const plan) {
 	Py_CLEAR(plan->all_names);
 	Py_CLEAR(plan->new_names);
 	Py_CLEAR(plan->defaults);
+	Py_CLEAR(plan->annotations);
+	Py_CLEAR(plan->metadata);
 }
 
 static PyObject * checked_annotations(PyObject * const namespace) {
@@ -158,10 +202,26 @@ static PyObject * checked_annotations(PyObject * const namespace) {
 static enum result append_inherited(
 	StructType const * const base,
 	PyObject * const all_names,
-	PyObject * const default_by_name
+	PyObject * const default_by_name,
+	PyObject * const annotation_values,
+	PyObject * const metadata_values
 ) {
 	if (base == NULL) {
 		return RESULT_OK;
+	}
+
+	if (
+		base->struct_annotations == NULL ||
+		base->struct_metadata == NULL ||
+		PyTuple_GET_SIZE(base->struct_annotations) != base->struct_field_count ||
+		PyTuple_GET_SIZE(base->struct_metadata) != base->struct_field_count
+	) {
+		PyErr_SetString(
+			PyExc_SystemError,
+			"salix internal error: a base's annotation tuples do not align with its fields"
+		);
+
+		return RESULT_ERROR;
 	}
 
 	Py_ssize_t const required_count = struct_required_count(base);
@@ -169,7 +229,11 @@ static enum result append_inherited(
 	for (Py_ssize_t i = 0; i < base->struct_field_count; ++i) {
 		PyObject * const field_name = PyTuple_GET_ITEM(base->struct_field_names, i);
 
-		if (PyList_Append(all_names, field_name) < 0) {
+		if (
+			PyList_Append(all_names, field_name) < 0 ||
+			PyList_Append(annotation_values, PyTuple_GET_ITEM(base->struct_annotations, i)) < 0 ||
+			PyList_Append(metadata_values, PyTuple_GET_ITEM(base->struct_metadata, i)) < 0
+		) {
 			return RESULT_ERROR;
 		}
 
@@ -188,13 +252,82 @@ static enum result append_inherited(
 	return RESULT_OK;
 }
 
+static enum result append_annotation(
+	PyObject * const annotation,
+	PyObject * const annotation_values,
+	PyObject * const metadata_values,
+	PyObject * const empty_extras,
+	bool const typing_loaded
+) {
+	/* A type is the common case and cannot be the Annotated split; the probe
+	 * costs a raise-and-clear cycle per field, so types skip it. */
+	if (!typing_loaded || PyType_Check(annotation)) {
+		return (
+			(
+				PyList_Append(annotation_values, annotation) >= 0 &&
+				PyList_Append(metadata_values, empty_extras) >= 0
+			) ? RESULT_OK :
+			RESULT_ERROR
+		);
+	}
+
+	PY_OWNED(extras, optional_attribute(annotation, "__metadata__"));
+
+	if (extras == NULL) {
+		if (PyErr_Occurred()) {
+			return RESULT_ERROR;
+		}
+
+		return (
+			(
+				PyList_Append(annotation_values, annotation) >= 0 &&
+				PyList_Append(metadata_values, empty_extras) >= 0
+			) ? RESULT_OK :
+			RESULT_ERROR
+		);
+	}
+
+	if (!PyTuple_Check(extras)) {
+		PyErr_SetString(PyExc_TypeError, "Annotated metadata must be a tuple");
+
+		return RESULT_ERROR;
+	}
+
+	PY_OWNED(origin, optional_attribute(annotation, "__origin__"));
+
+	if (origin == NULL) {
+		if (PyErr_Occurred()) {
+			return RESULT_ERROR;
+		}
+
+		return (
+			(
+				PyList_Append(annotation_values, annotation) >= 0 &&
+				PyList_Append(metadata_values, extras) >= 0
+			) ? RESULT_OK :
+			RESULT_ERROR
+		);
+	}
+
+	return (
+		(
+			PyList_Append(annotation_values, origin) >= 0 &&
+			PyList_Append(metadata_values, extras) >= 0
+		) ? RESULT_OK :
+		RESULT_ERROR
+	);
+}
+
 static enum result append_declared(
 	StructType const * const base,
 	PyObject * const annotations,
 	PyObject * const namespace,
 	PyObject * const all_names,
 	PyObject * const new_names,
-	PyObject * const default_by_name
+	PyObject * const default_by_name,
+	PyObject * const annotation_values,
+	PyObject * const metadata_values,
+	PyObject * const empty_extras
 ) {
 	if (PyDict_GET_SIZE(annotations) == 0) {
 		return RESULT_OK;
@@ -296,7 +429,18 @@ static enum result append_declared(
 			return RESULT_ERROR;
 		}
 
-		if (PyList_Append(all_names, field_name) < 0 || PyList_Append(new_names, field_name) < 0) {
+		if (
+			PyList_Append(all_names, field_name) < 0 ||
+			PyList_Append(new_names, field_name) < 0 ||
+			append_annotation(
+					annotation,
+					annotation_values,
+					metadata_values,
+					empty_extras,
+					probes.class_var != NULL
+				) !=
+				RESULT_OK
+		) {
 			return RESULT_ERROR;
 		}
 	}

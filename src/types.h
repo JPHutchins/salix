@@ -25,6 +25,8 @@ typedef struct StructType {
 
 	PyObject * struct_field_names;
 	PyObject * struct_defaults;
+	PyObject * struct_annotations;
+	PyObject * struct_metadata;
 	Py_ssize_t * struct_slot_offsets;
 	Py_ssize_t * struct_member_offsets;
 	PyObject * struct_post_init;
@@ -309,6 +311,8 @@ static inline PyObject * struct_tuple_or_empty(PyObject * const tuple) {
 enum struct_metadata : int {
 	STRUCT_FIELD_NAMES,
 	STRUCT_DEFAULTS,
+	STRUCT_ANNOTATIONS,
+	STRUCT_METADATA,
 };
 
 static inline PyObject * struct_metadata(
@@ -322,6 +326,10 @@ static inline PyObject * struct_metadata(
 			return struct_tuple_or_empty(type->struct_field_names);
 		case STRUCT_DEFAULTS:
 			return struct_tuple_or_empty(type->struct_defaults);
+		case STRUCT_ANNOTATIONS:
+			return struct_tuple_or_empty(type->struct_annotations);
+		case STRUCT_METADATA:
+			return struct_tuple_or_empty(type->struct_metadata);
 	}
 
 	Py_UNREACHABLE();

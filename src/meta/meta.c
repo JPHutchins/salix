@@ -11,6 +11,8 @@ static int StructMeta_clear(PyObject * self);
 static void StructMeta_dealloc(PyObject * self);
 static PyObject * StructMeta_get_field_names(PyObject * self, void * closure);
 static PyObject * StructMeta_get_defaults(PyObject * self, void * closure);
+static PyObject * StructMeta_get_annotations(PyObject * self, void * closure);
+static PyObject * StructMeta_get_metadata(PyObject * self, void * closure);
 static PyGetSetDef StructMeta_getset[];
 static PyObject * StructMeta_call(PyObject * self, PyObject * args, PyObject * keywords);
 PyTypeObject StructMeta_Type = {
@@ -55,6 +57,26 @@ static PyGetSetDef StructMeta_getset[] = {
 		.get = StructMeta_get_defaults,
 		.doc = "tuple of trailing defaults, under msgspec's name for it",
 	},
+	{
+		.name = "_struct_annotations_",
+		.get = StructMeta_get_annotations,
+		.doc = "the field annotations, aligned with the fields",
+	},
+	{
+		.name = "__struct_annotations__",
+		.get = StructMeta_get_annotations,
+		.doc = "the field annotations under the public name for it",
+	},
+	{
+		.name = "_struct_metadata_",
+		.get = StructMeta_get_metadata,
+		.doc = "the Annotated extras per field, aligned with the fields",
+	},
+	{
+		.name = "__struct_metadata__",
+		.get = StructMeta_get_metadata,
+		.doc = "the Annotated extras under the public name for it",
+	},
 	{.name = NULL},
 };
 
@@ -64,6 +86,14 @@ static PyObject * StructMeta_get_field_names(PyObject * const self, void * const
 
 static PyObject * StructMeta_get_defaults(PyObject * const self, void * const closure) {
 	return struct_metadata((StructType *) self, STRUCT_DEFAULTS);
+}
+
+static PyObject * StructMeta_get_annotations(PyObject * const self, void * const closure) {
+	return struct_metadata((StructType *) self, STRUCT_ANNOTATIONS);
+}
+
+static PyObject * StructMeta_get_metadata(PyObject * const self, void * const closure) {
+	return struct_metadata((StructType *) self, STRUCT_METADATA);
 }
 
 PyObject * StructMeta_new(
@@ -193,6 +223,8 @@ static int StructMeta_traverse(PyObject * const self, visitproc const visit, voi
 
 	Py_VISIT(struct_class->struct_field_names);
 	Py_VISIT(struct_class->struct_defaults);
+	Py_VISIT(struct_class->struct_annotations);
+	Py_VISIT(struct_class->struct_metadata);
 	Py_VISIT(struct_class->struct_post_init);
 
 	return PyType_Type.tp_traverse(self, visit, arg);
@@ -209,6 +241,8 @@ static int StructMeta_clear(PyObject * const self) {
 
 	Py_CLEAR(struct_class->struct_field_names);
 	Py_CLEAR(struct_class->struct_defaults);
+	Py_CLEAR(struct_class->struct_annotations);
+	Py_CLEAR(struct_class->struct_metadata);
 	PyMem_Free(struct_class->struct_slot_offsets);
 	struct_class->struct_slot_offsets = NULL;
 	PyMem_Free(struct_class->struct_member_offsets);
