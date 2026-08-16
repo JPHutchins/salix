@@ -46,6 +46,10 @@ PyObject * Struct_vectorcall(
 		return NULL;
 	}
 
+	if (type->struct_singleton != NULL && positional_count == 0 && keyword_names == NULL) {
+		return Py_NewRef(type->struct_singleton);
+	}
+
 	PyTypeObject * const python_class = &type->heap_type.ht_type;
 
 	PY_MOVABLE(self, python_class->tp_alloc(python_class, 0));
@@ -72,13 +76,21 @@ PyObject * Struct_new(
 	PyObject * const arguments,
 	PyObject * const keywords
 ) {
+	StructType const * const type = (StructType *) struct_class;
+
+	if (
+		type->struct_singleton != NULL &&
+		PyTuple_GET_SIZE(arguments) == 0 &&
+		(keywords == NULL || PyDict_GET_SIZE(keywords) == 0)
+	) {
+		return Py_NewRef(type->struct_singleton);
+	}
+
 	PY_MOVABLE(self, struct_class->tp_alloc(struct_class, 0));
 
 	if (self == NULL) {
 		return NULL;
 	}
-
-	StructType const * const type = (StructType *) struct_class;
 
 	return (
 		fill_defaults(type, self, struct_required_count(type)) == RESULT_OK ? py_move(&self) :

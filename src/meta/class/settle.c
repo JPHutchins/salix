@@ -902,7 +902,11 @@ enum result settle_planned(
 		struct_class->heap_type.ht_type.tp_vectorcall = Struct_vectorcall;
 	}
 
-	return install_post_init(struct_class);
+	if (install_post_init(struct_class) != RESULT_OK) {
+		return RESULT_ERROR;
+	}
+
+	return ensure_singleton(struct_class);
 }
 
 static enum result restore_stripped(

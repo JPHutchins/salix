@@ -71,7 +71,43 @@ enum result install_fields(
 		struct_class->heap_type.ht_type.tp_vectorcall = Struct_vectorcall;
 	}
 
-	return install_post_init(struct_class);
+	if (install_post_init(struct_class) != RESULT_OK) {
+		return RESULT_ERROR;
+	}
+
+	return ensure_singleton(struct_class);
+}
+
+enum result ensure_singleton(StructType * const struct_class) {
+	bool const qualifies = (
+		struct_class->struct_options.frozen &&
+		!struct_class->struct_options.weakref &&
+		struct_class->struct_field_count == 0
+	);
+
+	if (!qualifies) {
+		Py_CLEAR(struct_class->struct_singleton);
+
+		return RESULT_OK;
+	}
+
+	if (struct_class->struct_singleton != NULL) {
+		return RESULT_OK;
+	}
+
+	PY_OWNED(call_args, PyTuple_New(0));
+	PY_OWNED(
+		singleton,
+		call_args != NULL ? PyObject_Call((PyObject *) struct_class, call_args, NULL) : NULL
+	);
+
+	if (singleton == NULL) {
+		return RESULT_ERROR;
+	}
+
+	Py_XSETREF(struct_class->struct_singleton, Py_NewRef(singleton));
+
+	return RESULT_OK;
 }
 
 bool defines_own_init(StructType const * const struct_class) {
