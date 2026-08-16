@@ -32,7 +32,12 @@ PyObject * StructMeta_new(PyTypeObject * metatype, PyObject * args, PyObject * k
 /* The public ``Struct`` base, built once at module init. It is the one class
  * with no struct base among its own, which is exactly what StructMeta_new
  * refuses -- so it is built here instead of through a metaclass call. */
-PyObject * struct_create_root(PyObject * name, PyObject * bases, PyObject * namespace);
+PyObject * struct_create_root(
+	PyObject * name,
+	PyObject * bases,
+	PyObject * namespace,
+	PyObject * module
+);
 
 struct member_lookup {
 	enum { MEMBER_LOOKUP_FOUND, MEMBER_LOOKUP_MISSING, MEMBER_LOOKUP_ERROR } tag;
@@ -60,7 +65,16 @@ struct options inherited_options(
 	bool * promised_frozen
 );
 bool any_struct_base_is_mutable(PyObject * bases);
-void settle_cache_fill(void);
+enum { SETTLE_BINDING_COUNT = 7 };
+
+struct salix_state {
+	PyObject * mixin_bindings[SETTLE_BINDING_COUNT];
+	PyObject * object_bindings[SETTLE_BINDING_COUNT];
+};
+
+enum result settle_cache_fill(struct salix_state * state);
+struct salix_state * settle_state(PyTypeObject * type);
+PyModuleDef * salix_module_def(void);
 bool any_base_has_weakref_slot(PyObject * bases);
 bool any_base_diverts_setattro(PyObject * bases);
 bool carries_weakref_slot(PyTypeObject const * type);

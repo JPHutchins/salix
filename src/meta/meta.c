@@ -107,9 +107,27 @@ PyObject * StructMeta_new(
 PyObject * struct_create_root(
 	PyObject * const name,
 	PyObject * const bases,
-	PyObject * const namespace
+	PyObject * const namespace,
+	PyObject * const module
 ) {
-	return build_struct_class(&StructMeta_Type, NULL, name, bases, namespace, NULL);
+	PyObject * const root = build_struct_class(
+		&StructMeta_Type,
+		NULL,
+		name,
+		bases,
+		namespace,
+		NULL
+	);
+
+	if (root == NULL) {
+		return NULL;
+	}
+
+	/* The settle reaches the module state through the type chain, so the
+	 * root carries the association every subclass inherits the walk to. */
+	Py_XSETREF(((PyHeapTypeObject *) root)->ht_module, Py_NewRef(module));
+
+	return root;
 }
 
 static PyObject * StructMeta_call(

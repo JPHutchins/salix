@@ -9,7 +9,8 @@
 
 static int struct_exec(PyObject * module);
 static enum result add_struct_base(PyObject * module);
-static PyObject * create_struct_base(void);
+static PyObject * create_struct_base(PyObject * module);
+static void struct_free(void * module);
 
 /*
  * A type's field metadata is written once at class creation and then only
@@ -42,13 +43,57 @@ static PyModuleDef struct_module = {
 	PyModuleDef_HEAD_INIT,
 	.m_name = "salix",
 	.m_doc = "A minimal C-backed inheritable Struct base class.",
-	.m_size = 0,
+	.m_size = sizeof(struct salix_state),
 	.m_slots = struct_slots,
 	.m_methods = struct_functions,
+	.m_free = struct_free,
 };
 
 PyMODINIT_FUNC PyInit_salix(void) {
 	return PyModuleDef_Init(&struct_module);
+}
+
+PyModuleDef * salix_module_def(void) {
+	return &struct_module;
+}
+
+struct salix_state * settle_state(PyTypeObject * const type) {
+	PyObject * const mro = type->tp_mro;
+
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); ++i) {
+		PyTypeObject * const entry = (PyTypeObject *) PyTuple_GET_ITEM(mro, i);
+
+		if (!PyType_HasFeature(entry, Py_TPFLAGS_HEAPTYPE)) {
+			continue;
+		}
+
+		PyObject * const module = ((PyHeapTypeObject *) entry)->ht_module;
+
+		if (
+			module != NULL &&
+			PyModule_Check(module) &&
+			PyModule_GetDef(module) == salix_module_def()
+		) {
+			return (struct salix_state *) PyModule_GetState(module);
+		}
+	}
+
+	PyErr_Format(PyExc_SystemError, "%.200s was not built by the salix module", type->tp_name);
+
+	return NULL;
+}
+
+static void struct_free(void * const module) {
+	/* m_free receives the module object on every supported version, so the
+	 * state is reached back through it. */
+	struct salix_state * const state = (struct salix_state *) PyModule_GetState(
+		(PyObject *) module
+	);
+
+	for (Py_ssize_t i = 0; i < SETTLE_BINDING_COUNT; ++i) {
+		Py_CLEAR(state->mixin_bindings[i]);
+		Py_CLEAR(state->object_bindings[i]);
+	}
 }
 
 static int struct_exec(PyObject * const module) {
@@ -58,13 +103,17 @@ static int struct_exec(PyObject * const module) {
 		return RESULT_ERROR;
 	}
 
-	settle_cache_fill();
+	struct salix_state * const state = (struct salix_state *) PyModule_GetState(module);
+
+	if (state == NULL || settle_cache_fill(state) != RESULT_OK) {
+		return RESULT_ERROR;
+	}
 
 	return add_struct_base(module);
 }
 
 static enum result add_struct_base(PyObject * const module) {
-	PyObject * const struct_base = create_struct_base();
+	PyObject * const struct_base = create_struct_base(module);
 
 	if (struct_base == NULL) {
 		return RESULT_ERROR;
@@ -76,7 +125,7 @@ static enum result add_struct_base(PyObject * const module) {
 	return added < 0 ? RESULT_ERROR : RESULT_OK;
 }
 
-static PyObject * create_struct_base(void) {
+static PyObject * create_struct_base(PyObject * const module) {
 	PY_OWNED(name, PyUnicode_FromString("Struct"));
 	PY_OWNED(module_name, PyUnicode_FromString(struct_module.m_name));
 	PY_OWNED(bases, PyTuple_Pack(1, (PyObject *) &StructMixin_Type));
@@ -90,5 +139,5 @@ static PyObject * create_struct_base(void) {
 		return NULL;
 	}
 
-	return struct_create_root(name, bases, namespace);
+	return struct_create_root(name, bases, namespace, module);
 }
