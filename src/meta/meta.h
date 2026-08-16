@@ -56,15 +56,22 @@ struct equality_source {
 	bool needs_derived_not_equal;
 };
 
+struct base_facts {
+	bool fielded_frozen;
+	bool weakref_carried;
+	bool instance_dict_carried;
+};
+
+struct base_survey {
+	StructType * behaviour;
+	struct base_facts facts;
+};
+
 StructType * find_struct_base(PyObject * bases);
 StructType * find_behaviour_base(PyObject * bases);
 struct equality_source resolves_body_equality(PyObject * bases);
-struct base_facts base_facts_of(PyObject * bases);
-struct options inherited_options(
-	PyObject * bases,
-	StructType const * behaviour,
-	struct base_facts facts
-);
+struct base_survey survey_bases(PyObject * bases);
+struct options inherited_options(StructType const * behaviour, struct base_facts facts);
 bool any_struct_base_is_mutable(PyObject * bases);
 enum { SETTLE_BINDING_COUNT = 7 };
 
@@ -80,7 +87,6 @@ enum result settle_cache_fill(struct salix_state * state);
 PyModuleDef * salix_module_def(void);
 bool any_base_diverts_setattro(PyObject * bases);
 bool carries_weakref_slot(PyTypeObject const * type);
-bool any_base_has_instance_dict(PyObject * bases);
 
 struct binding_plan binding_plan(
 	struct options options,
@@ -106,7 +112,7 @@ PyObject * build_class_namespace(
 	PyObject * new_names,
 	struct options options,
 	StructType const * base,
-	bool weakref_carried,
+	bool adds_weakref_slot,
 	struct options inherited,
 	bool frozen_across_bases,
 	bool bases_divert_setattro,
@@ -117,8 +123,8 @@ PyObject * build_class_namespace(
 enum result refuse_displaced_slots(
 	PyObject * original_namespace,
 	PyObject * all_names,
-	PyObject * bases,
-	struct options options
+	struct options options,
+	bool instance_dict_carried
 );
 enum result refuse_colliding_methods(
 	PyObject * original_namespace,

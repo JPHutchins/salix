@@ -15,12 +15,10 @@ struct options {
 struct options_request {
 	enum { OPTIONS_RESOLVED, OPTIONS_REJECTED } tag;
 	struct options options;
+	bool weakref_written;
 };
 
-struct base_facts {
-	bool fielded_frozen;
-	bool weakref_carried;
-};
+struct base_facts;
 
 enum option {
 	OPTION_FROZEN,

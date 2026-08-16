@@ -205,8 +205,28 @@ static bool carries_fielded_frozen(PyTypeObject const * const base) {
 	return struct_base->struct_field_count > 0 && struct_base->struct_options.frozen;
 }
 
-struct base_facts base_facts_of(PyObject * const bases) {
-	struct base_facts facts = {.fielded_frozen = false, .weakref_carried = false};
+static bool carries_instance_dict(PyTypeObject const * const base) {
+	if (base->tp_dictoffset != 0) {
+		return true;
+	}
+
+#if PY_VERSION_HEX >= 0x030C0000
+	return (base->tp_flags & Py_TPFLAGS_HEAPTYPE) != 0 &&
+		(base->tp_flags & Py_TPFLAGS_MANAGED_DICT) != 0;
+#else
+	return false;
+#endif
+}
+
+struct base_survey survey_bases(PyObject * const bases) {
+	struct base_survey survey = {
+		.behaviour = NULL,
+		.facts = {
+			.fielded_frozen = false,
+			.weakref_carried = false,
+			.instance_dict_carried = false,
+		},
+	};
 
 	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(bases); ++i) {
 		PyObject * const base = PyTuple_GET_ITEM(bases, i);
@@ -215,15 +235,28 @@ struct base_facts base_facts_of(PyObject * const bases) {
 			continue;
 		}
 
-		facts.fielded_frozen |= carries_fielded_frozen((PyTypeObject *) base);
-		facts.weakref_carried |= carries_weakref_slot((PyTypeObject *) base);
+		if (survey.behaviour == NULL && is_struct_class(base)) {
+			survey.behaviour = (StructType *) base;
+		}
+
+		survey.facts.fielded_frozen |= carries_fielded_frozen((PyTypeObject *) base);
+		survey.facts.weakref_carried |= carries_weakref_slot((PyTypeObject *) base);
+		survey.facts.instance_dict_carried |= carries_instance_dict((PyTypeObject *) base);
+
+		if (
+			survey.behaviour != NULL &&
+			survey.facts.fielded_frozen &&
+			survey.facts.weakref_carried &&
+			survey.facts.instance_dict_carried
+		) {
+			break;
+		}
 	}
 
-	return facts;
+	return survey;
 }
 
 struct options inherited_options(
-	PyObject * const bases,
 	StructType const * const behaviour,
 	struct base_facts const facts
 ) {
@@ -252,19 +285,6 @@ bool carries_weakref_slot(PyTypeObject const * const base) {
 #endif
 }
 
-static bool carries_instance_dict(PyTypeObject const * const base) {
-	if (base->tp_dictoffset != 0) {
-		return true;
-	}
-
-#if PY_VERSION_HEX >= 0x030C0000
-	return (base->tp_flags & Py_TPFLAGS_HEAPTYPE) != 0 &&
-		(base->tp_flags & Py_TPFLAGS_MANAGED_DICT) != 0;
-#else
-	return false;
-#endif
-}
-
 static bool any_base_satisfies(PyObject * const bases, bool (*carries)(PyTypeObject const *)) {
 	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(bases); ++i) {
 		PyObject * const base = PyTuple_GET_ITEM(bases, i);
@@ -286,8 +306,4 @@ static bool carries_diverting_setattro(PyTypeObject const * const base) {
 
 bool any_base_diverts_setattro(PyObject * const bases) {
 	return any_base_satisfies(bases, carries_diverting_setattro);
-}
-
-bool any_base_has_instance_dict(PyObject * const bases) {
-	return any_base_satisfies(bases, carries_instance_dict);
 }

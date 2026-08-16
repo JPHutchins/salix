@@ -28,6 +28,14 @@ def WeakrefDefaulting(metatype: type) -> type:
     return Defaulting
 
 
+def NeedWeakref(metatype: type) -> type:
+    class Requiring(metatype):
+        def __new__(metacls, name, bases, namespace, *, weakref):
+            return super().__new__(metacls, name, bases, namespace, weakref=weakref)
+
+    return Requiring
+
+
 # Both spellings of both, in one place: two literals drifted apart is a test
 # that silently stops covering a name.
 METADATA_NAMES = (
@@ -345,6 +353,38 @@ class TestAMetaclassSubclass:
 
         assert weakref.ref(held)() is held
         assert built(1, 2) != built(1, 2)
+
+    def test_an_explicit_weakref_still_rides_a_delegate_over_a_carrying_base(self):
+        """weakref=True over a carried slot is not needed for the slot, but it
+        is what keeps the re-invoked delegate's own weakref=False default from
+        riding instead and refusing the build.
+        """
+
+        class Base(Struct, metaclass=WeakrefDefaulting(META), weakref=True):
+            x: int
+
+        built = META("Built", (Base,), {"__annotations__": {"y": int}}, weakref=True, eq=False)
+        held = built(1, 2)
+
+        assert weakref.ref(held)() is held
+
+    def test_a_behaviour_records_weakref_rides_when_the_rest_cannot(self):
+        class Base(Struct, metaclass=WeakrefDefaulting(META), weakref=True):
+            x: int
+
+        built = META("Built", (Base,), {"__annotations__": {"y": int}}, eq=False)
+        held = built(1, 2)
+
+        assert weakref.ref(held)() is held
+
+    def test_a_delegate_requiring_weakref_gets_it_over_a_carrying_base(self):
+        class Base(Struct, metaclass=NeedWeakref(META), weakref=True):
+            x: int
+
+        built = META("Built", (Base,), {"__annotations__": {"y": int}}, eq=False)
+        held = built(1, 2)
+
+        assert weakref.ref(held)() is held
 
     def test_a_delegate_without_keywords_still_gets_none_handed_over(self):
         """A delegate whose __new__ takes no **keywords would be handed the
