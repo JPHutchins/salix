@@ -25,6 +25,13 @@ static enum result fill_defaults(
 );
 static enum result run_post_init(StructType const * type, PyObject * self);
 
+static PyObject * interned_value(StructType const * const type, bool const no_arguments) {
+	return (
+		(type->struct_singleton != NULL && no_arguments) ? Py_NewRef(type->struct_singleton) :
+		NULL
+	);
+}
+
 PyObject * Struct_vectorcall(
 	PyObject * const struct_class,
 	PyObject * const * const arguments,
@@ -46,8 +53,13 @@ PyObject * Struct_vectorcall(
 		return NULL;
 	}
 
-	if (type->struct_singleton != NULL && positional_count == 0 && keyword_names == NULL) {
-		return Py_NewRef(type->struct_singleton);
+	PyObject * const interned = interned_value(
+		type,
+		positional_count == 0 && keyword_names == NULL
+	);
+
+	if (interned != NULL) {
+		return interned;
 	}
 
 	PyTypeObject * const python_class = &type->heap_type.ht_type;
@@ -76,14 +88,22 @@ PyObject * Struct_new(
 	PyObject * const arguments,
 	PyObject * const keywords
 ) {
+	if (arguments != NULL && !PyTuple_Check(arguments)) {
+		PyErr_SetString(PyExc_TypeError, "the new arguments must be a tuple");
+
+		return NULL;
+	}
+
 	StructType const * const type = (StructType *) struct_class;
 
-	if (
-		type->struct_singleton != NULL &&
-		PyTuple_GET_SIZE(arguments) == 0 &&
-		(keywords == NULL || PyDict_GET_SIZE(keywords) == 0)
-	) {
-		return Py_NewRef(type->struct_singleton);
+	PyObject * const interned = interned_value(
+		type,
+		(arguments == NULL || PyTuple_GET_SIZE(arguments) == 0) &&
+			(keywords == NULL || PyDict_GET_SIZE(keywords) == 0)
+	);
+
+	if (interned != NULL) {
+		return interned;
 	}
 
 	PY_MOVABLE(self, struct_class->tp_alloc(struct_class, 0));

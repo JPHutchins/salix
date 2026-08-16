@@ -63,3 +63,32 @@ def test_post_init_runs_once_for_the_singleton():
 
     assert len(calls) == 1
     assert Counted() is calls[0]
+
+
+def test_copy_and_deepcopy_preserve_the_singleton():
+    import copy
+
+    assert copy.copy(Empty()) is Empty()
+    assert copy.deepcopy(Empty()) is Empty()
+
+
+def test_a_class_with_its_own_init_is_not_interned():
+    class WithInit(Struct):
+        def __init__(self) -> None:
+            pass
+
+    assert WithInit() is not WithInit()
+
+
+def test_a_failing_post_init_fails_the_class_statement():
+    with pytest.raises(RuntimeError, match="boom"):
+        class Exploding(Struct):
+            def __post_init__(self) -> None:
+                raise RuntimeError("boom")
+
+
+def test_the_singleton_is_built_before_the_class_name_binds():
+    with pytest.raises(NameError):
+        class Named(Struct):
+            def __post_init__(self) -> None:
+                return Named

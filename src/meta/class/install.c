@@ -65,8 +65,13 @@ enum result install_fields(
 	struct_class->struct_options = options;
 	struct_class->struct_resolves_body_eq = resolves_body_eq;
 
+	return install_constructor(struct_class);
+}
+
+enum result install_constructor(StructType * const struct_class) {
 	if (defines_own_init(struct_class)) {
 		struct_class->heap_type.ht_type.tp_new = Struct_new;
+		struct_class->heap_type.ht_type.tp_vectorcall = NULL;
 	} else {
 		struct_class->heap_type.ht_type.tp_vectorcall = Struct_vectorcall;
 	}
@@ -82,7 +87,8 @@ enum result ensure_singleton(StructType * const struct_class) {
 	bool const qualifies = (
 		struct_class->struct_options.frozen &&
 		!struct_class->struct_options.weakref &&
-		struct_class->struct_field_count == 0
+		struct_class->struct_field_count == 0 &&
+		!defines_own_init(struct_class)
 	);
 
 	if (!qualifies) {
