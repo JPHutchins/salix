@@ -278,3 +278,43 @@ def test_a_generic_alias_stays_whole():
 
     assert Box.__struct_annotations__ == (list[int],)
     assert Box.__struct_metadata__ == ((),)
+
+
+def test_an_annotated_inside_optional_stays_whole():
+    class Unioned(Struct):
+        value: int | Annotated[str, "meta"] | None
+
+    assert Unioned.__struct_annotations__ == (int | Annotated[str, "meta"] | None,)
+    assert Unioned.__struct_metadata__ == ((),)
+
+
+def test_a_re_annotated_inherited_field_reports_the_bases_values():
+    class Base(Struct):
+        x: int
+
+    class Child(Base):
+        x: str
+
+    assert Child.__struct_annotations__ == (int,)
+    assert Child.__struct_metadata__ == ((),)
+
+
+def test_a_fake_annotated_without_an_origin_stays_whole_with_its_extras():
+    class MetadataOnly:
+        def __init__(self) -> None:
+            self.__metadata__ = ("meta",)
+
+    class Tagged(Struct):
+        v: MetadataOnly()
+
+    assert Tagged.__struct_annotations__[0].__class__ is MetadataOnly
+    assert Tagged.__struct_metadata__ == (("meta",),)
+
+
+def test_a_non_tuple_metadata_is_refused():
+    class MetadataOnly:
+        def __init__(self) -> None:
+            self.__metadata__ = "meta"
+
+    with pytest.raises(TypeError, match="Annotated metadata must be a tuple"):
+        type(Struct)("Tagged", (Struct,), {"__annotations__": {"v": MetadataOnly()}})

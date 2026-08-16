@@ -630,7 +630,7 @@ static PyGetSetDef Struct_getset[] = {
 	{
 		.name = "_struct_annotations_",
 		.get = Struct_get_annotations,
-		.doc = "the field annotations as evaluated, aligned with the fields",
+		.doc = "the field annotations, aligned with the fields",
 	},
 	{
 		.name = "__struct_annotations__",
