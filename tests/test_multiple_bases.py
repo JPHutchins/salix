@@ -225,6 +225,88 @@ class TestWhichBaseAnswers:
         assert hash(first) == hash(first)
         assert first in {first}
 
+    def test_a_honoured_body_ordering_dunder_survives_the_eq_repair(self):
+        """A later base's __eq__ triggers the comparison repair; the first
+        base's own body __lt__ is honoured, so the repair rebinds per name
+        and leaves it answering. The body pair keeps the dict-dispatching
+        comparison slot, so the operators answer it too.
+        """
+
+        class ByOrder(Struct):
+            def __lt__(self, other: object) -> object:
+                return "by-order"
+
+            def __le__(self, other: object) -> object:
+                return "by-order-or-equal"
+
+        class ByEq(Struct):  # noqa: PLW1641 -- the body pair is the trigger
+            b: int
+
+            def __eq__(self, other: object) -> bool:
+                return True
+
+        class Both(ByOrder, ByEq):
+            c: int
+
+        first, second = Both(1, 2), Both(1, 2)
+
+        assert first.__lt__(second) == "by-order"
+        assert first.__le__(second) == "by-order-or-equal"
+        assert (first < second) == "by-order"
+        assert (first <= second) == "by-order-or-equal"
+
+    def test_a_later_bases_body_ordering_dunder_is_shadowed_by_the_record(self):
+        """The record's answer for a class it never said orders is the
+        unsupported comparison, so a body __gt__ on a base the first struct
+        base never honoured is shadowed by it rather than answering.
+        """
+
+        class ByOrder(Struct):
+            pass
+
+        class ByEq(Struct):  # noqa: PLW1641 -- the body pair is the trigger
+            b: int
+
+            def __eq__(self, other: object) -> bool:
+                return True
+
+            def __gt__(self, other: object) -> object:
+                return "by-eq"
+
+        class Both(ByOrder, ByEq):
+            c: int
+
+        first, second = Both(1, 2), Both(1, 2)
+
+        assert first.__gt__(second) is NotImplemented
+
+        with pytest.raises(TypeError):
+            _ = first > second
+
+    def test_an_eq_false_record_shadows_a_honoured_body_ordering_dunder(self):
+        """The eq=False transition lands the object wrappers in the class's
+        own dict, and the class's own dict answers before any base -- even a
+        body __lt__ the single-base path would have honoured.
+        """
+
+        class ByOrder(Struct):
+            def __lt__(self, other: object) -> object:
+                return "by-order"
+
+        class ByEq(Struct):
+            b: int
+
+        class Both(ByOrder, ByEq, eq=False):
+            c: int
+
+        first, second = Both(1, 2), Both(1, 2)
+
+        assert Both.__lt__ is object.__lt__
+
+        with pytest.raises(TypeError):
+            _ = first < second
+
+
     def test_a_body_eq_on_a_base_that_is_not_the_layout_one_still_carries_its_hash(self):
         """Equal objects hashing differently is the shape that broke here.
 
