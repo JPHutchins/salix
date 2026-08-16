@@ -58,6 +58,8 @@ static int struct_exec(PyObject * const module) {
 		return RESULT_ERROR;
 	}
 
+	settle_cache_fill();
+
 	return add_struct_base(module);
 }
 

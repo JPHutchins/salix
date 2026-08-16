@@ -704,16 +704,11 @@ static int struct_base_count(PyObject * const bases) {
 	return count;
 }
 
-static PyInterpreterState * binding_interpreter = NULL;
 static PyObject * mixin_bindings[7];
 static PyObject * object_bindings[7];
-struct settle_targets {
-	PyObject * const * mixin;
-	PyObject * const * object;
-	bool readable;
-};
-
-static struct settle_targets settle_candidates(void) {
+/* Filled once at module init, before any class can be built, so the settle
+ * only ever reads these: no post-init mutation, no keying, no lock. */
+void settle_cache_fill(void) {
 	static char const * const names[7] = {
 		"__eq__",
 		"__ne__",
@@ -724,25 +719,19 @@ static struct settle_targets settle_candidates(void) {
 		"__repr__",
 	};
 
-	if (binding_interpreter != PyInterpreterState_Get()) {
-		for (Py_ssize_t i = 0; i < 7; ++i) {
-			Py_CLEAR(mixin_bindings[i]);
-			Py_CLEAR(object_bindings[i]);
-		}
-
-		binding_interpreter = PyInterpreterState_Get();
-	}
-
 	for (Py_ssize_t i = 0; i < 7; ++i) {
-		if (mixin_bindings[i] == NULL) {
-			mixin_bindings[i] = PyObject_GetAttrString((PyObject *) &StructMixin_Type, names[i]);
-		}
-
-		if (object_bindings[i] == NULL) {
-			object_bindings[i] = PyObject_GetAttrString((PyObject *) &PyBaseObject_Type, names[i]);
-		}
+		mixin_bindings[i] = PyObject_GetAttrString((PyObject *) &StructMixin_Type, names[i]);
+		object_bindings[i] = PyObject_GetAttrString((PyObject *) &PyBaseObject_Type, names[i]);
 	}
+}
 
+struct settle_targets {
+	PyObject * const * mixin;
+	PyObject * const * object;
+	bool readable;
+};
+
+static struct settle_targets settle_candidates(void) {
 	for (Py_ssize_t i = 0; i < 7; ++i) {
 		if (mixin_bindings[i] == NULL || object_bindings[i] == NULL) {
 			return (struct settle_targets){.readable = false};
@@ -789,24 +778,72 @@ static enum result mro_dunders_of(
 	PyObject * * const resolved_repr,
 	PyTypeObject * * const eq_owner,
 	PyTypeObject * * const ne_owner,
-	PyTypeObject * * const repr_owner
+	PyTypeObject * * const repr_owner,
+	PyObject * * const resolved_lt,
+	PyObject * * const resolved_le,
+	PyObject * * const resolved_gt,
+	PyObject * * const resolved_ge,
+	PyTypeObject * * const lt_owner,
+	PyTypeObject * * const le_owner,
+	PyTypeObject * * const gt_owner,
+	PyTypeObject * * const ge_owner
 ) {
 	*resolved_eq = NULL;
 	*resolved_ne = NULL;
 	*resolved_repr = NULL;
+	*resolved_lt = NULL;
+	*resolved_le = NULL;
+	*resolved_gt = NULL;
+	*resolved_ge = NULL;
 	*eq_owner = NULL;
 	*ne_owner = NULL;
 	*repr_owner = NULL;
+	*lt_owner = NULL;
+	*le_owner = NULL;
+	*gt_owner = NULL;
+	*ge_owner = NULL;
 
 	PY_OWNED(eq_name, PyUnicode_InternFromString("__eq__"));
 	PY_OWNED(ne_name, PyUnicode_InternFromString("__ne__"));
 	PY_OWNED(repr_name, PyUnicode_InternFromString("__repr__"));
+	PY_OWNED(lt_name, PyUnicode_InternFromString("__lt__"));
+	PY_OWNED(le_name, PyUnicode_InternFromString("__le__"));
+	PY_OWNED(gt_name, PyUnicode_InternFromString("__gt__"));
+	PY_OWNED(ge_name, PyUnicode_InternFromString("__ge__"));
 
-	if (eq_name == NULL || ne_name == NULL || repr_name == NULL) {
+	if (
+		eq_name == NULL ||
+		ne_name == NULL ||
+		repr_name == NULL ||
+		lt_name == NULL ||
+		le_name == NULL ||
+		gt_name == NULL ||
+		ge_name == NULL
+	) {
 		return RESULT_ERROR;
 	}
 
 	PyObject * const mro = type->tp_mro;
+
+	/* The ordering names read the class's own dict too: a pre-creation
+	 * rebind injected the comparison family there on an eq-option change,
+	 * and the honoured-body decision must see that injection rather than
+	 * decide behind its back. */
+	PyTypeObject * const own = (PyTypeObject *) PyTuple_GET_ITEM(mro, 0);
+	PY_OWNED(own_dict, struct_type_dict(own));
+
+	if (own_dict == NULL) {
+		return RESULT_ERROR;
+	}
+
+	if (
+		resolve_dunder(own_dict, lt_name, resolved_lt, own, lt_owner) != RESULT_OK ||
+		resolve_dunder(own_dict, le_name, resolved_le, own, le_owner) != RESULT_OK ||
+		resolve_dunder(own_dict, gt_name, resolved_gt, own, gt_owner) != RESULT_OK ||
+		resolve_dunder(own_dict, ge_name, resolved_ge, own, ge_owner) != RESULT_OK
+	) {
+		return RESULT_ERROR;
+	}
 
 	for (Py_ssize_t i = 1; i < PyTuple_GET_SIZE(mro); ++i) {
 		PyTypeObject * const entry = (PyTypeObject *) PyTuple_GET_ITEM(mro, i);
@@ -819,49 +856,24 @@ static enum result mro_dunders_of(
 		if (
 			resolve_dunder(dict, eq_name, resolved_eq, entry, eq_owner) != RESULT_OK ||
 			resolve_dunder(dict, ne_name, resolved_ne, entry, ne_owner) != RESULT_OK ||
-			resolve_dunder(dict, repr_name, resolved_repr, entry, repr_owner) != RESULT_OK
+			resolve_dunder(dict, repr_name, resolved_repr, entry, repr_owner) != RESULT_OK ||
+			resolve_dunder(dict, lt_name, resolved_lt, entry, lt_owner) != RESULT_OK ||
+			resolve_dunder(dict, le_name, resolved_le, entry, le_owner) != RESULT_OK ||
+			resolve_dunder(dict, gt_name, resolved_gt, entry, gt_owner) != RESULT_OK ||
+			resolve_dunder(dict, ge_name, resolved_ge, entry, ge_owner) != RESULT_OK
 		) {
 			return RESULT_ERROR;
 		}
 
-		if (*resolved_eq != NULL && *resolved_ne != NULL && *resolved_repr != NULL) {
-			break;
-		}
-	}
-
-	return RESULT_OK;
-}
-
-static enum result mro_dunder_of(
-	PyTypeObject * const type,
-	char const * const name_text,
-	PyObject * * const resolved,
-	PyTypeObject * * const owner
-) {
-	*resolved = NULL;
-	*owner = NULL;
-
-	PY_OWNED(name, PyUnicode_InternFromString(name_text));
-
-	if (name == NULL) {
-		return RESULT_ERROR;
-	}
-
-	PyObject * const mro = type->tp_mro;
-
-	for (Py_ssize_t i = 1; i < PyTuple_GET_SIZE(mro); ++i) {
-		PyTypeObject * const entry = (PyTypeObject *) PyTuple_GET_ITEM(mro, i);
-		PY_OWNED(dict, struct_type_dict(entry));
-
-		if (dict == NULL) {
-			return RESULT_ERROR;
-		}
-
-		if (resolve_dunder(dict, name, resolved, entry, owner) != RESULT_OK) {
-			return RESULT_ERROR;
-		}
-
-		if (*resolved != NULL) {
+		if (
+			*resolved_eq != NULL &&
+			*resolved_ne != NULL &&
+			*resolved_repr != NULL &&
+			*resolved_lt != NULL &&
+			*resolved_le != NULL &&
+			*resolved_gt != NULL &&
+			*resolved_ge != NULL
+		) {
 			break;
 		}
 	}
@@ -976,9 +988,17 @@ static enum result settle_mro_bindings(
 	PY_MOVABLE(resolved_eq, NULL);
 	PY_MOVABLE(resolved_ne, NULL);
 	PY_MOVABLE(resolved_repr, NULL);
+	PY_MOVABLE(resolved_lt, NULL);
+	PY_MOVABLE(resolved_le, NULL);
+	PY_MOVABLE(resolved_gt, NULL);
+	PY_MOVABLE(resolved_ge, NULL);
 	PyTypeObject * eq_owner = NULL;
 	PyTypeObject * ne_owner = NULL;
 	PyTypeObject * repr_owner = NULL;
+	PyTypeObject * lt_owner = NULL;
+	PyTypeObject * le_owner = NULL;
+	PyTypeObject * gt_owner = NULL;
+	PyTypeObject * ge_owner = NULL;
 
 	if (
 		!targets.readable ||
@@ -989,7 +1009,15 @@ static enum result settle_mro_bindings(
 				&resolved_repr,
 				&eq_owner,
 				&ne_owner,
-				&repr_owner
+				&repr_owner,
+				&resolved_lt,
+				&resolved_le,
+				&resolved_gt,
+				&resolved_ge,
+				&lt_owner,
+				&le_owner,
+				&gt_owner,
+				&ge_owner
 			) !=
 			RESULT_OK
 	) {
@@ -1024,27 +1052,24 @@ static enum result settle_mro_bindings(
 		}
 	}
 
-	struct comparison_binding {
+	struct ordering_binding {
 		char const * name;
 		Py_ssize_t slot;
+		PyObject * resolved;
+		PyTypeObject * owner;
 	};
-	static struct comparison_binding const comparison_bindings[] = {
-		{"__lt__", 2},
-		{"__le__", 3},
-		{"__gt__", 4},
-		{"__ge__", 5},
+	struct ordering_binding const orderings[4] = {
+		{"__lt__", 2, resolved_lt, lt_owner},
+		{"__le__", 3, resolved_le, le_owner},
+		{"__gt__", 4, resolved_gt, gt_owner},
+		{"__ge__", 5, resolved_ge, ge_owner},
 	};
 
 	for (Py_ssize_t i = 0; i < 4; ++i) {
-		Py_ssize_t const slot = comparison_bindings[i].slot;
+		Py_ssize_t const slot = orderings[i].slot;
 		PyObject * const target = options.eq ? targets.mixin[slot] : targets.object[slot];
-		PY_MOVABLE(resolved_i, NULL);
-		PyTypeObject * owner_i = NULL;
-
-		if (mro_dunder_of(type, comparison_bindings[i].name, &resolved_i, &owner_i) != RESULT_OK) {
-			return RESULT_ERROR;
-		}
-
+		PyObject * const resolved_i = orderings[i].resolved;
+		PyTypeObject * const owner_i = orderings[i].owner;
 		bool const salix_owned = (
 			resolved_i == targets.mixin[slot] ||
 			resolved_i == targets.object[slot]
@@ -1055,7 +1080,7 @@ static enum result settle_mro_bindings(
 				settle_rebind_one(
 					struct_class,
 					original_namespace,
-					comparison_bindings[i].name,
+					orderings[i].name,
 					options.eq
 				) !=
 				RESULT_OK
