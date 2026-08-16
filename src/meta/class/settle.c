@@ -889,6 +889,8 @@ enum result settle_planned(
 	}
 
 	Py_SETREF(struct_class->struct_defaults, Py_NewRef(plan->defaults));
+	Py_SETREF(struct_class->struct_annotations, Py_NewRef(plan->annotations));
+	Py_SETREF(struct_class->struct_metadata, Py_NewRef(plan->metadata));
 	struct_class->struct_default_count = PyTuple_GET_SIZE(plan->defaults);
 	struct_class->struct_options = options;
 	struct_class->struct_resolves_body_eq = body_defines_eq || inherits_body_eq;

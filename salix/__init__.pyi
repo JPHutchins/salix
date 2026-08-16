@@ -8,6 +8,10 @@ class Struct:
     _struct_defaults_: Final[tuple[Any, ...]]
     __struct_fields__: Final[tuple[str, ...]]
     __struct_defaults__: Final[tuple[Any, ...]]
+    _struct_annotations_: Final[tuple[Any, ...]]
+    __struct_annotations__: Final[tuple[Any, ...]]
+    _struct_metadata_: Final[tuple[tuple[Any, ...], ...]]
+    __struct_metadata__: Final[tuple[tuple[Any, ...], ...]]
     def __copy__(self) -> Self: ...
     def __deepcopy__(self, memo: dict[int, Any]) -> Self: ...
     def __init_subclass__(

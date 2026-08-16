@@ -36,13 +36,18 @@ def NeedWeakref(metatype: type) -> type:
     return Requiring
 
 
-# Both spellings of both, in one place: two literals drifted apart is a test
-# that silently stops covering a name.
+# Both spellings of each, in one place: two literals drifted apart is a test
+# that silently stops covering a name. The order matches
+# test_metadata_names' SALIX + MSGSPEC concatenation, which is pinned.
 METADATA_NAMES = (
     "_struct_fields_",
     "_struct_defaults_",
+    "_struct_annotations_",
+    "_struct_metadata_",
     "__struct_fields__",
     "__struct_defaults__",
+    "__struct_annotations__",
+    "__struct_metadata__",
 )
 
 

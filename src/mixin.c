@@ -38,6 +38,10 @@ static PyObject * Struct_get_field_names(PyObject * self, void * closure);
 static PyObject * Struct_get_defaults(PyObject * self, void * closure);
 static PyObject * Struct_get_fields_as_msgspec(PyObject * self, void * closure);
 static PyObject * Struct_get_defaults_as_msgspec(PyObject * self, void * closure);
+static PyObject * Struct_get_annotations(PyObject * self, void * closure);
+static PyObject * Struct_get_annotations_as_msgspec(PyObject * self, void * closure);
+static PyObject * Struct_get_metadata(PyObject * self, void * closure);
+static PyObject * Struct_get_metadata_as_msgspec(PyObject * self, void * closure);
 static PyObject * metadata_of(PyObject * self, enum struct_metadata which, char const * name);
 static PyGetSetDef Struct_getset[];
 static PyMethodDef Struct_methods[];
@@ -623,6 +627,26 @@ static PyGetSetDef Struct_getset[] = {
 		.get = Struct_get_defaults_as_msgspec,
 		.doc = "tuple of trailing defaults, under msgspec's name for it",
 	},
+	{
+		.name = "_struct_annotations_",
+		.get = Struct_get_annotations,
+		.doc = "the field annotations as evaluated, aligned with the fields",
+	},
+	{
+		.name = "__struct_annotations__",
+		.get = Struct_get_annotations_as_msgspec,
+		.doc = "the field annotations under the public name for it",
+	},
+	{
+		.name = "_struct_metadata_",
+		.get = Struct_get_metadata,
+		.doc = "the Annotated extras per field, aligned with the fields",
+	},
+	{
+		.name = "__struct_metadata__",
+		.get = Struct_get_metadata_as_msgspec,
+		.doc = "the Annotated extras under the public name for it",
+	},
 	{.name = NULL},
 };
 
@@ -678,4 +702,20 @@ static PyObject * Struct_get_fields_as_msgspec(PyObject * const self, void * con
 
 static PyObject * Struct_get_defaults_as_msgspec(PyObject * const self, void * const closure) {
 	return metadata_of(self, STRUCT_DEFAULTS, "__struct_defaults__");
+}
+
+static PyObject * Struct_get_annotations(PyObject * const self, void * const closure) {
+	return metadata_of(self, STRUCT_ANNOTATIONS, "_struct_annotations_");
+}
+
+static PyObject * Struct_get_annotations_as_msgspec(PyObject * const self, void * const closure) {
+	return metadata_of(self, STRUCT_ANNOTATIONS, "__struct_annotations__");
+}
+
+static PyObject * Struct_get_metadata(PyObject * const self, void * const closure) {
+	return metadata_of(self, STRUCT_METADATA, "_struct_metadata_");
+}
+
+static PyObject * Struct_get_metadata_as_msgspec(PyObject * const self, void * const closure) {
+	return metadata_of(self, STRUCT_METADATA, "__struct_metadata__");
 }
