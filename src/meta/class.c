@@ -20,6 +20,10 @@
 #include "../types.h"
 #include "../hash.h"
 
+#ifdef TESTING
+static bool frozen_column_repair_fired = false;
+#endif
+
 static StructType * create_class(
 	PyTypeObject * metatype,
 	PyTypeObject * handoff,
@@ -878,6 +882,9 @@ static enum result settle_mro_bindings(
 	 * CPython's own dispatch honours hooks and foreign C-level slots exactly
 	 * as it does for plain classes. */
 	if (options.frozen && type->tp_setattro != StructMixin_Type.tp_setattro) {
+#ifdef TESTING
+		frozen_column_repair_fired = true;
+#endif
 		if (settle_rebind(struct_class, original_namespace, rebind_mutability, true) != RESULT_OK) {
 			return RESULT_ERROR;
 		}
@@ -1535,6 +1542,24 @@ static PyObject * struct_class_with_field(PyObject * bases, PyObject * keywords)
 	return PyObject_Call((PyObject *) &StructMeta_Type, args, keywords);
 }
 
+static PyObject * struct_class_with_body_setattr(PyObject * bases) {
+	PY_OWNED(name, PyUnicode_FromString("Built"));
+	PY_OWNED(namespace, PyDict_New());
+	PY_OWNED(annotations, PyDict_New());
+
+	if (
+		PyDict_SetItemString(annotations, "x", (PyObject *) &PyLong_Type) < 0 ||
+		PyDict_SetItemString(namespace, "__annotations__", annotations) < 0 ||
+		PyDict_SetItemString(namespace, "__setattr__", Py_None) < 0
+	) {
+		return NULL;
+	}
+
+	PY_OWNED(args, PyTuple_Pack(3, name, bases, namespace));
+
+	return PyObject_Call((PyObject *) &StructMeta_Type, args, NULL);
+}
+
 static void test_a_raw_tp_setattro_co_base_does_not_divert_the_struct_slot(void) {
 	TEST_ASSERT_EQUAL_INT(0, PyType_Ready(&SwallowingType));
 
@@ -1571,9 +1596,11 @@ static void test_a_raw_tp_setattro_co_base_does_not_divert_the_struct_slot(void)
 	PY_OWNED(frozen_base, struct_class_with_field(struct_bases, NULL));
 	TEST_ASSERT_NOT_NULL(frozen_base);
 
+	frozen_column_repair_fired = false;
 	PY_OWNED(frozen_bases, PyTuple_Pack(2, (PyObject *) &SwallowingType, frozen_base));
 	PY_OWNED(frozen_child, struct_class_with_field(frozen_bases, NULL));
 	TEST_ASSERT_NOT_NULL(frozen_child);
+	TEST_ASSERT_FALSE(frozen_column_repair_fired);
 	TEST_ASSERT_EQUAL_PTR(
 		StructMixin_Type.tp_setattro,
 		((PyTypeObject *) frozen_child)->tp_setattro
@@ -1582,6 +1609,11 @@ static void test_a_raw_tp_setattro_co_base_does_not_divert_the_struct_slot(void)
 		1,
 		dict_has_string(((PyTypeObject *) frozen_child)->tp_dict, "__setattr__")
 	);
+
+	frozen_column_repair_fired = false;
+	PY_OWNED(escaped_child, struct_class_with_body_setattr(frozen_bases));
+	TEST_ASSERT_NOT_NULL(escaped_child);
+	TEST_ASSERT_TRUE(frozen_column_repair_fired);
 
 	PY_OWNED(frozen_instance, PyObject_CallFunction(frozen_child, "i", 1));
 	TEST_ASSERT_NOT_NULL(frozen_instance);
