@@ -631,36 +631,48 @@ static PyTypeObject * winning_metatype(PyTypeObject * const requested, PyObject 
 	return winner;
 }
 
+static enum result settle_rebind_one(
+	StructType * const struct_class,
+	PyObject * const original_namespace,
+	char const * const name,
+	bool const from_mixin
+) {
+	int const present = dict_has_string(original_namespace, name);
+
+	if (present < 0) {
+		return RESULT_ERROR;
+	}
+
+	if (present == 1) {
+		return RESULT_OK;
+	}
+
+	PyObject * const source = (
+		from_mixin ? (PyObject *) &StructMixin_Type :
+		(PyObject *) &PyBaseObject_Type
+	);
+	PY_OWNED(bound, PyObject_GetAttrString(source, name));
+	PY_OWNED(unicode_name, PyUnicode_FromString(name));
+
+	if (
+		bound == NULL ||
+		unicode_name == NULL ||
+		PyType_Type.tp_setattro((PyObject *) struct_class, unicode_name, bound) < 0
+	) {
+		return RESULT_ERROR;
+	}
+
+	return RESULT_OK;
+}
+
 static enum result settle_rebind(
 	StructType * const struct_class,
 	PyObject * const original_namespace,
 	char const * const * const names,
 	bool const from_mixin
 ) {
-	PyObject * const source = (
-		from_mixin ? (PyObject *) &StructMixin_Type :
-		(PyObject *) &PyBaseObject_Type
-	);
-
 	for (char const * const * name = names; *name != NULL; name += 1) {
-		int const present = dict_has_string(original_namespace, *name);
-
-		if (present < 0) {
-			return RESULT_ERROR;
-		}
-
-		if (present == 1) {
-			continue;
-		}
-
-		PY_OWNED(bound, PyObject_GetAttrString(source, *name));
-		PY_OWNED(unicode_name, PyUnicode_FromString(*name));
-
-		if (
-			bound == NULL ||
-			unicode_name == NULL ||
-			PyType_Type.tp_setattro((PyObject *) struct_class, unicode_name, bound) < 0
-		) {
+		if (settle_rebind_one(struct_class, original_namespace, * name, from_mixin) != RESULT_OK) {
 			return RESULT_ERROR;
 		}
 	}
@@ -692,17 +704,17 @@ static int struct_base_count(PyObject * const bases) {
 	return count;
 }
 
+static PyInterpreterState * binding_interpreter = NULL;
 static PyObject * mixin_bindings[7];
 static PyObject * object_bindings[7];
-static int settle_candidates(
-	PyObject * * const mixin_eq,
-	PyObject * * const object_eq,
-	PyObject * * const mixin_ne,
-	PyObject * * const object_ne,
-	PyObject * * const mixin_repr,
-	PyObject * * const object_repr
-) {
-	char const * const names[7] = {
+struct settle_targets {
+	PyObject * const * mixin;
+	PyObject * const * object;
+	bool readable;
+};
+
+static struct settle_targets settle_candidates(void) {
+	static char const * const names[7] = {
 		"__eq__",
 		"__ne__",
 		"__lt__",
@@ -711,6 +723,15 @@ static int settle_candidates(
 		"__ge__",
 		"__repr__",
 	};
+
+	if (binding_interpreter != PyInterpreterState_Get()) {
+		for (Py_ssize_t i = 0; i < 7; ++i) {
+			Py_CLEAR(mixin_bindings[i]);
+			Py_CLEAR(object_bindings[i]);
+		}
+
+		binding_interpreter = PyInterpreterState_Get();
+	}
 
 	for (Py_ssize_t i = 0; i < 7; ++i) {
 		if (mixin_bindings[i] == NULL) {
@@ -724,18 +745,15 @@ static int settle_candidates(
 
 	for (Py_ssize_t i = 0; i < 7; ++i) {
 		if (mixin_bindings[i] == NULL || object_bindings[i] == NULL) {
-			return -1;
+			return (struct settle_targets){.readable = false};
 		}
 	}
 
-	*mixin_eq = Py_NewRef(mixin_bindings[0]);
-	*object_eq = Py_NewRef(object_bindings[0]);
-	*mixin_ne = Py_NewRef(mixin_bindings[1]);
-	*object_ne = Py_NewRef(object_bindings[1]);
-	*mixin_repr = Py_NewRef(mixin_bindings[6]);
-	*object_repr = Py_NewRef(object_bindings[6]);
-
-	return 0;
+	return (struct settle_targets){
+		.mixin = mixin_bindings,
+		.object = object_bindings,
+		.readable = true,
+	};
 }
 
 /* What the class's MRO hands out below the class's own dict for the three
@@ -807,6 +825,43 @@ static enum result mro_dunders_of(
 		}
 
 		if (*resolved_eq != NULL && *resolved_ne != NULL && *resolved_repr != NULL) {
+			break;
+		}
+	}
+
+	return RESULT_OK;
+}
+
+static enum result mro_dunder_of(
+	PyTypeObject * const type,
+	char const * const name_text,
+	PyObject * * const resolved,
+	PyTypeObject * * const owner
+) {
+	*resolved = NULL;
+	*owner = NULL;
+
+	PY_OWNED(name, PyUnicode_InternFromString(name_text));
+
+	if (name == NULL) {
+		return RESULT_ERROR;
+	}
+
+	PyObject * const mro = type->tp_mro;
+
+	for (Py_ssize_t i = 1; i < PyTuple_GET_SIZE(mro); ++i) {
+		PyTypeObject * const entry = (PyTypeObject *) PyTuple_GET_ITEM(mro, i);
+		PY_OWNED(dict, struct_type_dict(entry));
+
+		if (dict == NULL) {
+			return RESULT_ERROR;
+		}
+
+		if (resolve_dunder(dict, name, resolved, entry, owner) != RESULT_OK) {
+			return RESULT_ERROR;
+		}
+
+		if (*resolved != NULL) {
 			break;
 		}
 	}
@@ -916,12 +971,8 @@ static enum result settle_mro_bindings(
 
 	PyTypeObject * const first_struct = (PyTypeObject *) find_behaviour_base(bases);
 
-	PY_MOVABLE(mixin_eq, NULL);
-	PY_MOVABLE(object_eq, NULL);
-	PY_MOVABLE(mixin_ne, NULL);
-	PY_MOVABLE(object_ne, NULL);
-	PY_MOVABLE(mixin_repr, NULL);
-	PY_MOVABLE(object_repr, NULL);
+	struct settle_targets const targets = settle_candidates();
+
 	PY_MOVABLE(resolved_eq, NULL);
 	PY_MOVABLE(resolved_ne, NULL);
 	PY_MOVABLE(resolved_repr, NULL);
@@ -930,15 +981,7 @@ static enum result settle_mro_bindings(
 	PyTypeObject * repr_owner = NULL;
 
 	if (
-		settle_candidates(
-				&mixin_eq,
-				&object_eq,
-				&mixin_ne,
-				&object_ne,
-				&mixin_repr,
-				&object_repr
-			) <
-			0 ||
+		!targets.readable ||
 		mro_dunders_of(
 				type,
 				&resolved_eq,
@@ -963,25 +1006,76 @@ static enum result settle_mro_bindings(
 		type->tp_richcompare = Struct_rich_compare;
 	}
 
-	PyObject * const target_eq = options.eq ? mixin_eq : object_eq;
-	bool const eq_is_salix_owned = resolved_eq == mixin_eq || resolved_eq == object_eq;
+	PyObject * const target_eq = options.eq ? targets.mixin[0] : targets.object[0];
+	bool const eq_is_salix_owned = (
+		resolved_eq == targets.mixin[0] ||
+		resolved_eq == targets.object[0]
+	);
 
 	if (
 		resolved_eq != target_eq &&
 		(eq_is_salix_owned || !honoured_owner(eq_owner, first_struct))
 	) {
 		if (
-			settle_rebind(struct_class, original_namespace, rebind_comparison, options.eq) !=
+			settle_rebind_one(struct_class, original_namespace, "__eq__", options.eq) !=
 			RESULT_OK
 		) {
 			return RESULT_ERROR;
 		}
 	}
 
+	struct comparison_binding {
+		char const * name;
+		Py_ssize_t slot;
+	};
+	static struct comparison_binding const comparison_bindings[] = {
+		{"__lt__", 2},
+		{"__le__", 3},
+		{"__gt__", 4},
+		{"__ge__", 5},
+	};
+
+	for (Py_ssize_t i = 0; i < 4; ++i) {
+		Py_ssize_t const slot = comparison_bindings[i].slot;
+		PyObject * const target = options.eq ? targets.mixin[slot] : targets.object[slot];
+		PY_MOVABLE(resolved_i, NULL);
+		PyTypeObject * owner_i = NULL;
+
+		if (mro_dunder_of(type, comparison_bindings[i].name, &resolved_i, &owner_i) != RESULT_OK) {
+			return RESULT_ERROR;
+		}
+
+		bool const salix_owned = (
+			resolved_i == targets.mixin[slot] ||
+			resolved_i == targets.object[slot]
+		);
+
+		if (resolved_i != target && (salix_owned || !honoured_owner(owner_i, first_struct))) {
+			if (
+				settle_rebind_one(
+					struct_class,
+					original_namespace,
+					comparison_bindings[i].name,
+					options.eq
+				) !=
+				RESULT_OK
+			) {
+				return RESULT_ERROR;
+			}
+		}
+	}
+
 	bool const body_eq_answers = !eq_is_salix_owned && honoured_owner(eq_owner, first_struct);
 
-	PyObject * const target_ne = body_eq_answers ? object_ne : options.eq ? mixin_ne : object_ne;
-	bool const ne_is_salix_owned = resolved_ne == mixin_ne || resolved_ne == object_ne;
+	PyObject * const target_ne = (
+		body_eq_answers ? targets.object[1] :
+		options.eq ? targets.mixin[1] :
+		targets.object[1]
+	);
+	bool const ne_is_salix_owned = (
+		resolved_ne == targets.mixin[1] ||
+		resolved_ne == targets.object[1]
+	);
 
 	if (
 		resolved_ne != target_ne &&
@@ -1000,8 +1094,11 @@ static enum result settle_mro_bindings(
 		}
 	}
 
-	PyObject * const target_repr = options.repr ? mixin_repr : object_repr;
-	bool const repr_is_salix_owned = resolved_repr == mixin_repr || resolved_repr == object_repr;
+	PyObject * const target_repr = options.repr ? targets.mixin[6] : targets.object[6];
+	bool const repr_is_salix_owned = (
+		resolved_repr == targets.mixin[6] ||
+		resolved_repr == targets.object[6]
+	);
 
 	if (
 		resolved_repr != target_repr &&

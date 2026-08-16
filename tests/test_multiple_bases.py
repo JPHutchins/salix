@@ -225,6 +225,30 @@ class TestWhichBaseAnswers:
         assert hash(first) == hash(first)
         assert first in {first}
 
+    def test_a_honoured_body_ordering_dunder_survives_the_eq_repair(self):
+        """A later base's __eq__ triggers the comparison repair; the first
+        base's own body __lt__ is honoured, so the repair rebinds per name
+        and leaves it answering.
+        """
+
+        class ByOrder(Struct):
+            def __lt__(self, other: object) -> object:
+                return "by-order"
+
+        class ByEq(Struct):  # noqa: PLW1641 -- the body pair is the trigger
+            b: int
+
+            def __eq__(self, other: object) -> bool:
+                return True
+
+        class Both(ByOrder, ByEq):
+            c: int
+
+        first, second = Both(1, 2), Both(1, 2)
+
+        assert first.__lt__(second) == "by-order"
+
+
     def test_a_body_eq_on_a_base_that_is_not_the_layout_one_still_carries_its_hash(self):
         """Equal objects hashing differently is the shape that broke here.
 
