@@ -378,6 +378,7 @@ PyObject * build_struct_class(
 					request.options,
 					inherited,
 					frozen_across_bases,
+					any_base_diverts_setattro(bases),
 					body_defines_eq,
 					inherits_body_eq,
 					inherited_equality.needs_derived_not_equal,
@@ -1088,6 +1089,7 @@ static enum result settle_planned(
 		options,
 		inherited,
 		frozen_across_bases,
+		any_base_diverts_setattro(bases),
 		body_defines_eq,
 		inherits_body_eq,
 		derive_not_equal,
@@ -1552,6 +1554,10 @@ static void test_a_raw_tp_setattro_co_base_does_not_divert_the_struct_slot(void)
 	PY_OWNED(raw_bases, PyTuple_Pack(2, (PyObject *) &SwallowingType, mutable_base));
 	PY_OWNED(mutable_child, struct_class_with_field(raw_bases, NULL));
 	TEST_ASSERT_NOT_NULL(mutable_child);
+	TEST_ASSERT_EQUAL_INT(
+		0,
+		dict_has_string(((PyTypeObject *) mutable_child)->tp_dict, "__setattr__")
+	);
 
 	PY_OWNED(instance, PyObject_CallFunction(mutable_child, "i", 1));
 	TEST_ASSERT_NOT_NULL(instance);
@@ -1571,6 +1577,10 @@ static void test_a_raw_tp_setattro_co_base_does_not_divert_the_struct_slot(void)
 	TEST_ASSERT_EQUAL_PTR(
 		StructMixin_Type.tp_setattro,
 		((PyTypeObject *) frozen_child)->tp_setattro
+	);
+	TEST_ASSERT_EQUAL_INT(
+		1,
+		dict_has_string(((PyTypeObject *) frozen_child)->tp_dict, "__setattr__")
 	);
 
 	PY_OWNED(frozen_instance, PyObject_CallFunction(frozen_child, "i", 1));

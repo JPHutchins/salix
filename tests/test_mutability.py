@@ -160,6 +160,35 @@ def test_frozen_true_over_a_mutable_base_holds_beside_a_permissive_co_base():
             del Child(1).x
 
 
+def test_a_frozen_child_of_a_frozen_base_holds_beside_a_permissive_co_base():
+    """No option transition fires the rebind, so a co-base whose own
+    __setattr__ slot would answer is met pre-creation: the namespace is born
+    with the block's wrappers, and CPython's slot inheritance lands on them
+    in either order."""
+
+    class Permissive:
+        def __setattr__(self, name: str, value: object) -> None:
+            object.__setattr__(self, name, value)
+
+    class FrozenBase(Struct, frozen=True):
+        x: int
+
+    class Ahead(Permissive, FrozenBase):
+        pass
+
+    class Behind(FrozenBase, Permissive):
+        pass
+
+    for Child in (Ahead, Behind):
+        assert "__setattr__" in Child.__dict__
+
+        with pytest.raises(TypeError, match="does not support attribute"):
+            Child(1).x = 9
+
+        with pytest.raises(TypeError, match="does not support attribute"):
+            del Child(1).x
+
+
 def test_a_fieldless_frozen_base_promises_nothing_to_a_mutable_class():
     """A fieldless frozen base made no promise, so frozen=False over one is
     free, in either order."""
