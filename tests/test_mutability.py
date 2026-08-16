@@ -1,3 +1,5 @@
+import sys
+
 import pytest
 from values import EVERY, identify
 
@@ -158,6 +160,122 @@ def test_frozen_true_over_a_mutable_base_holds_beside_a_permissive_co_base():
 
         with pytest.raises(TypeError, match="does not support attribute"):
             del Child(1).x
+
+
+def test_a_frozen_child_of_a_frozen_base_holds_beside_a_permissive_co_base():
+    """No option transition fires the rebind, so a co-base whose own
+    __setattr__ slot would answer is met pre-creation: the namespace is born
+    with the block's wrappers, and CPython's slot inheritance lands on them
+    in either order."""
+
+    class Permissive:
+        def __setattr__(self, name: str, value: object) -> None:
+            object.__setattr__(self, name, value)
+
+    class FrozenBase(Struct, frozen=True):
+        x: int
+
+    class Ahead(Permissive, FrozenBase):
+        pass
+
+    class Behind(FrozenBase, Permissive):
+        pass
+
+    for Child in (Ahead, Behind):
+        assert "__setattr__" in Child.__dict__
+
+        with pytest.raises(TypeError, match="does not support attribute"):
+            Child(1).x = 9
+
+        with pytest.raises(TypeError, match="does not support attribute"):
+            del Child(1).x
+
+
+def test_a_frozen_setattr_escape_beside_a_permissive_co_base_keeps_answering():
+    """The body's own half is the escape; the pre-creation rebind skips it
+    and injects the other half, which stays refused, in either order. An
+    escape written by a base is shadowed by the child's injected half, the
+    same way the post-hoc repair shadowed it before."""
+
+    class Permissive:
+        def __setattr__(self, name: str, value: object) -> None:
+            object.__setattr__(self, name, value)
+
+        def __delattr__(self, name: str) -> None:
+            object.__delattr__(self, name)
+
+    class FrozenBase(Struct, frozen=True):
+        x: int
+
+    class EscapedAhead(Permissive, FrozenBase):
+        def __setattr__(self, name: str, value: object) -> None:
+            object.__setattr__(self, name, value)
+
+    class EscapedBehind(FrozenBase, Permissive):
+        def __setattr__(self, name: str, value: object) -> None:
+            object.__setattr__(self, name, value)
+
+    for Child in (EscapedAhead, EscapedBehind):
+        if sys.version_info >= (3, 13):
+            instance = Child(1)
+            instance.x = 9
+
+            assert instance.x == 9
+
+            with pytest.raises(TypeError, match="does not support attribute"):
+                del instance.x
+        else:
+            # The parent build refuses the escape the same way on 3.10-3.12:
+            # the mixed wrapper/function slot derivation lands on a slot the
+            # body's own half cannot answer. Parity, not a promise.
+            with pytest.raises(TypeError):
+                Child(1).x = 9
+
+            with pytest.raises(TypeError):
+                del Child(1).x
+
+    class Escaping(FrozenBase):
+        def __setattr__(self, name: str, value: object) -> None:
+            object.__setattr__(self, name, value)
+
+    class InheritedAhead(Permissive, Escaping):
+        pass
+
+    with pytest.raises(TypeError, match="does not support attribute"):
+        InheritedAhead(1).x = 9
+
+
+def test_a_frozen_delattr_escape_beside_a_permissive_co_base_keeps_answering():
+    class Permissive:
+        def __setattr__(self, name: str, value: object) -> None:
+            object.__setattr__(self, name, value)
+
+        def __delattr__(self, name: str) -> None:
+            object.__delattr__(self, name)
+
+    class FrozenBase(Struct, frozen=True):
+        x: int
+
+    class EscapedAhead(Permissive, FrozenBase):
+        def __delattr__(self, name: str) -> None:
+            object.__delattr__(self, name)
+
+    class EscapedBehind(FrozenBase, Permissive):
+        def __delattr__(self, name: str) -> None:
+            object.__delattr__(self, name)
+
+    for Child in (EscapedAhead, EscapedBehind):
+        if sys.version_info >= (3, 13):
+            del Child(1).x
+
+            with pytest.raises(TypeError, match="does not support attribute"):
+                Child(1).x = 9
+        else:
+            with pytest.raises(TypeError):
+                del Child(1).x
+
+            with pytest.raises(TypeError):
+                Child(1).x = 9
 
 
 def test_a_fieldless_frozen_base_promises_nothing_to_a_mutable_class():

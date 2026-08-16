@@ -311,6 +311,7 @@ PyObject * build_struct_class(
 
 	bool const inherits_body_eq = inherited_equality.from_a_body;
 	bool const frozen_across_bases = request.options.frozen && any_struct_base_is_mutable(bases);
+	bool const bases_divert_setattro = any_base_diverts_setattro(bases);
 
 	PY_OWNED(
 		namespace,
@@ -323,6 +324,7 @@ PyObject * build_struct_class(
 			bases,
 			inherited,
 			frozen_across_bases,
+			bases_divert_setattro,
 			body_defines_eq,
 			inherits_body_eq,
 			inherited_equality.needs_derived_not_equal
@@ -378,6 +380,7 @@ PyObject * build_struct_class(
 					request.options,
 					inherited,
 					frozen_across_bases,
+					bases_divert_setattro,
 					body_defines_eq,
 					inherits_body_eq,
 					inherited_equality.needs_derived_not_equal,
@@ -866,16 +869,14 @@ static enum result settle_mro_bindings(
 ) {
 	PyTypeObject * const type = (PyTypeObject *) struct_class;
 
-	/* A co-base carrying its own C-level tp_setattro can divert the child's
-	 * slot away from the frozen block, so the block's wrappers are rebound
-	 * into the class dict — the same rebind machinery every other dunder
-	 * repair uses — and the MRO-dispatching slot honours them. A body
-	 * __setattr__ or __delattr__ is skipped per name, so the escape hatch
-	 * works for either half. In a re-entered build the namespace carries the
-	 * outer build's rebind injections rather than the true body, and the
-	 * outer settle is the source of truth. The mutable column needs no
-	 * repair: CPython's own dispatch honours hooks and foreign C-level slots
-	 * exactly as it does for plain classes. */
+	/* The pre-creation rebind lands the slot on the block's own wrapper, so
+	 * this repair fires only when the body defines __setattr__: the escape
+	 * half is skipped per name and the other half is rebound so it keeps
+	 * refusing. In a re-entered build the namespace carries the outer
+	 * build's rebind injections rather than the true body, and the outer
+	 * settle is the source of truth. The mutable column needs no repair:
+	 * CPython's own dispatch honours hooks and foreign C-level slots exactly
+	 * as it does for plain classes. */
 	if (options.frozen && type->tp_setattro != StructMixin_Type.tp_setattro) {
 		if (settle_rebind(struct_class, original_namespace, rebind_mutability, true) != RESULT_OK) {
 			return RESULT_ERROR;
@@ -1088,6 +1089,7 @@ static enum result settle_planned(
 		options,
 		inherited,
 		frozen_across_bases,
+		any_base_diverts_setattro(bases),
 		body_defines_eq,
 		inherits_body_eq,
 		derive_not_equal,
@@ -1552,6 +1554,10 @@ static void test_a_raw_tp_setattro_co_base_does_not_divert_the_struct_slot(void)
 	PY_OWNED(raw_bases, PyTuple_Pack(2, (PyObject *) &SwallowingType, mutable_base));
 	PY_OWNED(mutable_child, struct_class_with_field(raw_bases, NULL));
 	TEST_ASSERT_NOT_NULL(mutable_child);
+	TEST_ASSERT_EQUAL_INT(
+		0,
+		dict_has_string(((PyTypeObject *) mutable_child)->tp_dict, "__setattr__")
+	);
 
 	PY_OWNED(instance, PyObject_CallFunction(mutable_child, "i", 1));
 	TEST_ASSERT_NOT_NULL(instance);
@@ -1571,6 +1577,10 @@ static void test_a_raw_tp_setattro_co_base_does_not_divert_the_struct_slot(void)
 	TEST_ASSERT_EQUAL_PTR(
 		StructMixin_Type.tp_setattro,
 		((PyTypeObject *) frozen_child)->tp_setattro
+	);
+	TEST_ASSERT_EQUAL_INT(
+		1,
+		dict_has_string(((PyTypeObject *) frozen_child)->tp_dict, "__setattr__")
 	);
 
 	PY_OWNED(frozen_instance, PyObject_CallFunction(frozen_child, "i", 1));

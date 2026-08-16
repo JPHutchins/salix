@@ -262,6 +262,17 @@ static bool any_base_satisfies(PyObject * const bases, bool (*carries)(PyTypeObj
 	return false;
 }
 
+static bool carries_diverting_setattro(PyTypeObject const * const base) {
+	return (
+		base->tp_setattro != StructMixin_Type.tp_setattro &&
+		base->tp_setattro != PyBaseObject_Type.tp_setattro
+	);
+}
+
+bool any_base_diverts_setattro(PyObject * const bases) {
+	return any_base_satisfies(bases, carries_diverting_setattro);
+}
+
 bool any_base_has_weakref_slot(PyObject * const bases) {
 	return any_base_satisfies(bases, carries_weakref_slot);
 }

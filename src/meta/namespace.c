@@ -39,6 +39,7 @@ static enum result apply_options(
 	struct options options,
 	struct options inherited,
 	bool frozen_across_bases,
+	bool bases_divert_setattro,
 	bool body_defines_eq,
 	bool inherits_body_eq,
 	bool derive_not_equal
@@ -69,6 +70,7 @@ PyObject * build_class_namespace(
 	PyObject * const bases,
 	struct options const inherited,
 	bool const frozen_across_bases,
+	bool const bases_divert_setattro,
 	bool const body_defines_eq,
 	bool const inherits_body_eq,
 	bool const derive_not_equal
@@ -87,6 +89,7 @@ PyObject * build_class_namespace(
 				options,
 				inherited,
 				frozen_across_bases,
+				bases_divert_setattro,
 				body_defines_eq,
 				inherits_body_eq,
 				derive_not_equal
@@ -318,6 +321,7 @@ struct binding_plan binding_plan(
 	struct options const options,
 	struct options const inherited,
 	bool const frozen_across_bases,
+	bool const bases_divert_setattro,
 	bool const body_defines_eq,
 	bool const inherits_body_eq,
 	bool const derive_not_equal,
@@ -329,7 +333,11 @@ struct binding_plan binding_plan(
 		.rebind_comparison = options.eq != inherited.eq,
 		.rebind_not_equal = options.eq != inherited.eq && !(body_defines_eq || derive_not_equal),
 		.rebind_representation = options.repr != inherited.repr,
-		.rebind_mutability = options.frozen != inherited.frozen || frozen_across_bases,
+		.rebind_mutability = (
+			options.frozen != inherited.frozen ||
+			frozen_across_bases ||
+			(options.frozen && bases_divert_setattro)
+		),
 		.match_args_wanted = options.match_args,
 	};
 
@@ -351,6 +359,7 @@ static enum result apply_options(
 	struct options const options,
 	struct options const inherited,
 	bool const frozen_across_bases,
+	bool const bases_divert_setattro,
 	bool const body_defines_eq,
 	bool const inherits_body_eq,
 	bool const derive_not_equal
@@ -366,6 +375,7 @@ static enum result apply_options(
 		options,
 		inherited,
 		frozen_across_bases,
+		bases_divert_setattro,
 		body_defines_eq,
 		inherits_body_eq,
 		derive_not_equal,
