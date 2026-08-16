@@ -60,7 +60,13 @@ struct options inherited_options(
 	bool * promised_frozen
 );
 bool any_struct_base_is_mutable(PyObject * bases);
-void settle_cache_fill(void);
+struct salix_state {
+	PyObject * mixin_bindings[7];
+	PyObject * object_bindings[7];
+};
+
+void settle_cache_fill(struct salix_state * state);
+struct salix_state * settle_state(void);
 bool any_base_has_weakref_slot(PyObject * bases);
 bool any_base_diverts_setattro(PyObject * bases);
 bool carries_weakref_slot(PyTypeObject const * type);

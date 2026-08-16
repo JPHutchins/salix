@@ -704,11 +704,10 @@ static int struct_base_count(PyObject * const bases) {
 	return count;
 }
 
-static PyObject * mixin_bindings[7];
-static PyObject * object_bindings[7];
 /* Filled once at module init, before any class can be built, so the settle
- * only ever reads these: no post-init mutation, no keying, no lock. */
-void settle_cache_fill(void) {
+ * only ever reads these: no post-init mutation, no keying, no lock. The
+ * arrays live in the module state, so each interpreter fills its own. */
+void settle_cache_fill(struct salix_state * const state) {
 	static char const * const names[7] = {
 		"__eq__",
 		"__ne__",
@@ -720,8 +719,11 @@ void settle_cache_fill(void) {
 	};
 
 	for (Py_ssize_t i = 0; i < 7; ++i) {
-		mixin_bindings[i] = PyObject_GetAttrString((PyObject *) &StructMixin_Type, names[i]);
-		object_bindings[i] = PyObject_GetAttrString((PyObject *) &PyBaseObject_Type, names[i]);
+		state->mixin_bindings[i] = PyObject_GetAttrString((PyObject *) &StructMixin_Type, names[i]);
+		state->object_bindings[i] = PyObject_GetAttrString(
+			(PyObject *) &PyBaseObject_Type,
+			names[i]
+		);
 	}
 }
 
@@ -731,16 +733,16 @@ struct settle_targets {
 	bool readable;
 };
 
-static struct settle_targets settle_candidates(void) {
+static struct settle_targets settle_candidates(struct salix_state const * const state) {
 	for (Py_ssize_t i = 0; i < 7; ++i) {
-		if (mixin_bindings[i] == NULL || object_bindings[i] == NULL) {
+		if (state->mixin_bindings[i] == NULL || state->object_bindings[i] == NULL) {
 			return (struct settle_targets){.readable = false};
 		}
 	}
 
 	return (struct settle_targets){
-		.mixin = mixin_bindings,
-		.object = object_bindings,
+		.mixin = state->mixin_bindings,
+		.object = state->object_bindings,
 		.readable = true,
 	};
 }
@@ -906,7 +908,8 @@ static bool honoured_owner(PyTypeObject * const owner, PyTypeObject * const firs
 static int honours_a_body_comparison(
 	PyTypeObject * const type,
 	PyTypeObject * const first_struct,
-	PyObject * const original_namespace
+	PyObject * const original_namespace,
+	struct settle_targets const targets
 ) {
 	PyObject * const mro = type->tp_mro;
 
@@ -936,7 +939,7 @@ static int honours_a_body_comparison(
 				continue;
 			}
 
-			if (bound != mixin_bindings[name] && bound != object_bindings[name]) {
+			if (bound != targets.mixin[name] && bound != targets.object[name]) {
 				return 1;
 			}
 		}
@@ -983,7 +986,13 @@ static enum result settle_mro_bindings(
 
 	PyTypeObject * const first_struct = (PyTypeObject *) find_behaviour_base(bases);
 
-	struct settle_targets const targets = settle_candidates();
+	struct salix_state * const state = settle_state();
+
+	if (state == NULL) {
+		return RESULT_ERROR;
+	}
+
+	struct settle_targets const targets = settle_candidates(state);
 
 	PY_MOVABLE(resolved_eq, NULL);
 	PY_MOVABLE(resolved_ne, NULL);
@@ -1024,7 +1033,12 @@ static enum result settle_mro_bindings(
 		return RESULT_ERROR;
 	}
 
-	int const body_answers = honours_a_body_comparison(type, first_struct, original_namespace);
+	int const body_answers = honours_a_body_comparison(
+		type,
+		first_struct,
+		original_namespace,
+		targets
+	);
 
 	if (body_answers < 0) {
 		return RESULT_ERROR;
