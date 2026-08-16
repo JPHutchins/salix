@@ -205,22 +205,70 @@ static bool carries_fielded_frozen(PyTypeObject const * const base) {
 	return struct_base->struct_field_count > 0 && struct_base->struct_options.frozen;
 }
 
+static bool carries_instance_dict(PyTypeObject const * const base) {
+	if (base->tp_dictoffset != 0) {
+		return true;
+	}
+
+#if PY_VERSION_HEX >= 0x030C0000
+	return (base->tp_flags & Py_TPFLAGS_HEAPTYPE) != 0 &&
+		(base->tp_flags & Py_TPFLAGS_MANAGED_DICT) != 0;
+#else
+	return false;
+#endif
+}
+
+struct base_survey survey_bases(PyObject * const bases) {
+	struct base_survey survey = {
+		.behaviour = NULL,
+		.facts = {
+			.fielded_frozen = false,
+			.weakref_carried = false,
+			.instance_dict_carried = false,
+		},
+	};
+
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(bases); ++i) {
+		PyObject * const base = PyTuple_GET_ITEM(bases, i);
+
+		if (!PyType_Check(base)) {
+			continue;
+		}
+
+		if (survey.behaviour == NULL && is_struct_class(base)) {
+			survey.behaviour = (StructType *) base;
+		}
+
+		survey.facts.fielded_frozen |= carries_fielded_frozen((PyTypeObject *) base);
+		survey.facts.weakref_carried |= carries_weakref_slot((PyTypeObject *) base);
+		survey.facts.instance_dict_carried |= carries_instance_dict((PyTypeObject *) base);
+
+		if (
+			survey.behaviour != NULL &&
+			survey.facts.fielded_frozen &&
+			survey.facts.weakref_carried &&
+			survey.facts.instance_dict_carried
+		) {
+			break;
+		}
+	}
+
+	return survey;
+}
+
 struct options inherited_options(
-	PyObject * const bases,
 	StructType const * const behaviour,
-	bool * const promised_frozen
+	struct base_facts const facts
 ) {
 	struct options const from_behaviour = base_options(behaviour);
 
-	*promised_frozen = any_base_satisfies(bases, carries_fielded_frozen);
-
 	return (struct options){
-		.frozen = from_behaviour.frozen || *promised_frozen,
+		.frozen = from_behaviour.frozen || facts.fielded_frozen,
 		.eq = from_behaviour.eq,
 		.order = from_behaviour.order,
 		.repr = from_behaviour.repr,
 		.match_args = from_behaviour.match_args,
-		.weakref = from_behaviour.weakref,
+		.weakref = from_behaviour.weakref || facts.weakref_carried,
 	};
 }
 
@@ -232,19 +280,6 @@ bool carries_weakref_slot(PyTypeObject const * const base) {
 #if PY_VERSION_HEX >= 0x030C0000
 	return (base->tp_flags & Py_TPFLAGS_HEAPTYPE) != 0 &&
 		(base->tp_flags & Py_TPFLAGS_MANAGED_WEAKREF) != 0;
-#else
-	return false;
-#endif
-}
-
-static bool carries_instance_dict(PyTypeObject const * const base) {
-	if (base->tp_dictoffset != 0) {
-		return true;
-	}
-
-#if PY_VERSION_HEX >= 0x030C0000
-	return (base->tp_flags & Py_TPFLAGS_HEAPTYPE) != 0 &&
-		(base->tp_flags & Py_TPFLAGS_MANAGED_DICT) != 0;
 #else
 	return false;
 #endif
@@ -271,16 +306,4 @@ static bool carries_diverting_setattro(PyTypeObject const * const base) {
 
 bool any_base_diverts_setattro(PyObject * const bases) {
 	return any_base_satisfies(bases, carries_diverting_setattro);
-}
-
-bool any_base_has_weakref_slot(PyObject * const bases) {
-	return any_base_satisfies(bases, carries_weakref_slot);
-}
-
-bool weakref_expected(struct options const options, PyObject * const bases) {
-	return options.weakref || any_base_satisfies(bases, carries_weakref_slot);
-}
-
-bool any_base_has_instance_dict(PyObject * const bases) {
-	return any_base_satisfies(bases, carries_instance_dict);
 }

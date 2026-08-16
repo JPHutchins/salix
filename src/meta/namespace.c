@@ -32,7 +32,7 @@ static enum slot_name_owner slot_name_owner_of(PyObject * const name) {
 	return SLOT_NAME_NONE;
 }
 
-static PyObject * build_slots(PyObject * new_names, bool weakref, PyObject * bases);
+static PyObject * build_slots(PyObject * new_names, bool adds_weakref_slot);
 static enum result set_match_args(PyObject * namespace, PyObject * all_names, bool wanted);
 static enum result apply_options(
 	PyObject * namespace,
@@ -67,7 +67,7 @@ PyObject * build_class_namespace(
 	PyObject * const new_names,
 	struct options const options,
 	StructType const * const base,
-	PyObject * const bases,
+	bool const adds_weakref_slot,
 	struct options const inherited,
 	bool const frozen_across_bases,
 	bool const bases_divert_setattro,
@@ -75,7 +75,7 @@ PyObject * build_class_namespace(
 	bool const inherits_body_eq,
 	bool const derive_not_equal
 ) {
-	PY_OWNED(slots, build_slots(new_names, options.weakref, bases));
+	PY_OWNED(slots, build_slots(new_names, adds_weakref_slot));
 	PY_MOVABLE(namespace, PyDict_Copy(original_namespace));
 
 	if (
@@ -105,8 +105,8 @@ PyObject * build_class_namespace(
 enum result refuse_displaced_slots(
 	PyObject * const original_namespace,
 	PyObject * const all_names,
-	PyObject * const bases,
-	struct options const options
+	struct options const options,
+	bool const instance_dict_carried
 ) {
 	PyObject * const declared = dict_get_string(original_namespace, "__slots__");
 
@@ -114,8 +114,7 @@ enum result refuse_displaced_slots(
 		return PyErr_Occurred() ? RESULT_ERROR : RESULT_OK;
 	}
 
-	bool const carries_a_weakref_slot = weakref_expected(options, bases);
-	bool const carries_an_instance_dict = any_base_has_instance_dict(bases);
+	bool const carries_a_weakref_slot = options.weakref;
 
 	PY_OWNED(
 		entries,
@@ -157,7 +156,7 @@ enum result refuse_displaced_slots(
 		}
 
 		if (owner == SLOT_NAME_INSTANCE_DICT) {
-			if (carries_an_instance_dict) {
+			if (instance_dict_carried) {
 				continue;
 			}
 
@@ -274,18 +273,14 @@ enum result refuse_reserved_metadata_names(
 	return RESULT_OK;
 }
 
-static PyObject * build_slots(
-	PyObject * const new_names,
-	bool const weakref,
-	PyObject * const bases
-) {
+static PyObject * build_slots(PyObject * const new_names, bool const adds_weakref_slot) {
 	PY_OWNED(names, PySequence_List(new_names));
 
 	if (names == NULL) {
 		return NULL;
 	}
 
-	if (weakref && !any_base_has_weakref_slot(bases)) {
+	if (adds_weakref_slot) {
 		PY_OWNED(weakref_name, PyUnicode_FromString(weakref_slot_name()));
 
 		if (weakref_name == NULL || PyList_Append(names, weakref_name) < 0) {

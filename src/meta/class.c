@@ -228,19 +228,19 @@ PyObject * build_struct_class(
 	PyObject * const keywords,
 	struct salix_state * const state
 ) {
-	StructType const * const behaviour = find_behaviour_base(bases);
-	bool promised_frozen = false;
-	bool const weakref_carried = any_base_has_weakref_slot(bases);
-	struct options const inherited = inherited_options(bases, behaviour, &promised_frozen);
-	struct options_request request =
-		options_read(keywords, inherited, promised_frozen, weakref_carried);
+	struct base_survey const survey = survey_bases(bases);
+	struct options const inherited = inherited_options(survey.behaviour, survey.facts);
+	struct options_request request = options_read(keywords, inherited, survey.facts);
 
 	if (request.tag == OPTIONS_REJECTED) {
 		return NULL;
 	}
 
-	bool const weakref_requested = request.options.weakref;
-	request.options.weakref |= weakref_carried;
+	bool const adds_weakref_slot = request.options.weakref && !survey.facts.weakref_carried;
+	bool const weakref_keyword_rides = (
+		(request.weakref_written && request.options.weakref) ||
+		(survey.behaviour != NULL && survey.behaviour->struct_options.weakref)
+	);
 
 	PyTypeObject * const handoff = winning_metatype(metatype, bases);
 	PyObject * forwarded_keywords = NULL;
@@ -264,7 +264,7 @@ PyObject * build_struct_class(
 			return NULL;
 		}
 
-		verdict = chain_probe(chain, keywords, weakref_requested);
+		verdict = chain_probe(chain, keywords, weakref_keyword_rides);
 
 		if (verdict.accepts_all < 0) {
 			return NULL;
@@ -273,7 +273,7 @@ PyObject * build_struct_class(
 		if (verdict.readable) {
 			if (verdict.accepts_all == 1) {
 				forwarded_keywords = keywords;
-			} else if (weakref_requested && verdict.accepts_weakref == 1) {
+			} else if (weakref_keyword_rides && verdict.accepts_weakref == 1) {
 				weakref_only = PyDict_New();
 
 				if (
@@ -290,7 +290,7 @@ PyObject * build_struct_class(
 			keyword_rungs_storage[0] = keywords;
 			laddered = true;
 
-			if (weakref_requested) {
+			if (weakref_keyword_rides) {
 				weakref_only = PyDict_New();
 
 				if (
@@ -310,8 +310,8 @@ PyObject * build_struct_class(
 	}
 
 	if (
-		request.options.weakref &&
-		!weakref_carried &&
+		weakref_keyword_rides &&
+		!survey.facts.weakref_carried &&
 		handoff->tp_new != StructMeta_new &&
 		verdict.readable &&
 		verdict.accepts_weakref == 0
@@ -337,7 +337,12 @@ struct field_plan plan = field_plan_build(base, original_namespace);
 		refuse_colliding_methods(original_namespace, plan.all_names, name) != RESULT_OK ||
 		refuse_mixin_method_fields(plan.all_names) != RESULT_OK ||
 		refuse_slot_name_fields(plan.new_names) != RESULT_OK ||
-		refuse_displaced_slots(original_namespace, plan.all_names, bases, request.options) !=
+		refuse_displaced_slots(
+				original_namespace,
+				plan.all_names,
+				request.options,
+				survey.facts.instance_dict_carried
+			) !=
 			RESULT_OK
 	) {
 		field_plan_clear(&plan);
@@ -378,7 +383,7 @@ struct field_plan plan = field_plan_build(base, original_namespace);
 			plan.new_names,
 			request.options,
 			base,
-			bases,
+			adds_weakref_slot,
 			inherited,
 			frozen_across_bases,
 			bases_divert_setattro,
@@ -729,12 +734,11 @@ static StructType * create_class(
 	return (StructType *) py_move(&created);
 }
 
-/* It is the third walk of `bases` in a class creation, after find_struct_base
- * and _PyType_CalculateMetaclass. Measured, and smaller than the measurement:
- * replacing the body with `return requested` leaves class creation at 9.77-9.87
- * us for a 16-field class either way, so the walk is bounded by the width of
- * that band rather than shown to be free. It is one Py_TYPE and one
- * PyType_IsSubtype per base, and a class has one. */
+/* Measured, and smaller than the measurement: replacing the body with
+ * `return requested` leaves class creation at 9.77-9.87 us for a 16-field
+ * class either way, so the walk is bounded by the width of that band rather
+ * than shown to be free. It is one Py_TYPE and one PyType_IsSubtype per base,
+ * and a class has one. */
 static PyTypeObject * winning_metatype(PyTypeObject * const requested, PyObject * const bases) {
 	PyTypeObject * winner = requested;
 
@@ -1343,7 +1347,7 @@ static enum result settle_planned(
 
 	bool const carries_slot = carries_weakref_slot((PyTypeObject *) struct_class);
 
-	if (carries_slot != weakref_expected(options, bases)) {
+	if (carries_slot != options.weakref) {
 		return refuse_unplanned(struct_class);
 	}
 
