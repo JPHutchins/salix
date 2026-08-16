@@ -32,7 +32,10 @@ static StructType * create_class(
 	PyObject * bases,
 	PyObject * namespace,
 	PyObject * const * keyword_rungs,
-	Py_ssize_t keyword_rung_count
+	Py_ssize_t keyword_rung_count,
+	PyObject * handoff_attempt,
+	PyObject * handoff_declined,
+	PyObject * handoff_new
 );
 static PyTypeObject * winning_metatype(PyTypeObject * requested, PyObject * bases);
 
@@ -211,7 +214,8 @@ PyObject * build_struct_class(
 	PyObject * const name,
 	PyObject * const bases,
 	PyObject * const original_namespace,
-	PyObject * const keywords
+	PyObject * const keywords,
+	struct salix_state * const state
 ) {
 	StructType const * const behaviour = find_behaviour_base(bases);
 	bool promised_frozen = false;
@@ -328,7 +332,10 @@ PyObject * build_struct_class(
 			bases,
 			namespace,
 			keyword_rungs,
-			keyword_rung_count
+			keyword_rung_count,
+			state->handoff_attempt,
+			state->handoff_declined,
+			state->handoff_new
 		) :
 		NULL
 	);
@@ -400,54 +407,6 @@ PyObject * build_struct_class(
 	return (PyObject *) struct_class;
 }
 
-static bool binding_type_error(PyObject * const exception_value) {
-	PyObject * message = NULL;
-
-	if (PyUnicode_Check(exception_value)) {
-		message = exception_value;
-	} else {
-		if (!PyErr_GivenExceptionMatches(exception_value, PyExc_TypeError)) {
-			return false;
-		}
-
-		PyObject * const args = ((PyBaseExceptionObject *) exception_value)->args;
-
-		if (!PyTuple_Check(args) || PyTuple_GET_SIZE(args) == 0) {
-			return false;
-		}
-
-		message = PyTuple_GET_ITEM(args, 0);
-
-		if (!PyUnicode_Check(message)) {
-			return false;
-		}
-	}
-
-	Py_ssize_t size = 0;
-	char const * const text = PyUnicode_AsUTF8AndSize(message, &size);
-
-	if (text == NULL) {
-		PyErr_Clear();
-
-		return false;
-	}
-
-	static char const * const prefixes[] = {
-		"got an unexpected keyword argument",
-		"got multiple values for keyword argument",
-		"missing ",
-		"takes ",
-	};
-
-	for (Py_ssize_t i = 0; i < 4; ++i) {
-		if (strstr(text, prefixes[i]) != NULL) {
-			return true;
-		}
-	}
-
-	return false;
-}
-
 static StructType * create_class(
 	PyTypeObject * const metatype,
 	PyTypeObject * const handoff,
@@ -455,7 +414,10 @@ static StructType * create_class(
 	PyObject * const bases,
 	PyObject * const namespace,
 	PyObject * const * const keyword_rungs,
-	Py_ssize_t const keyword_rung_count
+	Py_ssize_t const keyword_rung_count,
+	PyObject * const handoff_attempt,
+	PyObject * const handoff_declined,
+	PyObject * const handoff_new
 ) {
 	PY_OWNED(type_args, PyTuple_Pack(3, name, bases, namespace));
 
@@ -467,13 +429,17 @@ static StructType * create_class(
 	PyObject * created = NULL;
 
 	for (Py_ssize_t attempt = 0; created == NULL && attempt < keyword_rung_count; ++attempt) {
-		created = PyType_Type.tp_new(
+		created = PyObject_CallFunctionObjArgs(
+			handoff_attempt,
+			handoff_new,
 			builder,
 			type_args,
-			builder == handoff ? NULL : keyword_rungs[attempt]
+			builder == handoff || keyword_rungs[attempt] == NULL ? Py_None :
+			keyword_rungs[attempt],
+			NULL
 		);
 
-		if (created != NULL || attempt + 1 == keyword_rung_count) {
+		if (created != NULL) {
 			break;
 		}
 
@@ -482,14 +448,33 @@ static StructType * create_class(
 		PyObject * exception_tb = NULL;
 		PyErr_Fetch(&exception_type, &exception_value, &exception_tb);
 
-		if (!binding_type_error(exception_value)) {
-			PyErr_Restore(exception_type, exception_value, exception_tb);
+		bool const declined = (
+			exception_value != NULL &&
+			PyErr_GivenExceptionMatches(exception_value, handoff_declined)
+		);
+
+		if (declined && attempt + 1 < keyword_rung_count) {
+			Py_XDECREF(exception_type);
+			Py_XDECREF(exception_value);
+			Py_XDECREF(exception_tb);
+			continue;
+		}
+
+		if (declined) {
+			PY_OWNED(message, PyObject_Str(exception_value));
+			Py_XDECREF(exception_type);
+			Py_XDECREF(exception_value);
+			Py_XDECREF(exception_tb);
+
+			if (message != NULL) {
+				PyErr_SetObject(PyExc_TypeError, message);
+			}
+
 			break;
 		}
 
-		Py_XDECREF(exception_type);
-		Py_XDECREF(exception_value);
-		Py_XDECREF(exception_tb);
+		PyErr_Restore(exception_type, exception_value, exception_tb);
+		break;
 	}
 
 	if (created == NULL) {
@@ -503,6 +488,8 @@ static StructType * create_class(
 			handoff->tp_name,
 			Py_TYPE(created)->tp_name
 		);
+
+		Py_DECREF(created);
 
 		return NULL;
 	}

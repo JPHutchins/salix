@@ -373,8 +373,8 @@ class TestAMetaclassSubclass:
 
     def test_a_c_slot_delegate_still_builds(self):
         """A __new__ that is a slot wrapper, not a Python function, used to be
-        refused as unreadable; the ladder attempts it and the keyword-less
-        rung catches it when it declines.
+        refused as unreadable; the ladder attempts it, and weakref -- the one
+        option the settle cannot repair -- proves the keyword really rode.
         """
 
         class SlottedNew(META):
@@ -383,9 +383,51 @@ class TestAMetaclassSubclass:
         class Base(Struct, metaclass=SlottedNew):
             x: int
 
-        built = META("Built", (Base,), {"__annotations__": {"y": int}}, order=True)
+        built = META("Built", (Base,), {"__annotations__": {"y": int}}, weakref=True)
+        held = built(1, 2)
 
-        assert built(1, 2) < built(1, 3)
+        assert weakref.ref(held)() is held
+
+    def test_a_classmethod_delegate_keeps_cpythons_own_error(self):
+        """The classmethod shape double-binds at CPython's own call
+        convention (five args into four, measured on the pre-PR head too), so
+        every build through it fails with that error -- the ladder surfaces
+        it rather than a gate-side refusal.
+        """
+
+        class ClassMethod(META):
+            @classmethod
+            def __new__(metacls, name, bases, namespace, **keywords):
+                return super().__new__(metacls, name, bases, namespace, **keywords)
+
+        with pytest.raises(TypeError, match="takes 4 positional arguments but 5 were given"):
+
+            class Base(Struct, metaclass=ClassMethod):
+                x: int
+
+    def test_a_validation_type_error_with_binding_words_propagates(self):
+        """A delegate body that raises a TypeError whose message merely
+        contains binding words is not a binding failure; it propagates and
+        the body ran once.
+        """
+
+        calls = []
+
+        class Validating(META):
+            def __new__(metacls, name, bases, namespace, **keywords):
+                if keywords:
+                    calls.append(1)
+                    raise TypeError("missing something is not a binding failure")
+
+                return super().__new__(metacls, name, bases, namespace)
+
+        class Base(Struct, metaclass=Validating):
+            x: int
+
+        with pytest.raises(TypeError, match="not a binding failure"):
+            META("Built", (Base,), {"__annotations__": {"y": int}}, order=True)
+
+        assert calls == [1]
 
     def test_a_body_type_error_propagates_without_a_retry(self):
         """Only binding failures fall to the next rung; a TypeError the

@@ -101,7 +101,12 @@ PyObject * StructMeta_new(
 		return NULL;
 	}
 
-	return build_struct_class(metatype, base, name, bases, original_namespace, keywords);
+	struct salix_state * const state = settle_state((PyTypeObject *) base);
+
+	return (
+		state == NULL ? NULL :
+		build_struct_class(metatype, base, name, bases, original_namespace, keywords, state)
+	);
 }
 
 PyObject * struct_create_root(
@@ -110,13 +115,20 @@ PyObject * struct_create_root(
 	PyObject * const namespace,
 	PyObject * const module
 ) {
+	struct salix_state * const state = (struct salix_state *) PyModule_GetState(module);
+
+	if (state == NULL) {
+		return NULL;
+	}
+
 	PyObject * const root = build_struct_class(
 		&StructMeta_Type,
 		NULL,
 		name,
 		bases,
 		namespace,
-		NULL
+		NULL,
+		state
 	);
 
 	if (root == NULL) {
