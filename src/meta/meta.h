@@ -70,10 +70,12 @@ enum { SETTLE_BINDING_COUNT = 7 };
 struct salix_state {
 	PyObject * mixin_bindings[SETTLE_BINDING_COUNT];
 	PyObject * object_bindings[SETTLE_BINDING_COUNT];
+	PyObject * handoff_attempt;
+	PyObject * handoff_declined;
+	PyObject * handoff_new;
 };
 
 enum result settle_cache_fill(struct salix_state * state);
-struct salix_state * settle_state(PyTypeObject * type);
 PyModuleDef * salix_module_def(void);
 bool any_base_has_weakref_slot(PyObject * bases);
 bool any_base_diverts_setattro(PyObject * bases);
@@ -134,5 +136,6 @@ PyObject * build_struct_class(
 	PyObject * name,
 	PyObject * bases,
 	PyObject * original_namespace,
-	PyObject * keywords
+	PyObject * keywords,
+	struct salix_state * state
 );

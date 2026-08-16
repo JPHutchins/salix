@@ -101,7 +101,15 @@ PyObject * StructMeta_new(
 		return NULL;
 	}
 
-	return build_struct_class(metatype, base, name, bases, original_namespace, keywords);
+	return build_struct_class(
+		metatype,
+		base,
+		name,
+		bases,
+		original_namespace,
+		keywords,
+		base->struct_state
+	);
 }
 
 PyObject * struct_create_root(
@@ -110,13 +118,20 @@ PyObject * struct_create_root(
 	PyObject * const namespace,
 	PyObject * const module
 ) {
+	struct salix_state * const state = (struct salix_state *) PyModule_GetState(module);
+
+	if (state == NULL) {
+		return NULL;
+	}
+
 	PyObject * const root = build_struct_class(
 		&StructMeta_Type,
 		NULL,
 		name,
 		bases,
 		namespace,
-		NULL
+		NULL,
+		state
 	);
 
 	if (root == NULL) {
@@ -125,6 +140,7 @@ PyObject * struct_create_root(
 
 	/* The settle reaches the module state through the type chain, so the
 	 * root carries the association every subclass inherits the walk to. */
+	((StructType *) root)->struct_state = (struct salix_state *) PyModule_GetState(module);
 	Py_XSETREF(((PyHeapTypeObject *) root)->ht_module, Py_NewRef(module));
 
 	return root;

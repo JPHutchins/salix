@@ -31,9 +31,16 @@ static StructType * create_class(
 	PyObject * name,
 	PyObject * bases,
 	PyObject * namespace,
-	PyObject * forwarded_keywords
+	PyObject * const * keyword_rungs,
+	Py_ssize_t keyword_rung_count,
+	PyObject * forwarded_keywords,
+	bool laddered,
+	PyObject * handoff_attempt,
+	PyObject * handoff_declined,
+	PyObject * handoff_new
 );
 static PyTypeObject * winning_metatype(PyTypeObject * requested, PyObject * bases);
+
 struct chain_verdict {
 	int accepts_all;
 	int accepts_weakref;
@@ -42,6 +49,7 @@ struct chain_verdict {
 static int code_accepts_keyword(PyCodeObject * code, PyObject * varnames, char const * keyword);
 static PyObject * metaclass_chain(PyTypeObject * winner);
 static struct chain_verdict chain_probe(PyObject * chain, PyObject * keywords, bool weakref_column);
+
 static enum result install_fields(
 	StructType * struct_class,
 	StructType const * base,
@@ -217,7 +225,8 @@ PyObject * build_struct_class(
 	PyObject * const name,
 	PyObject * const bases,
 	PyObject * const original_namespace,
-	PyObject * const keywords
+	PyObject * const keywords,
+	struct salix_state * const state
 ) {
 	StructType const * const behaviour = find_behaviour_base(bases);
 	bool promised_frozen = false;
@@ -237,6 +246,10 @@ PyObject * build_struct_class(
 	PyObject * forwarded_keywords = NULL;
 	PY_MOVABLE(weakref_only, NULL);
 	PY_MOVABLE(chain, NULL);
+	PyObject * keyword_rungs_storage[3] = {NULL, NULL, NULL};
+	PyObject * const * keyword_rungs = keyword_rungs_storage;
+	Py_ssize_t keyword_rung_count = 1;
+	bool laddered = false;
 	struct chain_verdict verdict = {.accepts_all = 1, .accepts_weakref = 1, .readable = true};
 
 	if (
@@ -257,19 +270,42 @@ PyObject * build_struct_class(
 			return NULL;
 		}
 
-		if (verdict.accepts_all == 1) {
-			forwarded_keywords = keywords;
-		} else if (weakref_requested && verdict.accepts_weakref == 1) {
-			weakref_only = PyDict_New();
+		if (verdict.readable) {
+			if (verdict.accepts_all == 1) {
+				forwarded_keywords = keywords;
+			} else if (weakref_requested && verdict.accepts_weakref == 1) {
+				weakref_only = PyDict_New();
 
-			if (
-				weakref_only == NULL ||
-				PyDict_SetItemString(weakref_only, option_keywords[OPTION_WEAKREF], Py_True) < 0
-			) {
-				return NULL;
+				if (
+					weakref_only == NULL ||
+					PyDict_SetItemString(weakref_only, option_keywords[OPTION_WEAKREF], Py_True) <
+						0
+				) {
+					return NULL;
+				}
+
+				forwarded_keywords = weakref_only;
 			}
+		} else {
+			keyword_rungs_storage[0] = keywords;
+			laddered = true;
 
-			forwarded_keywords = weakref_only;
+			if (weakref_requested) {
+				weakref_only = PyDict_New();
+
+				if (
+					weakref_only == NULL ||
+					PyDict_SetItemString(weakref_only, option_keywords[OPTION_WEAKREF], Py_True) <
+						0
+				) {
+					return NULL;
+				}
+
+				keyword_rungs_storage[1] = weakref_only;
+				keyword_rung_count = 3;
+			} else {
+				keyword_rung_count = 2;
+			}
 		}
 	}
 
@@ -277,22 +313,19 @@ PyObject * build_struct_class(
 		request.options.weakref &&
 		!weakref_carried &&
 		handoff->tp_new != StructMeta_new &&
+		verdict.readable &&
 		verdict.accepts_weakref == 0
 	) {
 		PyErr_SetString(
 			PyExc_TypeError,
-			verdict.readable ?
-				"weakref=True cannot cross a metaclass __new__ that hands the build "
-				"off: the re-entered call cannot add the weakref slot" :
-				"weakref=True cannot cross a metaclass __new__ that hands the build "
-				"off: the chain contains a __new__ whose signature cannot be read, so "
-				"the re-entered call cannot be verified to add the weakref slot"
+			"weakref=True cannot cross a metaclass __new__ that hands the build "
+			"off: the re-entered call cannot add the weakref slot"
 		);
 
 		return NULL;
 	}
 
-	struct field_plan plan = field_plan_build(base, original_namespace);
+struct field_plan plan = field_plan_build(base, original_namespace);
 
 	if (field_plan_failed(&plan)) {
 		return NULL;
@@ -361,12 +394,19 @@ PyObject * build_struct_class(
 			name,
 			bases,
 			namespace,
-			forwarded_keywords
+			keyword_rungs,
+			keyword_rung_count,
+			forwarded_keywords,
+			laddered,
+			state->handoff_attempt,
+			state->handoff_declined,
+			state->handoff_new
 		) :
 		NULL
 	);
 
 	if (struct_class != NULL) {
+		struct_class->struct_state = base != NULL ? base->struct_state : NULL;
 		enum result const settled = (
 			struct_class->struct_field_names == NULL ? install_fields(
 				struct_class,
@@ -431,45 +471,6 @@ PyObject * build_struct_class(
 	field_plan_clear(&plan);
 
 	return (PyObject *) struct_class;
-}
-
-static StructType * create_class(
-	PyTypeObject * const metatype,
-	PyTypeObject * const handoff,
-	PyObject * const name,
-	PyObject * const bases,
-	PyObject * const namespace,
-	PyObject * const forwarded_keywords
-) {
-	PY_OWNED(type_args, PyTuple_Pack(3, name, bases, namespace));
-
-	if (type_args == NULL) {
-		return NULL;
-	}
-
-	PyTypeObject * const builder = handoff->tp_new == StructMeta_new ? handoff : metatype;
-
-	PY_MOVABLE(
-		created,
-		PyType_Type.tp_new(builder, type_args, builder == handoff ? NULL : forwarded_keywords)
-	);
-
-	if (created == NULL) {
-		return NULL;
-	}
-
-	if (!is_struct_class(created)) {
-		PyErr_Format(
-			PyExc_TypeError,
-			"%.200s.__new__ returned %.200s, which is not a struct class",
-			handoff->tp_name,
-			Py_TYPE(created)->tp_name
-		);
-
-		return NULL;
-	}
-
-	return (StructType *) py_move(&created);
 }
 
 static int code_accepts_keyword(
@@ -609,6 +610,123 @@ static PyObject * metaclass_chain(PyTypeObject * const winner) {
 	}
 
 	return py_move(&chain);
+}
+
+static StructType * create_class(
+	PyTypeObject * const metatype,
+	PyTypeObject * const handoff,
+	PyObject * const name,
+	PyObject * const bases,
+	PyObject * const namespace,
+	PyObject * const * const keyword_rungs,
+	Py_ssize_t const keyword_rung_count,
+	PyObject * forwarded_keywords,
+	bool const laddered,
+	PyObject * const handoff_attempt,
+	PyObject * const handoff_declined,
+	PyObject * const handoff_new
+) {
+	PY_OWNED(type_args, PyTuple_Pack(3, name, bases, namespace));
+
+	if (type_args == NULL) {
+		return NULL;
+	}
+
+	PyTypeObject * const builder = handoff->tp_new == StructMeta_new ? handoff : metatype;
+	PyObject * created = NULL;
+
+	if (!laddered) {
+		created = PyType_Type.tp_new(
+			builder,
+			type_args,
+			builder == handoff ? NULL : forwarded_keywords
+		);
+	}
+
+	for (
+		Py_ssize_t attempt = 0;
+		created == NULL && laddered && attempt < keyword_rung_count;
+		++attempt
+	) {
+		created = PyObject_CallFunctionObjArgs(
+			handoff_attempt,
+			handoff_new,
+			builder,
+			type_args,
+			builder == handoff || keyword_rungs[attempt] == NULL ? Py_None :
+			keyword_rungs[attempt],
+			NULL
+		);
+
+		if (created != NULL) {
+			break;
+		}
+
+		PyObject * exception_type = NULL;
+		PyObject * exception_value = NULL;
+		PyObject * exception_tb = NULL;
+		PyErr_Fetch(&exception_type, &exception_value, &exception_tb);
+
+		bool const declined = (
+			exception_value != NULL &&
+			PyErr_GivenExceptionMatches(exception_value, handoff_declined)
+		);
+
+		if (declined && attempt + 1 < keyword_rung_count) {
+			Py_XDECREF(exception_type);
+			Py_XDECREF(exception_value);
+			Py_XDECREF(exception_tb);
+			continue;
+		}
+
+		if (declined) {
+			PyObject * const original_tb = PyException_GetTraceback(exception_value);
+			PY_OWNED(message, PyObject_Str(exception_value));
+			Py_XDECREF(exception_type);
+			Py_XDECREF(exception_value);
+			Py_XDECREF(exception_tb);
+
+			if (message != NULL) {
+				PyErr_SetObject(PyExc_TypeError, message);
+
+				if (original_tb != NULL) {
+					PyObject * exc_type = NULL;
+					PyObject * exc_value = NULL;
+					PyObject * exc_tb = NULL;
+					PyErr_Fetch(&exc_type, &exc_value, &exc_tb);
+					PyException_SetTraceback(exc_value, Py_NewRef(original_tb));
+					PyErr_Restore(exc_type, exc_value, exc_tb);
+					Py_DECREF(original_tb);
+				}
+			} else {
+				Py_XDECREF(original_tb);
+			}
+
+			break;
+		}
+
+		PyErr_Restore(exception_type, exception_value, exception_tb);
+		break;
+	}
+
+	if (created == NULL) {
+		return NULL;
+	}
+
+	if (!is_struct_class(created)) {
+		PyErr_Format(
+			PyExc_TypeError,
+			"%.200s.__new__ returned %.200s, which is not a struct class",
+			handoff->tp_name,
+			Py_TYPE(created)->tp_name
+		);
+
+		Py_DECREF(created);
+
+		return NULL;
+	}
+
+	return (StructType *) py_move(&created);
 }
 
 /* It is the third walk of `bases` in a class creation, after find_struct_base
@@ -975,12 +1093,7 @@ static enum result settle_mro_bindings(
 	}
 
 	PyTypeObject * const first_struct = (PyTypeObject *) find_behaviour_base(bases);
-
-	struct salix_state * const state = settle_state(type);
-
-	if (state == NULL) {
-		return RESULT_ERROR;
-	}
+	struct salix_state * const state = struct_class->struct_state;
 
 	PY_MOVABLE(resolved_eq, NULL);
 	PY_MOVABLE(resolved_ne, NULL);
