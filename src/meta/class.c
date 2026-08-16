@@ -720,10 +720,13 @@ enum result settle_cache_fill(struct salix_state * const state) {
 	};
 
 	for (Py_ssize_t i = 0; i < SETTLE_BINDING_COUNT; ++i) {
-		state->mixin_bindings[i] = PyObject_GetAttrString((PyObject *) &StructMixin_Type, names[i]);
-		state->object_bindings[i] = PyObject_GetAttrString(
-			(PyObject *) &PyBaseObject_Type,
-			names[i]
+		Py_XSETREF(
+			state->mixin_bindings[i],
+			PyObject_GetAttrString((PyObject *) &StructMixin_Type, names[i])
+		);
+		Py_XSETREF(
+			state->object_bindings[i],
+			PyObject_GetAttrString((PyObject *) &PyBaseObject_Type, names[i])
 		);
 
 		if (state->mixin_bindings[i] == NULL || state->object_bindings[i] == NULL) {
@@ -732,18 +735,6 @@ enum result settle_cache_fill(struct salix_state * const state) {
 	}
 
 	return RESULT_OK;
-}
-
-struct settle_targets {
-	PyObject * const * mixin;
-	PyObject * const * object;
-};
-
-static struct settle_targets settle_candidates(struct salix_state const * const state) {
-	return (struct settle_targets){
-		.mixin = state->mixin_bindings,
-		.object = state->object_bindings,
-	};
 }
 
 /* What the class's MRO hands out below the class's own dict for the three
@@ -908,7 +899,7 @@ static int honours_a_body_comparison(
 	PyTypeObject * const type,
 	PyTypeObject * const first_struct,
 	PyObject * const original_namespace,
-	struct settle_targets const targets
+	struct salix_state const * const state
 ) {
 	PyObject * const mro = type->tp_mro;
 
@@ -938,7 +929,7 @@ static int honours_a_body_comparison(
 				continue;
 			}
 
-			if (bound != targets.mixin[name] && bound != targets.object[name]) {
+			if (bound != state->mixin_bindings[name] && bound != state->object_bindings[name]) {
 				return 1;
 			}
 		}
@@ -991,8 +982,6 @@ static enum result settle_mro_bindings(
 		return RESULT_ERROR;
 	}
 
-	struct settle_targets const targets = settle_candidates(state);
-
 	PY_MOVABLE(resolved_eq, NULL);
 	PY_MOVABLE(resolved_ne, NULL);
 	PY_MOVABLE(resolved_repr, NULL);
@@ -1035,7 +1024,7 @@ static enum result settle_mro_bindings(
 		type,
 		first_struct,
 		original_namespace,
-		targets
+		state
 	);
 
 	if (body_answers < 0) {
@@ -1046,10 +1035,10 @@ static enum result settle_mro_bindings(
 		type->tp_richcompare = Struct_rich_compare;
 	}
 
-	PyObject * const target_eq = options.eq ? targets.mixin[0] : targets.object[0];
+	PyObject * const target_eq = options.eq ? state->mixin_bindings[0] : state->object_bindings[0];
 	bool const eq_is_salix_owned = (
-		resolved_eq == targets.mixin[0] ||
-		resolved_eq == targets.object[0]
+		resolved_eq == state->mixin_bindings[0] ||
+		resolved_eq == state->object_bindings[0]
 	);
 
 	if (
@@ -1079,12 +1068,15 @@ static enum result settle_mro_bindings(
 
 	for (Py_ssize_t i = 0; i < 4; ++i) {
 		Py_ssize_t const slot = orderings[i].slot;
-		PyObject * const target = options.eq ? targets.mixin[slot] : targets.object[slot];
+		PyObject * const target = (
+			options.eq ? state->mixin_bindings[slot] :
+			state->object_bindings[slot]
+		);
 		PyObject * const resolved_i = orderings[i].resolved;
 		PyTypeObject * const owner_i = orderings[i].owner;
 		bool const salix_owned = (
-			resolved_i == targets.mixin[slot] ||
-			resolved_i == targets.object[slot]
+			resolved_i == state->mixin_bindings[slot] ||
+			resolved_i == state->object_bindings[slot]
 		);
 
 		if (resolved_i != target && (salix_owned || !honoured_owner(owner_i, first_struct))) {
@@ -1105,13 +1097,13 @@ static enum result settle_mro_bindings(
 	bool const body_eq_answers = !eq_is_salix_owned && honoured_owner(eq_owner, first_struct);
 
 	PyObject * const target_ne = (
-		body_eq_answers ? targets.object[1] :
-		options.eq ? targets.mixin[1] :
-		targets.object[1]
+		body_eq_answers ? state->object_bindings[1] :
+		options.eq ? state->mixin_bindings[1] :
+		state->object_bindings[1]
 	);
 	bool const ne_is_salix_owned = (
-		resolved_ne == targets.mixin[1] ||
-		resolved_ne == targets.object[1]
+		resolved_ne == state->mixin_bindings[1] ||
+		resolved_ne == state->object_bindings[1]
 	);
 
 	if (
@@ -1131,10 +1123,13 @@ static enum result settle_mro_bindings(
 		}
 	}
 
-	PyObject * const target_repr = options.repr ? targets.mixin[6] : targets.object[6];
+	PyObject * const target_repr = (
+		options.repr ? state->mixin_bindings[6] :
+		state->object_bindings[6]
+	);
 	bool const repr_is_salix_owned = (
-		resolved_repr == targets.mixin[6] ||
-		resolved_repr == targets.object[6]
+		resolved_repr == state->mixin_bindings[6] ||
+		resolved_repr == state->object_bindings[6]
 	);
 
 	if (

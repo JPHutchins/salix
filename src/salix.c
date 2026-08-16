@@ -69,7 +69,11 @@ struct salix_state * settle_state(PyTypeObject * const type) {
 
 		PyObject * const module = ((PyHeapTypeObject *) entry)->ht_module;
 
-		if (module != NULL && PyModule_GetDef(module) == salix_module_def()) {
+		if (
+			module != NULL &&
+			PyModule_Check(module) &&
+			PyModule_GetDef(module) == salix_module_def()
+		) {
 			return (struct salix_state *) PyModule_GetState(module);
 		}
 	}

@@ -89,6 +89,7 @@ def test_a_bare_import_exits_cleanly():
         [
             sys.executable,
             "-c",
+            f"import sys\nsys.path.insert(0, {package_parent!r})\n"
             f"import salix\nassert salix.__file__ == {salix.__file__!r}, salix.__file__",
         ],
         env=env,
