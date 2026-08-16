@@ -60,9 +60,11 @@ struct options inherited_options(
 	bool * promised_frozen
 );
 bool any_struct_base_is_mutable(PyObject * bases);
+enum { SETTLE_BINDING_COUNT = 7 };
+
 struct salix_state {
-	PyObject * mixin_bindings[7];
-	PyObject * object_bindings[7];
+	PyObject * mixin_bindings[SETTLE_BINDING_COUNT];
+	PyObject * object_bindings[SETTLE_BINDING_COUNT];
 };
 
 void settle_cache_fill(struct salix_state * state);

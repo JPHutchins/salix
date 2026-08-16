@@ -60,22 +60,19 @@ struct salix_state * settle_state(void) {
 		return NULL;
 	}
 
-	PyObject * const module = PyImport_GetModule(name);
+	PY_OWNED(module, PyImport_GetModule(name));
 
 	return module == NULL ? NULL : (struct salix_state *) PyModule_GetState(module);
 }
 
 static void struct_free(void * const module) {
-#if PY_VERSION_HEX < 0x030C0000
-	/* Before 3.12 m_free receives the module object, not the module state. */
+	/* m_free receives the module object on every supported version, so the
+	 * state is reached back through it. */
 	struct salix_state * const state = (struct salix_state *) PyModule_GetState(
 		(PyObject *) module
 	);
-#else
-	struct salix_state * const state = (struct salix_state *) module;
-#endif
 
-	for (Py_ssize_t i = 0; i < 7; ++i) {
+	for (Py_ssize_t i = 0; i < SETTLE_BINDING_COUNT; ++i) {
 		Py_CLEAR(state->mixin_bindings[i]);
 		Py_CLEAR(state->object_bindings[i]);
 	}

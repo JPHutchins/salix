@@ -1,7 +1,11 @@
+import gc
+import os
+import subprocess
 import sys
 
 import pytest
 
+import salix
 from salix import Struct
 
 sub = pytest.importorskip("_xxsubinterpreters")
@@ -16,6 +20,50 @@ def run_in_subinterpreter(code):
         sub.run_string(interp, code)
     finally:
         sub.destroy(interp)
+
+
+def test_a_bare_import_exits_cleanly():
+    """The module state is cleared in m_free when the module deallocates, and
+    a bare interpreter reaches that deallocation -- the suite does not,
+    because the classes it built keep the module alive. The crash that a
+    wrong m_free argument produced only fired at that shutdown, so only this
+    shape sees it."""
+
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.path.dirname(os.path.dirname(salix.__file__)) + os.pathsep + env.get(
+        "PYTHONPATH", ""
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", "import salix"],
+        env=env,
+        capture_output=True,
+        timeout=60,
+        check=False,
+    )
+
+    assert result.returncode == 0
+
+
+def test_settling_a_multi_base_class_leaks_no_module_reference():
+    """The settle reaches its cache through sys.modules; that lookup must not
+    hold a reference beyond the build, or every multi-base class pins the
+    module alive."""
+
+    before = sys.getrefcount(salix)
+
+    class ByOrder(Struct):
+        pass
+
+    class ByEq(Struct):
+        a: int
+
+    class Both(ByOrder, ByEq, eq=False):
+        b: int
+
+    del Both, ByOrder, ByEq
+    gc.collect()
+
+    assert sys.getrefcount(salix) == before
 
 
 def test_a_second_subinterpreter_import_is_refused_where_declared():

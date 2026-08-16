@@ -708,7 +708,7 @@ static int struct_base_count(PyObject * const bases) {
  * only ever reads these: no post-init mutation, no keying, no lock. The
  * arrays live in the module state, so each interpreter fills its own. */
 void settle_cache_fill(struct salix_state * const state) {
-	static char const * const names[7] = {
+	static char const * const names[SETTLE_BINDING_COUNT] = {
 		"__eq__",
 		"__ne__",
 		"__lt__",
@@ -734,7 +734,7 @@ struct settle_targets {
 };
 
 static struct settle_targets settle_candidates(struct salix_state const * const state) {
-	for (Py_ssize_t i = 0; i < 7; ++i) {
+	for (Py_ssize_t i = 0; i < SETTLE_BINDING_COUNT; ++i) {
 		if (state->mixin_bindings[i] == NULL || state->object_bindings[i] == NULL) {
 			return (struct settle_targets){.readable = false};
 		}
@@ -989,7 +989,10 @@ static enum result settle_mro_bindings(
 	struct salix_state * const state = settle_state();
 
 	if (state == NULL) {
-		return RESULT_ERROR;
+		/* The module is absent from sys.modules without an error -- a loader
+		 * that builds classes outside the registry -- so the repair skips
+		 * rather than fail the build; a real lookup error propagates. */
+		return PyErr_Occurred() ? RESULT_ERROR : RESULT_OK;
 	}
 
 	struct settle_targets const targets = settle_candidates(state);
@@ -1009,26 +1012,31 @@ static enum result settle_mro_bindings(
 	PyTypeObject * gt_owner = NULL;
 	PyTypeObject * ge_owner = NULL;
 
+	if (!targets.readable) {
+		/* The exec-time fill failed, so there is no cache to settle against;
+		 * the class builds un-repaired rather than fail on a bookkeeping gap. */
+		return RESULT_OK;
+	}
+
 	if (
-		!targets.readable ||
 		mro_dunders_of(
-				type,
-				&resolved_eq,
-				&resolved_ne,
-				&resolved_repr,
-				&eq_owner,
-				&ne_owner,
-				&repr_owner,
-				&resolved_lt,
-				&resolved_le,
-				&resolved_gt,
-				&resolved_ge,
-				&lt_owner,
-				&le_owner,
-				&gt_owner,
-				&ge_owner
-			) !=
-			RESULT_OK
+			type,
+			&resolved_eq,
+			&resolved_ne,
+			&resolved_repr,
+			&eq_owner,
+			&ne_owner,
+			&repr_owner,
+			&resolved_lt,
+			&resolved_le,
+			&resolved_gt,
+			&resolved_ge,
+			&lt_owner,
+			&le_owner,
+			&gt_owner,
+			&ge_owner
+		) !=
+		RESULT_OK
 	) {
 		return RESULT_ERROR;
 	}
