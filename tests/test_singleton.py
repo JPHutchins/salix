@@ -92,3 +92,47 @@ def test_the_singleton_is_built_before_the_class_name_binds():
         class Named(Struct):
             def __post_init__(self) -> None:
                 return Named
+
+
+def test_a_dispatch_table_entry_still_precedes_the_singleton():
+    import copy
+
+    class Other(Struct):
+        pass
+
+    class Registered(Struct):
+        pass
+
+    copy.dispatch_table[Registered] = lambda _: (Other, ())
+
+    try:
+        assert type(copy.copy(Registered())) is Other
+    finally:
+        del copy.dispatch_table[Registered]
+
+
+def test_a_co_base_copy_method_still_precedes_the_singleton():
+    import copy
+
+    class WithCopy:
+        def __copy__(self) -> object:
+            return "co-base copy"
+
+    class CoBased(Struct, WithCopy):
+        pass
+
+    assert copy.copy(CoBased()) == "co-base copy"
+
+
+def test_post_init_observes_the_settle_bindings():
+    observed = []
+
+    class Bound(Struct):
+        def __hash__(self) -> int:
+            return 12345
+
+        def __post_init__(self) -> None:
+            observed.append(hash(self))
+
+    assert hash(Bound()) == 12345
+    assert observed == [12345]

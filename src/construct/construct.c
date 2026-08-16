@@ -26,10 +26,9 @@ static enum result fill_defaults(
 static enum result run_post_init(StructType const * type, PyObject * self);
 
 static PyObject * interned_value(StructType const * const type, bool const no_arguments) {
-	return (
-		(type->struct_singleton != NULL && no_arguments) ? Py_NewRef(type->struct_singleton) :
-		NULL
-	);
+	PyObject * const singleton = type->struct_singleton;
+
+	return (singleton != NULL && no_arguments) ? Py_NewRef(singleton) : NULL;
 }
 
 PyObject * Struct_vectorcall(
@@ -55,7 +54,8 @@ PyObject * Struct_vectorcall(
 
 	PyObject * const interned = interned_value(
 		type,
-		positional_count == 0 && keyword_names == NULL
+		positional_count == 0 &&
+			(keyword_names == NULL || PyTuple_GET_SIZE(keyword_names) == 0)
 	);
 
 	if (interned != NULL) {
@@ -94,17 +94,13 @@ PyObject * Struct_new(
 		return NULL;
 	}
 
-	StructType const * const type = (StructType *) struct_class;
+	if (keywords != NULL && !PyDict_Check(keywords)) {
+		PyErr_SetString(PyExc_TypeError, "the new keywords must be a dict");
 
-	PyObject * const interned = interned_value(
-		type,
-		(arguments == NULL || PyTuple_GET_SIZE(arguments) == 0) &&
-			(keywords == NULL || PyDict_GET_SIZE(keywords) == 0)
-	);
-
-	if (interned != NULL) {
-		return interned;
+		return NULL;
 	}
+
+	StructType const * const type = (StructType *) struct_class;
 
 	PY_MOVABLE(self, struct_class->tp_alloc(struct_class, 0));
 

@@ -395,11 +395,6 @@ static PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 	}
 
 	StructType * const type = struct_type_of(self);
-
-	if (type->struct_singleton != NULL) {
-		return Py_NewRef(type->struct_singleton);
-	}
-
 	PyTypeObject * const cls = &type->heap_type.ht_type;
 	PY_MOVABLE(copy_module, NULL);
 	PY_MOVABLE(copier, NULL);
@@ -420,6 +415,10 @@ static PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 		PY_MOVABLE(reduced, PyObject_CallOneArg(copier, self));
 
 		return reduced != NULL ? copy_reconstruct(self, reduced, copy_module, Py_None) : NULL;
+	}
+
+	if (type->struct_singleton != NULL) {
+		return Py_NewRef(type->struct_singleton);
 	}
 
 	PY_MOVABLE(copy, cls->tp_alloc(cls, 0));
@@ -481,10 +480,6 @@ static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) 
 		return py_move(&seeded);
 	}
 
-	if (is_struct(self) && struct_type_of(self)->struct_singleton != NULL) {
-		return Py_NewRef(struct_type_of(self)->struct_singleton);
-	}
-
 	if (!is_struct(self)) {
 		PY_MOVABLE(
 			delegated,
@@ -536,6 +531,10 @@ static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) 
 		}
 
 		return py_move(&reconstructed);
+	}
+
+	if (type->struct_singleton != NULL) {
+		return Py_NewRef(type->struct_singleton);
 	}
 
 	PY_MOVABLE(copy, cls->tp_alloc(cls, 0));

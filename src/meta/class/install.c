@@ -65,7 +65,7 @@ enum result install_fields(
 	struct_class->struct_options = options;
 	struct_class->struct_resolves_body_eq = resolves_body_eq;
 
-	return install_constructor(struct_class);
+	return RESULT_OK;
 }
 
 enum result install_constructor(StructType * const struct_class) {
@@ -101,8 +101,9 @@ enum result ensure_singleton(StructType * const struct_class) {
 		return RESULT_OK;
 	}
 
+	/* PyObject_Call requires args non-NULL; an empty tuple is the empty call. */
 	PY_OWNED(call_args, PyTuple_New(0));
-	PY_OWNED(
+	PY_MOVABLE(
 		singleton,
 		call_args != NULL ? PyObject_Call((PyObject *) struct_class, call_args, NULL) : NULL
 	);
@@ -111,7 +112,7 @@ enum result ensure_singleton(StructType * const struct_class) {
 		return RESULT_ERROR;
 	}
 
-	Py_XSETREF(struct_class->struct_singleton, Py_NewRef(singleton));
+	struct_class->struct_singleton = py_move(&singleton);
 
 	return RESULT_OK;
 }
