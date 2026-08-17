@@ -895,14 +895,7 @@ enum result settle_planned(
 	struct_class->struct_options = options;
 	struct_class->struct_resolves_body_eq = body_defines_eq || inherits_body_eq;
 
-	if (defines_own_init(struct_class)) {
-		struct_class->heap_type.ht_type.tp_new = Struct_new;
-		struct_class->heap_type.ht_type.tp_vectorcall = NULL;
-	} else {
-		struct_class->heap_type.ht_type.tp_vectorcall = Struct_vectorcall;
-	}
-
-	return install_post_init(struct_class);
+	return RESULT_OK;
 }
 
 static enum result restore_stripped(

@@ -277,13 +277,14 @@ struct field_plan plan = field_plan_build(base, original_namespace);
 
 				if (
 					settle_mro_bindings(
-						struct_class,
-						bases,
-						original_namespace,
-						bindings,
-						request.options
-					) !=
-					RESULT_OK
+							struct_class,
+							bases,
+							original_namespace,
+							bindings,
+							request.options
+						) !=
+						RESULT_OK ||
+					install_constructor(struct_class, bases_divert_setattro) != RESULT_OK
 				) {
 					Py_CLEAR(struct_class);
 				}

@@ -65,13 +65,64 @@ enum result install_fields(
 	struct_class->struct_options = options;
 	struct_class->struct_resolves_body_eq = resolves_body_eq;
 
+	return RESULT_OK;
+}
+
+enum result install_constructor(StructType * const struct_class, bool const bases_divert_setattro) {
 	if (defines_own_init(struct_class)) {
 		struct_class->heap_type.ht_type.tp_new = Struct_new;
+		struct_class->heap_type.ht_type.tp_vectorcall = NULL;
 	} else {
 		struct_class->heap_type.ht_type.tp_vectorcall = Struct_vectorcall;
 	}
 
-	return install_post_init(struct_class);
+	if (install_post_init(struct_class) != RESULT_OK) {
+		return RESULT_ERROR;
+	}
+
+	return ensure_singleton(struct_class, bases_divert_setattro);
+}
+
+enum result ensure_singleton(StructType * const struct_class, bool const bases_divert_setattro) {
+	bool const qualifies = (
+		struct_class->struct_options.frozen &&
+		!struct_class->struct_options.weakref &&
+		struct_class->struct_field_count == 0 &&
+		!defines_own_init(struct_class) &&
+		struct_class->heap_type.ht_type.tp_new == NULL &&
+		struct_class->struct_member_count == 0 &&
+		!bases_divert_setattro &&
+		Py_TYPE(struct_class)->tp_call == StructMeta_Type.tp_call
+	);
+
+	if (!qualifies) {
+		Py_CLEAR(struct_class->struct_singleton);
+
+		return RESULT_OK;
+	}
+
+	if (struct_class->struct_singleton != NULL) {
+		return RESULT_OK;
+	}
+
+	PY_MOVABLE(singleton, PyObject_CallNoArgs((PyObject *) struct_class));
+
+	if (singleton == NULL) {
+		return RESULT_ERROR;
+	}
+
+	if (Py_TYPE(singleton) != (PyTypeObject *) struct_class) {
+		PyErr_SetString(
+			PyExc_SystemError,
+			"salix internal error: the singleton build returned a different type"
+		);
+
+		return RESULT_ERROR;
+	}
+
+	struct_class->struct_singleton = py_move(&singleton);
+
+	return RESULT_OK;
 }
 
 bool defines_own_init(StructType const * const struct_class) {

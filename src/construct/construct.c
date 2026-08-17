@@ -25,6 +25,12 @@ static enum result fill_defaults(
 );
 static enum result run_post_init(StructType const * type, PyObject * self);
 
+static PyObject * interned_value(StructType const * const type, bool const no_arguments) {
+	PyObject * const singleton = type->struct_singleton;
+
+	return (singleton != NULL && no_arguments) ? Py_NewRef(singleton) : NULL;
+}
+
 PyObject * Struct_vectorcall(
 	PyObject * const struct_class,
 	PyObject * const * const arguments,
@@ -44,6 +50,16 @@ PyObject * Struct_vectorcall(
 		);
 
 		return NULL;
+	}
+
+	PyObject * const interned = interned_value(
+		type,
+		positional_count == 0 &&
+			(keyword_names == NULL || PyTuple_GET_SIZE(keyword_names) == 0)
+	);
+
+	if (interned != NULL) {
+		return interned;
 	}
 
 	PyTypeObject * const python_class = &type->heap_type.ht_type;
@@ -72,13 +88,13 @@ PyObject * Struct_new(
 	PyObject * const arguments,
 	PyObject * const keywords
 ) {
+	StructType const * const type = (StructType *) struct_class;
+
 	PY_MOVABLE(self, struct_class->tp_alloc(struct_class, 0));
 
 	if (self == NULL) {
 		return NULL;
 	}
-
-	StructType const * const type = (StructType *) struct_class;
 
 	return (
 		fill_defaults(type, self, struct_required_count(type)) == RESULT_OK ? py_move(&self) :

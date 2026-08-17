@@ -389,6 +389,10 @@ static PyObject * copy_reconstruct(
 	return PyObject_Call(reconstruct, arguments, NULL);
 }
 
+static PyObject * interned_copy(StructType const * const type) {
+	return type->struct_singleton != NULL ? Py_NewRef(type->struct_singleton) : NULL;
+}
+
 static PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 	if (!is_struct(self)) {
 		return copy_delegate(self, self, Py_None, "__copy__", "un(shallow)copyable", false);
@@ -415,6 +419,12 @@ static PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 		PY_MOVABLE(reduced, PyObject_CallOneArg(copier, self));
 
 		return reduced != NULL ? copy_reconstruct(self, reduced, copy_module, Py_None) : NULL;
+	}
+
+	PY_MOVABLE(short_circuit, interned_copy(type));
+
+	if (short_circuit != NULL) {
+		return py_move(&short_circuit);
 	}
 
 	PY_MOVABLE(copy, cls->tp_alloc(cls, 0));
@@ -527,6 +537,12 @@ static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) 
 		}
 
 		return py_move(&reconstructed);
+	}
+
+	PY_MOVABLE(short_circuit, interned_copy(type));
+
+	if (short_circuit != NULL) {
+		return py_move(&short_circuit);
 	}
 
 	PY_MOVABLE(copy, cls->tp_alloc(cls, 0));
