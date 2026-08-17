@@ -154,3 +154,14 @@ def test_a_co_base_carrying_a_slot_is_not_interned():
         pass
 
     assert WithSlot() is not WithSlot()
+
+
+def test_a_diverting_setattro_co_base_is_not_interned():
+    class Diverting:
+        def __setattr__(self, name: str, value: object) -> None:
+            object.__setattr__(self, name, value)
+
+    class WithDivert(Struct, Diverting):
+        pass
+
+    assert WithDivert() is not WithDivert()

@@ -82,7 +82,6 @@ struct salix_state {
 	PyObject * handoff_attempt;
 	PyObject * handoff_declined;
 	PyObject * handoff_new;
-	PyObject * interned_singletons;
 };
 
 enum result settle_cache_fill(struct salix_state * state);
@@ -177,5 +176,5 @@ enum result install_fields(
 );
 enum result install_post_init(StructType * struct_class);
 bool defines_own_init(StructType const * struct_class);
-enum result ensure_singleton(StructType * struct_class);
-enum result install_constructor(StructType * struct_class);
+enum result ensure_singleton(StructType * struct_class, bool bases_divert_setattro);
+enum result install_constructor(StructType * struct_class, bool bases_divert_setattro);

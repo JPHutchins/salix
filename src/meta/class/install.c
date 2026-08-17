@@ -68,7 +68,7 @@ enum result install_fields(
 	return RESULT_OK;
 }
 
-enum result install_constructor(StructType * const struct_class) {
+enum result install_constructor(StructType * const struct_class, bool const bases_divert_setattro) {
 	if (defines_own_init(struct_class)) {
 		struct_class->heap_type.ht_type.tp_new = Struct_new;
 		struct_class->heap_type.ht_type.tp_vectorcall = NULL;
@@ -80,10 +80,10 @@ enum result install_constructor(StructType * const struct_class) {
 		return RESULT_ERROR;
 	}
 
-	return ensure_singleton(struct_class);
+	return ensure_singleton(struct_class, bases_divert_setattro);
 }
 
-enum result ensure_singleton(StructType * const struct_class) {
+enum result ensure_singleton(StructType * const struct_class, bool const bases_divert_setattro) {
 	bool const qualifies = (
 		struct_class->struct_options.frozen &&
 		!struct_class->struct_options.weakref &&
@@ -91,6 +91,7 @@ enum result ensure_singleton(StructType * const struct_class) {
 		!defines_own_init(struct_class) &&
 		struct_class->heap_type.ht_type.tp_new == NULL &&
 		struct_class->struct_member_count == 0 &&
+		!bases_divert_setattro &&
 		Py_TYPE(struct_class)->tp_call == StructMeta_Type.tp_call
 	);
 
@@ -116,13 +117,6 @@ enum result ensure_singleton(StructType * const struct_class) {
 			"salix internal error: the singleton build returned a different type"
 		);
 
-		return RESULT_ERROR;
-	}
-
-	if (
-		struct_class->struct_state != NULL &&
-		PyList_Append(struct_class->struct_state->interned_singletons, singleton) < 0
-	) {
 		return RESULT_ERROR;
 	}
 

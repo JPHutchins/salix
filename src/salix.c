@@ -73,7 +73,6 @@ static void struct_free(void * const module) {
 	Py_CLEAR(state->handoff_attempt);
 	Py_CLEAR(state->handoff_declined);
 	Py_CLEAR(state->handoff_new);
-	Py_CLEAR(state->interned_singletons);
 }
 
 static PyMethodDef handoff_new_method = {
@@ -174,12 +173,6 @@ static int struct_exec(PyObject * const module) {
 	struct salix_state * const state = (struct salix_state *) PyModule_GetState(module);
 
 	if (state == NULL || settle_cache_fill(state) != RESULT_OK) {
-		return RESULT_ERROR;
-	}
-
-	state->interned_singletons = PyList_New(0);
-
-	if (state->interned_singletons == NULL) {
 		return RESULT_ERROR;
 	}
 
