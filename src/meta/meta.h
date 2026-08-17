@@ -82,6 +82,7 @@ struct salix_state {
 	PyObject * handoff_attempt;
 	PyObject * handoff_declined;
 	PyObject * handoff_new;
+	PyObject * interned_singletons;
 };
 
 enum result settle_cache_fill(struct salix_state * state);

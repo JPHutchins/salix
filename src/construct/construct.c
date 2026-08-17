@@ -88,18 +88,6 @@ PyObject * Struct_new(
 	PyObject * const arguments,
 	PyObject * const keywords
 ) {
-	if (arguments != NULL && !PyTuple_Check(arguments)) {
-		PyErr_SetString(PyExc_TypeError, "the new arguments must be a tuple");
-
-		return NULL;
-	}
-
-	if (keywords != NULL && !PyDict_Check(keywords)) {
-		PyErr_SetString(PyExc_TypeError, "the new keywords must be a dict");
-
-		return NULL;
-	}
-
 	StructType const * const type = (StructType *) struct_class;
 
 	PY_MOVABLE(self, struct_class->tp_alloc(struct_class, 0));

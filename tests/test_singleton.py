@@ -136,3 +136,21 @@ def test_post_init_observes_the_settle_bindings():
 
     assert hash(Bound()) == 12345
     assert observed == [12345]
+
+
+def test_a_class_with_its_own_new_is_not_interned():
+    class WithNew(Struct):
+        def __new__(cls, *args, **kwargs):
+            return super().__new__(cls)
+
+    assert WithNew() is not WithNew()
+
+
+def test_a_co_base_carrying_a_slot_is_not_interned():
+    class Slotted:
+        __slots__ = ("z",)
+
+    class WithSlot(Struct, Slotted):
+        pass
+
+    assert WithSlot() is not WithSlot()

@@ -89,6 +89,8 @@ enum result ensure_singleton(StructType * const struct_class) {
 		!struct_class->struct_options.weakref &&
 		struct_class->struct_field_count == 0 &&
 		!defines_own_init(struct_class) &&
+		struct_class->heap_type.ht_type.tp_new == NULL &&
+		struct_class->struct_member_count == 0 &&
 		Py_TYPE(struct_class)->tp_call == StructMeta_Type.tp_call
 	);
 
@@ -114,6 +116,13 @@ enum result ensure_singleton(StructType * const struct_class) {
 			"salix internal error: the singleton build returned a different type"
 		);
 
+		return RESULT_ERROR;
+	}
+
+	if (
+		struct_class->struct_state != NULL &&
+		PyList_Append(struct_class->struct_state->interned_singletons, singleton) < 0
+	) {
 		return RESULT_ERROR;
 	}
 
