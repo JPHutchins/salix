@@ -166,15 +166,18 @@ static PyObject * replace(PyObject * const module, PyObject * const args, PyObje
 		return NULL;
 	}
 
-	PY_OWNED(method, PyObject_GetAttrString(instance, "__replace__"));
+	/* The type-level lookup is copy.replace's own: an instance-dict entry
+	 * or a __getattr__ hook must not shadow the dunder the protocol
+	 * dispatches on. */
+	PY_OWNED(replacer, PyObject_GetAttrString((PyObject *) Py_TYPE(instance), "__replace__"));
 
-	if (method == NULL) {
+	if (replacer == NULL) {
 		return NULL;
 	}
 
-	PY_OWNED(no_arguments, PyTuple_New(0));
+	PY_OWNED(instance_arguments, PyTuple_Pack(1, instance));
 
-	return no_arguments != NULL ? PyObject_Call(method, no_arguments, kwargs) : NULL;
+	return instance_arguments != NULL ? PyObject_Call(replacer, instance_arguments, kwargs) : NULL;
 }
 
 static PyObject * handoff_new(PyObject * const self, PyObject * const args) {

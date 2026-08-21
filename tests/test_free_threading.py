@@ -409,3 +409,38 @@ def test_a_shared_struct_is_safe_to_replace_while_another_thread_writes_it():
                 assert replaced.first >= replaced.second
 
     run_in_roles((write,) + (read,) * (THREADS - 1))
+
+
+def test_a_shared_struct_is_safe_to_replace_through_a_body_init_while_another_thread_writes_it():
+    """The slow path gathers the kept fields under one section before the
+    constructor call, the same guarantee the fast path gets from the copy
+    primitive: one writer, and `first >= second` pins the snapshot the way
+    the copy test above does. Survival is the assertion."""
+
+    class Shared(Struct, frozen=False):
+        first: object
+        second: object
+        third: object
+
+        def __init__(self, first: object, second: object, third: object) -> None:
+            self.first = first
+            self.second = second
+            self.third = third
+
+    shared = Shared(0, 0, 0)
+
+    rounds = ITERATIONS * 5
+
+    def write():
+        for i in range(rounds):
+            shared.first = i
+            shared.second = i
+
+    def read():
+        for i in range(rounds):
+            replaced = replace(shared, third=i)
+
+            if i % 1000 == 0:
+                assert replaced.first >= replaced.second
+
+    run_in_roles((write,) + (read,) * (THREADS - 1))

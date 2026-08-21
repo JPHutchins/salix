@@ -145,20 +145,30 @@ PyObject * Struct_replace(
 			return NULL;
 		}
 
-		for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
-			PY_MOVABLE(value, struct_slot_ref(type, self, i));
+		/* One acquisition for every kept field, so a free-threaded replace
+		 * hands the constructor a field set the source really held. */
+		PY_OWNED(values, PyTuple_New(type->struct_field_count));
 
-			if (value != NULL) {
-				if (
-					PyDict_SetItem(
-						changed,
-						PyTuple_GET_ITEM(type->struct_field_names, i),
-						value
-					) <
-					0
-				) {
-					return NULL;
-				}
+		if (values == NULL) {
+			return NULL;
+		}
+
+		STRUCT_BEGIN_CRITICAL_SECTION(self);
+
+		for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
+			PyTuple_SET_ITEM(values, i, Py_XNewRef(*struct_slot(type, self, i)));
+		}
+
+		STRUCT_END_CRITICAL_SECTION();
+
+		for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
+			PyObject * const value = PyTuple_GET_ITEM(values, i);
+
+			if (
+				value != NULL &&
+				PyDict_SetItem(changed, PyTuple_GET_ITEM(type->struct_field_names, i), value) < 0
+			) {
+				return NULL;
 			}
 		}
 
@@ -177,7 +187,24 @@ PyObject * Struct_replace(
 
 		PY_OWNED(no_arguments, PyTuple_New(0));
 
-		return no_arguments != NULL ? PyObject_Call((PyObject *) cls, no_arguments, changed) : NULL;
+		if (no_arguments == NULL) {
+			return NULL;
+		}
+
+		PY_MOVABLE(replaced, PyObject_Call((PyObject *) cls, no_arguments, changed));
+
+		if (replaced == NULL) {
+			return NULL;
+		}
+
+		/* Whatever the constructor left unwritten -- fields, co-base members,
+		 * the instance dict -- the source fills, through the same primitive
+		 * the fast path uses, so the two paths diverge only in construction. */
+		if (struct_copy_slots_and_dict(type, self, replaced) < 0) {
+			return NULL;
+		}
+
+		return py_move(&replaced);
 	}
 
 	PY_MOVABLE(copy, cls->tp_alloc(cls, 0));
@@ -186,19 +213,11 @@ PyObject * Struct_replace(
 		return NULL;
 	}
 
-	if (bind_keywords(type, copy, arguments, 0, keyword_names) != RESULT_OK) {
+	if (
+		bind_keywords(type, copy, arguments, 0, keyword_names) != RESULT_OK ||
+		struct_copy_slots_and_dict(type, self, copy) < 0
+	) {
 		return NULL;
-	}
-
-	PY_MOVABLE(dict, NULL);
-	struct_slots_copy_into(type, self, copy, &dict);
-
-	if (dict != NULL) {
-		PY_OWNED(copied, PyDict_Copy(dict));
-
-		if (copied == NULL || PyObject_GenericSetDict(copy, copied, NULL) < 0) {
-			return NULL;
-		}
 	}
 
 	return run_post_init(type, copy) == RESULT_OK ? py_move(&copy) : NULL;

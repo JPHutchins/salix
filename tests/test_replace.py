@@ -146,3 +146,73 @@ def test_copy_replace_uses_the_dunder():
     replaced = copy.replace(Point(1), x=9)
 
     assert replaced == Point(9, "seven")
+
+
+class WithDictInit(Struct, Dicted, frozen=False):
+    x: int
+
+    def __init__(self, x: int) -> None:
+        self.x = x
+
+
+def test_a_slow_path_replace_carries_the_instance_dict():
+    original = WithDictInit(1)
+    original.extra = "world"
+    replaced = replace(original, x=2)
+
+    assert replaced.x == 2
+    assert replaced.extra == "world"
+    assert replaced.__dict__ is not original.__dict__
+
+
+def test_a_slow_path_replace_carries_co_base_members():
+    class Slotted:
+        __slots__ = ("z",)
+
+    class WithSlot(Struct, Slotted, frozen=False):
+        x: int
+
+        def __init__(self, x: int) -> None:
+            self.x = x
+
+    original = WithSlot(1)
+    original.z = 5
+    replaced = replace(original, x=2)
+
+    assert replaced.z == 5
+
+
+def test_a_positional_only_init_propagates_its_own_type_error():
+    class PositionalOnly(Struct, frozen=False):
+        x: int
+
+        def __init__(self, x: int, /) -> None:
+            self.x = x
+
+    with pytest.raises(TypeError):
+        replace(PositionalOnly(1), x=2)
+
+
+def test_a_body_new_is_discarded_by_replace_as_by_construction():
+    calls = []
+
+    class WithNew(Struct, frozen=False):
+        x: int
+
+        def __new__(cls, *args: object, **kwargs: object) -> object:
+            calls.append(1)
+            return super().__new__(cls)
+
+    original = WithNew(1)
+    replaced = replace(original, x=2)
+
+    assert calls == []
+    assert replaced == WithNew(2)
+
+
+def test_an_instance_dict_entry_does_not_shadow_the_dunder():
+    original = WithDict(1)
+    original.__dict__["__replace__"] = "shadow"
+    replaced = replace(original, x=2)
+
+    assert replaced == WithDict(2)

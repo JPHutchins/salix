@@ -289,9 +289,10 @@ static inline void struct_slots_copy_into(
 	for (Py_ssize_t i = 0; i < type->struct_member_count; ++i) {
 		Py_ssize_t const offset = type->struct_member_offsets[i];
 		PyObject * const value = *(PyObject * *) ((char *) source + offset);
+		PyObject * * const destination_slot = (PyObject * *) ((char *) destination + offset);
 
-		if (value != NULL) {
-			*((PyObject * *) ((char *) destination + offset)) = Py_NewRef(value);
+		if (value != NULL && *destination_slot == NULL) {
+			*destination_slot = Py_NewRef(value);
 		}
 	}
 
@@ -302,6 +303,39 @@ static inline void struct_slots_copy_into(
 	}
 
 	STRUCT_END_CRITICAL_SECTION();
+}
+
+/*
+ * The shallow trio -- copy, and both replace paths -- shares this: the slots
+ * and the instance dict, the dict copied and installed outside the section,
+ * where the source's dict pointer is a strong reference again. Fails only
+ * when the dict copy or its install does; a source without a dict slot is
+ * success and reads never materialize one.
+ */
+static inline int struct_copy_slots_and_dict(
+	StructType const * const type,
+	PyObject * const source,
+	PyObject * const destination
+) {
+	PyObject * dict = NULL;
+
+	struct_slots_copy_into(type, source, destination, &dict);
+
+	if (dict == NULL) {
+		return 0;
+	}
+
+	PyObject * const copied = PyDict_Copy(dict);
+	Py_DECREF(dict);
+
+	if (copied == NULL) {
+		return -1;
+	}
+
+	int const installed = PyObject_GenericSetDict(destination, copied, NULL);
+	Py_DECREF(copied);
+
+	return installed;
 }
 
 static inline Py_ssize_t struct_required_count(StructType const * const type) {

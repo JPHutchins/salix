@@ -440,18 +440,7 @@ static PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 		return NULL;
 	}
 
-	PY_MOVABLE(dict, NULL);
-	struct_slots_copy_into(type, self, copy, &dict);
-
-	if (dict != NULL) {
-		PY_OWNED(copied, PyDict_Copy(dict));
-
-		if (copied == NULL || PyObject_GenericSetDict(copy, copied, NULL) < 0) {
-			return NULL;
-		}
-	}
-
-	return py_move(&copy);
+	return struct_copy_slots_and_dict(type, self, copy) == 0 ? py_move(&copy) : NULL;
 }
 
 static PyObject * memo_failure(PyObject * const memo, PyObject * const key) {
