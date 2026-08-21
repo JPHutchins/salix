@@ -37,6 +37,12 @@ static PyMethodDef struct_functions[] = {
 		.ml_flags = METH_VARARGS,
 		.ml_doc = "set_field(instance, name, value) -- assign a field the class declared.",
 	},
+	{
+		.ml_name = "from_mapping",
+		.ml_meth = Struct_from_mapping,
+		.ml_flags = METH_VARARGS,
+		.ml_doc = "from_mapping(cls, values) -- construct a struct from a mapping of field values.",
+	},
 	{.ml_name = NULL},
 };
 
