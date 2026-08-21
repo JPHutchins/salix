@@ -1,4 +1,4 @@
-from typing import Any, Final
+from typing import Any, Final, TypeVar
 
 from typing_extensions import Self, dataclass_transform
 
@@ -14,6 +14,7 @@ class Struct:
     __struct_metadata__: Final[tuple[tuple[Any, ...], ...]]
     def __copy__(self) -> Self: ...
     def __deepcopy__(self, memo: dict[int, Any]) -> Self: ...
+    def __replace__(self, /, **changes: object) -> Self: ...
     def __init_subclass__(
         cls,
         *,
@@ -25,4 +26,8 @@ class Struct:
         weakref: bool = False,
     ) -> None: ...
 
+_StructT = TypeVar("_StructT", bound=Struct)
+
+
 def set_field(instance: Struct, name: str, value: object, /) -> None: ...
+def replace(instance: _StructT, /, **changes: object) -> _StructT: ...

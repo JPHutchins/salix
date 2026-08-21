@@ -1,6 +1,7 @@
 #include <Python.h>
 
 #include "compare.h"
+#include "construct.h"
 #include "hash.h"
 #include "mixin.h"
 #include "owned.h"
@@ -62,6 +63,12 @@ PyTypeObject StructMixin_Type = {
 static PyMethodDef Struct_methods[] = {
 	{"__copy__", Struct_copy, METH_NOARGS, NULL},
 	{"__deepcopy__", Struct_deepcopy, METH_O, NULL},
+	{
+		"__replace__",
+		(PyCFunction)(void (*)(void)) Struct_replace,
+		METH_FASTCALL | METH_KEYWORDS,
+		NULL,
+	},
 	{.ml_name = NULL},
 };
 

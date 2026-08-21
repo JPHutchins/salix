@@ -1,6 +1,7 @@
 #include <Python.h>
 
 #include "construct.h"
+#include "../meta/meta.h"
 #include "../owned.h"
 #include "../result.h"
 #include "../types.h"
@@ -100,6 +101,107 @@ PyObject * Struct_new(
 		fill_defaults(type, self, struct_required_count(type)) == RESULT_OK ? py_move(&self) :
 		NULL
 	);
+}
+
+PyObject * Struct_replace(
+	PyObject * const self,
+	PyObject * const * const arguments,
+	Py_ssize_t const nargs,
+	PyObject * const keyword_names
+) {
+	/* METH_FASTCALL methods receive self as the first parameter, so the
+	 * positional count here excludes it: anything past zero is a second
+	 * positional argument. */
+	if (nargs != 0) {
+		PyErr_Format(
+			PyExc_TypeError,
+			"%s.__replace__() takes exactly one positional argument (%zd given)",
+			Py_TYPE(self)->tp_name,
+			nargs
+		);
+
+		return NULL;
+	}
+
+	if (!is_struct(self)) {
+		PyErr_Format(PyExc_TypeError, "%s object is not replaceable", Py_TYPE(self)->tp_name);
+
+		return NULL;
+	}
+
+	StructType * const type = struct_type_of(self);
+	Py_ssize_t const change_count = keyword_names != NULL ? PyTuple_GET_SIZE(keyword_names) : 0;
+
+	if (change_count == 0) {
+		return Py_NewRef(self);
+	}
+
+	PyTypeObject * const cls = &type->heap_type.ht_type;
+
+	if (defines_own_init(type)) {
+		PY_OWNED(changed, PyDict_New());
+
+		if (changed == NULL) {
+			return NULL;
+		}
+
+		for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
+			PY_MOVABLE(value, struct_slot_ref(type, self, i));
+
+			if (value != NULL) {
+				if (
+					PyDict_SetItem(
+						changed,
+						PyTuple_GET_ITEM(type->struct_field_names, i),
+						value
+					) <
+					0
+				) {
+					return NULL;
+				}
+			}
+		}
+
+		for (Py_ssize_t i = 0; i < change_count; ++i) {
+			if (
+				PyDict_SetItem(
+					changed,
+					PyTuple_GET_ITEM(keyword_names, i),
+					arguments[nargs + i]
+				) <
+				0
+			) {
+				return NULL;
+			}
+		}
+
+		PY_OWNED(no_arguments, PyTuple_New(0));
+
+		return no_arguments != NULL ? PyObject_Call((PyObject *) cls, no_arguments, changed) : NULL;
+	}
+
+	PY_MOVABLE(copy, cls->tp_alloc(cls, 0));
+
+	if (copy == NULL) {
+		return NULL;
+	}
+
+	if (bind_keywords(type, copy, arguments, 0, keyword_names) != RESULT_OK) {
+		return NULL;
+	}
+
+	PY_MOVABLE(dict, NULL);
+	struct_slots_copy_into(type, self, copy, &dict);
+
+	if (dict != NULL) {
+		PY_OWNED(copied, PyDict_Copy(dict));
+
+		if (copied == NULL || PyObject_GenericSetDict(copy, copied, NULL) < 0) {
+			return NULL;
+		}
+	}
+
+	return run_post_init(type, copy) == RESULT_OK ? py_move(&copy) : NULL;
 }
 
 static enum result run_post_init(StructType const * const type, PyObject * const self) {

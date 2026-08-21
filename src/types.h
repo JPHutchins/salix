@@ -261,11 +261,13 @@ static inline void struct_slots_ref_or_none_into(
  * Every slot the type owns, plus the instance dict pointer, under one
  * acquisition: the struct fields and the non-struct base members whose
  * offsets install_fields resolved. An unwritten slot stays unwritten in the
- * destination. `dict` receives a strong reference to the instance dict if
- * the slot holds one; reading never creates the dict, so copying a struct
- * that never had a __dict__ does not materialize one on the source. The
- * dict's contents are copied by the caller, outside this section. The loop
- * stores only, so nothing here can fail.
+ * destination, and one the destination already holds keeps its value, so a
+ * caller may write changes before the copy and have them survive it.
+ * `dict` receives a strong reference to the instance dict if the slot holds
+ * one; reading never creates the dict, so copying a struct that never had a
+ * __dict__ does not materialize one on the source. The dict's contents are
+ * copied by the caller, outside this section. The loop stores only, so
+ * nothing here can fail.
  */
 static inline void struct_slots_copy_into(
 	StructType const * const type,
@@ -277,9 +279,10 @@ static inline void struct_slots_copy_into(
 
 	for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
 		PyObject * const value = *struct_slot(type, source, i);
+		PyObject * * const destination_slot = struct_slot(type, destination, i);
 
-		if (value != NULL) {
-			*struct_slot(type, destination, i) = Py_NewRef(value);
+		if (value != NULL && *destination_slot == NULL) {
+			*destination_slot = Py_NewRef(value);
 		}
 	}
 
