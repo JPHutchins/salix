@@ -100,6 +100,8 @@ members = ["bench", "tests", "tools"]
 
 [tool.ruff]
 # Lint only. There is no ruff format here and there should not be: CLAUDE.md
+# PEP 695 syntax, collected only on 3.12+ while ruff parses at the 3.10 floor.
+extend-exclude = ["tests/test_generics_pep695.py"]
 # says follow the style already in the code base, not a common one.
 [tool.ruff.lint]
 # Rules that find defects, not rules that have opinions about layout. E402 is
@@ -131,6 +133,7 @@ select = [
 # The file exists to hold expressions a checker must reject, so of course they
 # are pointless comparisons and useless attribute accesses. That is the test.
 "tests/typing/rejected.py" = ["B015", "B018"]
+
 
 [tool.pytest.ini_options]
 # README.md is here because its examples are the only claims about the API
