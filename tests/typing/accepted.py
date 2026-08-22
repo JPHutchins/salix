@@ -1,4 +1,4 @@
-from typing import Any, Literal
+from typing import Any, Generic, Literal, TypeVar
 
 from typing_extensions import assert_type
 
@@ -17,6 +17,13 @@ class Defaulted(Struct):
 
 class Mutable(Struct, frozen=False):
     value: int
+
+
+T = TypeVar("T")
+
+
+class Ok(Struct, Generic[T]):
+    value: T
 
 
 class Explicit(Struct, frozen=True):
@@ -95,6 +102,11 @@ def the_options_a_checker_cannot_see_are_still_accepted() -> None:
 def set_field_takes_a_struct_a_name_and_any_value() -> None:
     assert_type(set_field(Point(1, "two"), "x", 9), None)
     set_field(Point(1, "two"), "y", object())
+
+
+def generic_struct_fields_type_check() -> None:
+    assert_type(Ok(3).value, int)
+    assert_type(Ok[str]("x").value, str)
 
 
 def replace_returns_the_concrete_struct_type() -> None:
