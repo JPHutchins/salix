@@ -179,3 +179,64 @@ def test_a_body_init_receives_a_non_dict_mapping_through_its_items():
     built = from_mapping(WithInit, PlainMapping({"x": 3}))
 
     assert built.x == 6
+
+
+def test_an_items_result_that_is_a_tuple_works():
+    class TupleItems(Mapping[str, object]):
+        def __getitem__(self, key: str) -> object:
+            raise KeyError(key)
+
+        def __iter__(self):
+            return iter(())
+
+        def __len__(self) -> int:
+            return 2
+
+        def items(self):
+            return (("x", 1), ("y", "two"))
+
+    built = from_mapping(Point, TupleItems())
+
+    assert built == Point(1, "two")
+
+
+def test_duplicate_items_keys_are_refused_like_the_constructor():
+    class DuplicateItems(Mapping[str, object]):
+        def __getitem__(self, key: str) -> object:
+            raise KeyError(key)
+
+        def __iter__(self):
+            return iter(())
+
+        def __len__(self) -> int:
+            return 2
+
+        def items(self):
+            return [("x", 1), ("x", 2)]
+
+    with pytest.raises(TypeError, match="multiple values for argument 'x'"):
+        from_mapping(Point, DuplicateItems())
+
+
+def test_a_dict_mixing_non_string_and_unknown_keys_raises_strings_first():
+    with pytest.raises(TypeError, match="keywords must be strings"):
+        from_mapping(Point, {"z": 1, 2: "two"})  # type: ignore[arg-type]
+
+
+def test_the_field_bind_path_bypasses_a_metaclass_call():
+    calls = []
+
+    class CountingMeta(type(Struct)):
+        def __call__(cls, *args: object, **kwargs: object) -> object:
+            calls.append(1)
+            return super().__call__(*args, **kwargs)
+
+    class Counted(Struct, metaclass=CountingMeta):
+        x: int
+
+    Counted(1)
+    assert len(calls) == 1
+
+    from_mapping(Counted, {"x": 2})
+
+    assert len(calls) == 1

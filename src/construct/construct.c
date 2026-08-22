@@ -141,11 +141,7 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 	PY_MOVABLE(items, NULL);
 
 	if (dict_values == NULL) {
-		PY_MOVABLE(items_call, PyObject_GetAttrString(values, "items"));
-
-		if (items_call == NULL && PyErr_ExceptionMatches(PyExc_AttributeError)) {
-			PyErr_Clear();
-		}
+		PY_MOVABLE(items_call, optional_attribute(values, "items"));
 
 		if (items_call == NULL && PyErr_Occurred()) {
 			return NULL;
@@ -173,8 +169,8 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 			return NULL;
 		}
 
-		for (Py_ssize_t i = 0; i < PyList_GET_SIZE(items); ++i) {
-			PyObject * const pair = PyList_GET_ITEM(items, i);
+		for (Py_ssize_t i = 0; i < PySequence_Fast_GET_SIZE(items); ++i) {
+			PyObject * const pair = PySequence_Fast_GET_ITEM(items, i);
 
 			if (!PyTuple_Check(pair) || PyTuple_GET_SIZE(pair) != 2) {
 				PyErr_Format(
@@ -205,17 +201,27 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 				return NULL;
 			}
 
-			for (Py_ssize_t i = 0; i < PyList_GET_SIZE(items); ++i) {
-				PyObject * const pair = PyList_GET_ITEM(items, i);
+			for (Py_ssize_t i = 0; i < PySequence_Fast_GET_SIZE(items); ++i) {
+				PyObject * const pair = PySequence_Fast_GET_ITEM(items, i);
+				PyObject * const name = PyTuple_GET_ITEM(pair, 0);
+				int const present = PyDict_Contains(keywords, name);
 
-				if (
-					PyDict_SetItem(
-						keywords,
-						PyTuple_GET_ITEM(pair, 0),
-						PyTuple_GET_ITEM(pair, 1)
-					) <
-					0
-				) {
+				if (present < 0) {
+					return NULL;
+				}
+
+				if (present == 1) {
+					PyErr_Format(
+						PyExc_TypeError,
+						"%.200s() got multiple values for argument '%U'",
+						struct_type_name(type),
+						name
+					);
+
+					return NULL;
+				}
+
+				if (PyDict_SetItem(keywords, name, PyTuple_GET_ITEM(pair, 1)) < 0) {
 					return NULL;
 				}
 			}
@@ -228,7 +234,7 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 
 	Py_ssize_t const entry_count = (
 		dict_values != NULL ? PyDict_GET_SIZE(dict_values) :
-		PyList_GET_SIZE(items)
+		PySequence_Fast_GET_SIZE(items)
 	);
 
 	PyObject * const interned = interned_value(type, entry_count == 0);
@@ -238,6 +244,20 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 	}
 
 	PyTypeObject * const cls = &type->heap_type.ht_type;
+
+	if (dict_values != NULL) {
+		Py_ssize_t position = 0;
+		PyObject * key;
+		PyObject * value;
+
+		while (PyDict_Next(dict_values, &position, &key, &value)) {
+			if (!PyUnicode_Check(key)) {
+				PyErr_SetString(PyExc_TypeError, "keywords must be strings");
+
+				return NULL;
+			}
+		}
+	}
 
 	PY_MOVABLE(built, cls->tp_alloc(cls, 0));
 
@@ -251,19 +271,13 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 		PyObject * value;
 
 		while (PyDict_Next(dict_values, &position, &key, &value)) {
-			if (!PyUnicode_Check(key)) {
-				PyErr_SetString(PyExc_TypeError, "keywords must be strings");
-
-				return NULL;
-			}
-
 			if (bind_named(type, built, key, value, 0) != RESULT_OK) {
 				return NULL;
 			}
 		}
 	} else {
 		for (Py_ssize_t i = 0; i < entry_count; ++i) {
-			PyObject * const pair = PyList_GET_ITEM(items, i);
+			PyObject * const pair = PySequence_Fast_GET_ITEM(items, i);
 
 			if (
 				bind_named(
