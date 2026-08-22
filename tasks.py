@@ -31,9 +31,15 @@ ENVIRONMENT_PER_INTERPRETER = {"UV_PROJECT_ENVIRONMENT": ".venvs/{PY}"}
 # uv venv creation is immune to that preference and resolves the plain
 # managed variant, so the venv the pytest leaf reuses is the one this
 # leaf builds against.
+# The two leaves must name the same interpreter, and neither may name a
+# version string the ambient VIRTUAL_ENV can flip to a free-threaded one:
+# uv venv creation is immune to that preference and resolves the plain
+# managed variant, so the venv the pytest leaf reuses is the one the
+# build leaf compiles against.
+make_env = Task("uv venv --python {PY} --managed-python .venvs/{PY}", mutates=True)
+
 BUILD = (
-    "uv venv --python {PY} --managed-python .venvs/{PY}"
-    " && uv run --no-project --python .venvs/{PY}/bin/python --with setuptools"
+    "uv run --no-project --python .venvs/{PY}/bin/python --with setuptools"
     " python setup.py build_ext --inplace"
 )
 
@@ -43,7 +49,7 @@ STRICT_BUILD = {"SALIX_STRICT": "1"}
 
 NIX_INPUTS = ("src/", "nix/", "tools/", "tests/", "flake.nix", "flake.lock", "pyproject.toml")
 
-build = Task(BUILD, mutates=True, env=STRICT_BUILD)
+build = Sequential(make_env, Task(BUILD, mutates=True, env=STRICT_BUILD))
 pytest = Task(PYTEST, env=ENVIRONMENT_PER_INTERPRETER)
 # --no-sync: analyze reaches this from ci, and CI never installs the project.
 compile_flags = Task("uv run --no-sync python tools/compile_flags.py", mutates=True)
