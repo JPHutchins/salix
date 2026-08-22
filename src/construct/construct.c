@@ -210,7 +210,7 @@ PyObject * Struct_replace(
 			return NULL;
 		}
 
-		if (Py_TYPE(replaced) != cls) {
+		if (!PyObject_TypeCheck(replaced, cls)) {
 			PyErr_SetString(
 				PyExc_SystemError,
 				"salix internal error: the replace construction returned a different type"

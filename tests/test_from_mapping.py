@@ -240,3 +240,8 @@ def test_the_field_bind_path_bypasses_a_metaclass_call():
     from_mapping(Counted, {"x": 2})
 
     assert len(calls) == 1
+
+
+def test_an_own_init_class_refuses_a_non_string_key_like_the_constructor():
+    with pytest.raises(TypeError, match="keywords must be strings"):
+        from_mapping(WithInit, {1: "one"})  # type: ignore[arg-type]
