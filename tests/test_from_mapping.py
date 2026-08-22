@@ -119,3 +119,63 @@ def test_a_body_init_is_the_construction_path():
     built = from_mapping(WithInit, {"x": 3})
 
     assert built.x == 6
+
+
+class LyingItems(Mapping[str, object]):
+    def __init__(self, items_result: object) -> None:
+        self._items_result = items_result
+
+    def __getitem__(self, key: str) -> object:
+        raise KeyError(key)
+
+    def __iter__(self):
+        return iter(())
+
+    def __len__(self) -> int:
+        return 1
+
+    def items(self):
+        return self._items_result
+
+
+def test_an_items_pair_that_is_not_a_two_tuple_is_refused():
+    with pytest.raises(TypeError, match="items\\(\\) must yield \\(str, value\\) pairs"):
+        from_mapping(Point, LyingItems([("x", 1, "extra"), 42]))
+
+
+def test_an_items_result_that_is_not_a_sequence_is_refused():
+    with pytest.raises(TypeError, match="items\\(\\) must return a sequence"):
+        from_mapping(Point, LyingItems(5))
+
+
+def test_an_items_exception_propagates():
+    class RaisingItems(Mapping[str, object]):
+        def __getitem__(self, key: str) -> object:
+            raise KeyError(key)
+
+        def __iter__(self):
+            return iter(())
+
+        def __len__(self) -> int:
+            return 0
+
+        @property
+        def items(self) -> object:
+            raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        from_mapping(Point, RaisingItems())
+
+
+def test_a_non_string_key_is_refused_like_the_constructor():
+    with pytest.raises(TypeError, match="keywords must be strings"):
+        from_mapping(Point, {1: "one"})  # type: ignore[arg-type]
+
+    with pytest.raises(TypeError, match="keywords must be strings"):
+        from_mapping(Point, LyingItems([(1, "one")]))
+
+
+def test_a_body_init_receives_a_non_dict_mapping_through_its_items():
+    built = from_mapping(WithInit, PlainMapping({"x": 3}))
+
+    assert built.x == 6

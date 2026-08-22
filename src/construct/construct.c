@@ -128,19 +128,30 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 		return NULL;
 	}
 
-	/* A list is PyMapping_Check-true through its subscript slot, and an
-	 * ABC-style mapping carries the sequence slots through __len__ and
-	 * __getitem__, so neither slot check alone names a mapping; items is
-	 * what the fallback path needs either way. The probe binds a method
-	 * object, so dicts, the hot path, never take it. */
-	if (!PyDict_Check(values)) {
-		int const has_items = PyObject_HasAttrString(values, "items");
+	StructType * const type = (StructType *) struct_class;
 
-		if (has_items < 0) {
+	/* The fallback acquires items once and validates every pair at the
+	 * boundary, so the bind loop, the own-init kwargs and the pair-shape
+	 * error all read the same list. A list is PyMapping_Check-true through
+	 * its subscript slot and an ABC-style mapping carries the sequence
+	 * slots through __len__ and __getitem__, so the items probe names a
+	 * mapping where neither slot check does; dicts, the hot path, never
+	 * take it. */
+	PyObject * const dict_values = PyDict_Check(values) ? values : NULL;
+	PY_MOVABLE(items, NULL);
+
+	if (dict_values == NULL) {
+		PY_MOVABLE(items_call, PyObject_GetAttrString(values, "items"));
+
+		if (items_call == NULL && PyErr_ExceptionMatches(PyExc_AttributeError)) {
+			PyErr_Clear();
+		}
+
+		if (items_call == NULL && PyErr_Occurred()) {
 			return NULL;
 		}
 
-		if (!PyMapping_Check(values) || has_items == 0) {
+		if (items_call == NULL || !PyMapping_Check(values)) {
 			PyErr_Format(
 				PyExc_TypeError,
 				"from_mapping() values must be a mapping, not %.200s",
@@ -149,19 +160,65 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 
 			return NULL;
 		}
+
+		PY_MOVABLE(items_result, PyObject_CallNoArgs(items_call));
+
+		if (items_result == NULL) {
+			return NULL;
+		}
+
+		items = PySequence_Fast(items_result, "from_mapping() items() must return a sequence");
+
+		if (items == NULL) {
+			return NULL;
+		}
+
+		for (Py_ssize_t i = 0; i < PyList_GET_SIZE(items); ++i) {
+			PyObject * const pair = PyList_GET_ITEM(items, i);
+
+			if (!PyTuple_Check(pair) || PyTuple_GET_SIZE(pair) != 2) {
+				PyErr_Format(
+					PyExc_TypeError,
+					"from_mapping() items() must yield (str, value) pairs"
+				);
+
+				return NULL;
+			}
+
+			if (!PyUnicode_Check(PyTuple_GET_ITEM(pair, 0))) {
+				PyErr_SetString(PyExc_TypeError, "keywords must be strings");
+
+				return NULL;
+			}
+		}
 	}
 
-	StructType * const type = (StructType *) struct_class;
-
 	if (defines_own_init(type)) {
-		PY_OWNED(
-			keywords,
-			PyDict_Check(values) ? Py_NewRef(values) :
-			PyObject_CallOneArg((PyObject *) &PyDict_Type, values)
-		);
+		PY_MOVABLE(keywords, NULL);
 
-		if (keywords == NULL) {
-			return NULL;
+		if (dict_values != NULL) {
+			keywords = Py_NewRef(dict_values);
+		} else {
+			keywords = PyDict_New();
+
+			if (keywords == NULL) {
+				return NULL;
+			}
+
+			for (Py_ssize_t i = 0; i < PyList_GET_SIZE(items); ++i) {
+				PyObject * const pair = PyList_GET_ITEM(items, i);
+
+				if (
+					PyDict_SetItem(
+						keywords,
+						PyTuple_GET_ITEM(pair, 0),
+						PyTuple_GET_ITEM(pair, 1)
+					) <
+					0
+				) {
+					return NULL;
+				}
+			}
 		}
 
 		PY_OWNED(no_arguments, PyTuple_New(0));
@@ -169,20 +226,10 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 		return no_arguments != NULL ? PyObject_Call(struct_class, no_arguments, keywords) : NULL;
 	}
 
-	Py_ssize_t entry_count;
-	PY_MOVABLE(items, NULL);
-
-	if (PyDict_Check(values)) {
-		entry_count = PyDict_GET_SIZE(values);
-	} else {
-		items = PyMapping_Items(values);
-
-		if (items == NULL) {
-			return NULL;
-		}
-
-		entry_count = PyList_GET_SIZE(items);
-	}
+	Py_ssize_t const entry_count = (
+		dict_values != NULL ? PyDict_GET_SIZE(dict_values) :
+		PyList_GET_SIZE(items)
+	);
 
 	PyObject * const interned = interned_value(type, entry_count == 0);
 
@@ -198,12 +245,18 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 		return NULL;
 	}
 
-	if (items == NULL) {
+	if (dict_values != NULL) {
 		Py_ssize_t position = 0;
 		PyObject * key;
 		PyObject * value;
 
-		while (PyDict_Next(values, &position, &key, &value)) {
+		while (PyDict_Next(dict_values, &position, &key, &value)) {
+			if (!PyUnicode_Check(key)) {
+				PyErr_SetString(PyExc_TypeError, "keywords must be strings");
+
+				return NULL;
+			}
+
 			if (bind_named(type, built, key, value, 0) != RESULT_OK) {
 				return NULL;
 			}
