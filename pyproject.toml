@@ -47,7 +47,6 @@ classifiers = [
 [project.urls]
 Repository = "https://github.com/JPHutchins/salix"
 Issues = "https://github.com/JPHutchins/salix/issues"
-Changelog = "https://github.com/JPHutchins/salix/blob/main/CHANGELOG.md"
 
 # The C source is wired up in setup.py because setuptools does not yet support
 # declaring ext_modules in pyproject.toml.

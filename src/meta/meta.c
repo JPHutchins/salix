@@ -13,7 +13,7 @@ static PyObject * StructMeta_get_field_names(PyObject * self, void * closure);
 static PyObject * StructMeta_get_defaults(PyObject * self, void * closure);
 static PyObject * StructMeta_get_annotations(PyObject * self, void * closure);
 static PyObject * StructMeta_get_metadata(PyObject * self, void * closure);
-static PyGetSetDef StructMeta_getset[];
+static PyGetSetDef StructMeta_getset[9];
 static PyObject * StructMeta_call(PyObject * self, PyObject * args, PyObject * keywords);
 PyTypeObject StructMeta_Type = {
 	PyVarObject_HEAD_INIT(NULL, 0)

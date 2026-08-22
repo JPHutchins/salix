@@ -44,7 +44,7 @@ static PyObject * Struct_get_annotations_as_msgspec(PyObject * self, void * clos
 static PyObject * Struct_get_metadata(PyObject * self, void * closure);
 static PyObject * Struct_get_metadata_as_msgspec(PyObject * self, void * closure);
 static PyObject * metadata_of(PyObject * self, enum struct_metadata which, char const * name);
-static PyGetSetDef Struct_getset[];
+static PyGetSetDef Struct_getset[9];
 static PyMethodDef Struct_methods[];
 
 PyTypeObject StructMixin_Type = {

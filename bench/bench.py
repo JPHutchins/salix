@@ -108,8 +108,6 @@ def _dc_frozen_ctor() -> Callable[[int, int, int], object]:
 
 
 def _record_type_ctor() -> Callable[[int, int, int], object]:
-    from records import record  # type: ignore[import-untyped]
-
     # record reads the return annotation and refuses one that is not None,
     # so this signature is the decorator's requirement, not an oversight.
     @record  # type: ignore[untyped-decorator]
@@ -120,17 +118,32 @@ def _record_type_ctor() -> Callable[[int, int, int], object]:
 
 # A rival to measure against, not a requirement: record-type carries a
 # python_version>='3.11' marker and is simply absent below that.
-CONSTRUCTS = (
-    Construct("gen_salix", "salix (this project)", "salix", "salix",
-              "from salix import Struct", _struct, _struct_ctor),
-    Construct("gen_msgspec", "msgspec.Struct", "msgspec", "msgspec",
-              "import msgspec", _msgspec, _msgspec_ctor),
-    Construct("gen_namedtuple", "typing.NamedTuple", "NamedTuple", "typing",
-              "from typing import NamedTuple", _namedtuple, _namedtuple_ctor),
-    Construct("gen_dcfrozen", "dataclass (frozen+slots)", "dataclass", "dataclasses",
-              "from dataclasses import dataclass", _dc_frozen, _dc_frozen_ctor),
-    Construct("gen_recordtype", "record-type (@record)", "record-type", "records",
-              "from records import record", _record_type, _record_type_ctor),
+RECORD_TYPE: Construct | None
+
+try:
+    from records import record  # type: ignore[import-untyped]
+
+    RECORD_TYPE = Construct("gen_recordtype", "record-type (@record)", "record-type",
+                            "records", "from records import record", _record_type,
+                            _record_type_ctor)
+except ImportError:
+    record = None
+    RECORD_TYPE = None
+
+CONSTRUCTS = tuple(
+    construct
+    for construct in (
+        Construct("gen_salix", "salix (this project)", "salix", "salix",
+                  "from salix import Struct", _struct, _struct_ctor),
+        Construct("gen_msgspec", "msgspec.Struct", "msgspec", "msgspec",
+                  "import msgspec", _msgspec, _msgspec_ctor),
+        Construct("gen_namedtuple", "typing.NamedTuple", "NamedTuple", "typing",
+                  "from typing import NamedTuple", _namedtuple, _namedtuple_ctor),
+        Construct("gen_dcfrozen", "dataclass (frozen+slots)", "dataclass", "dataclasses",
+                  "from dataclasses import dataclass", _dc_frozen, _dc_frozen_ctor),
+        RECORD_TYPE,
+    )
+    if construct is not None
 )
 
 HEADLINE = ("gen_salix", "gen_namedtuple", "gen_msgspec")
