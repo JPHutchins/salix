@@ -26,6 +26,7 @@ static enum result bind_named(
 	PyObject * value,
 	Py_ssize_t positional_count
 );
+static struct field_lookup named_field(StructType const * type, PyObject * name);
 static enum result fill_defaults(
 	StructType const * type,
 	PyObject * self,
@@ -108,6 +109,157 @@ PyObject * Struct_new(
 		fill_defaults(type, self, struct_required_count(type)) == RESULT_OK ? py_move(&self) :
 		NULL
 	);
+}
+PyObject * Struct_replace(
+	PyObject * const self,
+	PyObject * const * const arguments,
+	Py_ssize_t const nargs,
+	PyObject * const keyword_names
+) {
+	/* METH_FASTCALL methods receive self as the first parameter, so the
+	 * positional count here excludes it: anything past zero is a second
+	 * positional argument. */
+	if (nargs != 0) {
+		PyErr_Format(
+			PyExc_TypeError,
+			"%s.__replace__() takes exactly one positional argument (%zd given)",
+			Py_TYPE(self)->tp_name,
+			nargs
+		);
+
+		return NULL;
+	}
+
+	if (!is_struct(self)) {
+		PyErr_Format(PyExc_TypeError, "%s object is not replaceable", Py_TYPE(self)->tp_name);
+
+		return NULL;
+	}
+
+	StructType * const type = struct_type_of(self);
+	Py_ssize_t const change_count = keyword_names != NULL ? PyTuple_GET_SIZE(keyword_names) : 0;
+
+	if (change_count == 0 && type->struct_options.frozen) {
+		return Py_NewRef(self);
+	}
+
+	PyTypeObject * const cls = &type->heap_type.ht_type;
+
+	if (defines_own_init(type)) {
+		PY_OWNED(changed, PyDict_New());
+
+		if (changed == NULL) {
+			return NULL;
+		}
+
+		for (Py_ssize_t i = 0; i < change_count; ++i) {
+			if (named_field(type, PyTuple_GET_ITEM(keyword_names, i)).tag != FIELD_LOOKUP_FOUND) {
+				return NULL;
+			}
+		}
+
+		PY_OWNED(values, PyTuple_New(type->struct_field_count));
+
+		if (values == NULL) {
+			return NULL;
+		}
+
+		struct_slots_ref_into(type, self, values, NULL);
+
+		for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
+			PyObject * const value = PyTuple_GET_ITEM(values, i);
+
+			if (value == NULL) {
+				continue;
+			}
+
+			PyObject * const name = PyTuple_GET_ITEM(type->struct_field_names, i);
+			int const present = PyDict_Contains(changed, name);
+
+			if (present < 0) {
+				return NULL;
+			}
+
+			if (present == 0 && PyDict_SetItem(changed, name, value) < 0) {
+				return NULL;
+			}
+		}
+
+		for (Py_ssize_t i = 0; i < change_count; ++i) {
+			if (
+				PyDict_SetItem(
+					changed,
+					PyTuple_GET_ITEM(keyword_names, i),
+					arguments[nargs + i]
+				) <
+				0
+			) {
+				return NULL;
+			}
+		}
+
+		PY_OWNED(no_arguments, PyTuple_New(0));
+
+		if (no_arguments == NULL) {
+			return NULL;
+		}
+
+		PY_MOVABLE(replaced, PyObject_Call((PyObject *) cls, no_arguments, changed));
+
+		if (replaced == NULL) {
+			return NULL;
+		}
+
+		if (Py_TYPE(replaced) != cls) {
+			PyErr_SetString(
+				PyExc_SystemError,
+				"salix internal error: the replace construction returned a different type"
+			);
+
+			return NULL;
+		}
+
+		for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
+			PyObject * const value = PyTuple_GET_ITEM(values, i);
+			PyObject * * const slot = struct_slot(type, replaced, i);
+
+			if (value != NULL && *slot == NULL) {
+				*slot = Py_NewRef(value);
+			}
+		}
+
+		PY_MOVABLE(source_dict, NULL);
+		struct_slots_copy_into(type, self, replaced, &source_dict);
+
+		if (source_dict != NULL && struct_dict_copy_merged(source_dict, replaced) < 0) {
+			return NULL;
+		}
+
+		return py_move(&replaced);
+	}
+
+	PY_MOVABLE(copy, cls->tp_alloc(cls, 0));
+
+	if (copy == NULL) {
+		return NULL;
+	}
+
+	if (bind_keywords(type, copy, arguments, 0, keyword_names) != RESULT_OK) {
+		return NULL;
+	}
+
+	PY_MOVABLE(source_dict, NULL);
+	struct_slots_copy_into(type, self, copy, &source_dict);
+
+	if (run_post_init(type, copy) != RESULT_OK) {
+		return NULL;
+	}
+
+	if (source_dict != NULL && struct_dict_copy_merged(source_dict, copy) < 0) {
+		return NULL;
+	}
+
+	return py_move(&copy);
 }
 
 PyObject * Struct_from_mapping(PyObject * const module, PyObject * const arguments) {
@@ -359,19 +511,11 @@ static enum result bind_named(
 	PyObject * const value,
 	Py_ssize_t const positional_count
 ) {
-	struct field_lookup const found = find_field(type, name);
+	struct field_lookup const found = named_field(type, name);
 
 	switch (found.tag) {
 		case FIELD_LOOKUP_ERROR:
-			return RESULT_ERROR;
 		case FIELD_LOOKUP_MISSING:
-			PyErr_Format(
-				PyExc_TypeError,
-				"%.200s() got an unexpected keyword argument '%U'",
-				struct_type_name(type),
-				name
-			);
-
 			return RESULT_ERROR;
 		case FIELD_LOOKUP_FOUND:
 			break;
@@ -395,6 +539,20 @@ static enum result bind_named(
 	return RESULT_OK;
 }
 
+static struct field_lookup named_field(StructType const * const type, PyObject * const name) {
+	struct field_lookup const found = find_field(type, name);
+
+	if (found.tag == FIELD_LOOKUP_MISSING) {
+		PyErr_Format(
+			PyExc_TypeError,
+			"%.200s() got an unexpected keyword argument '%U'",
+			struct_type_name(type),
+			name
+		);
+	}
+
+	return found;
+}
 static enum result fill_defaults(
 	StructType const * const type,
 	PyObject * const self,

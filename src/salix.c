@@ -6,11 +6,13 @@
 #include "mixin.h"
 #include "owned.h"
 #include "result.h"
+#include "types.h"
 
 static int struct_exec(PyObject * module);
 static enum result add_struct_base(PyObject * module);
 static PyObject * create_struct_base(PyObject * module);
 static PyObject * handoff_new(PyObject * self, PyObject * args);
+static PyObject * replace(PyObject * module, PyObject * args, PyObject * kwargs);
 static void struct_free(void * module);
 
 /*
@@ -36,6 +38,12 @@ static PyMethodDef struct_functions[] = {
 		.ml_meth = Struct_set_field,
 		.ml_flags = METH_VARARGS,
 		.ml_doc = "set_field(instance, name, value) -- assign a field the class declared.",
+	},
+	{
+		.ml_name = "replace",
+		.ml_meth = (PyCFunction)(void (*)(void)) replace,
+		.ml_flags = METH_VARARGS | METH_KEYWORDS,
+		.ml_doc = "replace(instance, **changes) -- derive a copy with new field values.",
 	},
 	{
 		.ml_name = "from_mapping",
@@ -145,6 +153,34 @@ static PyObject * build_handoff_machinery(struct salix_state * const state) {
 	Py_XSETREF(state->handoff_new, Py_NewRef(new_fn));
 
 	return state->handoff_attempt;
+}
+
+static PyObject * replace(PyObject * const module, PyObject * const args, PyObject * const kwargs) {
+	PyObject * instance = NULL;
+
+	if (!PyArg_ParseTuple(args, "O:replace", &instance)) {
+		return NULL;
+	}
+
+	if (!is_struct(instance)) {
+		PyErr_Format(
+			PyExc_TypeError,
+			"replace() expects a struct, not %.200s",
+			Py_TYPE(instance)->tp_name
+		);
+
+		return NULL;
+	}
+
+	PY_OWNED(replacer, PyObject_GetAttrString((PyObject *) Py_TYPE(instance), "__replace__"));
+
+	if (replacer == NULL) {
+		return NULL;
+	}
+
+	PY_OWNED(instance_arguments, PyTuple_Pack(1, instance));
+
+	return instance_arguments != NULL ? PyObject_Call(replacer, instance_arguments, kwargs) : NULL;
 }
 
 static PyObject * handoff_new(PyObject * const self, PyObject * const args) {

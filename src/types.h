@@ -238,20 +238,22 @@ static inline struct slot_pair struct_slot_pair_ref(
  * Every field into `values`, which must be a tuple of struct_field_count and
  * whose items must be unset. One acquisition rather than one per field, and so
  * a real snapshot -- hash is the reader that can have both, because nothing in
- * this loop calls back into Python. 3.14t, eight fields: 111.4ns to 81.1,
- * against 77.5 for the unsynchronised read this replaced.
+ * this loop calls back into Python. An unwritten slot takes `missing`: Py_None
+ * for readers that render, NULL for callers that skip. 3.14t, eight fields:
+ * 111.4ns to 81.1, against 77.5 for the unsynchronised read this replaced.
  */
-static inline void struct_slots_ref_or_none_into(
+static inline void struct_slots_ref_into(
 	StructType const * const type,
 	PyObject * const self,
-	PyObject * const values
+	PyObject * const values,
+	PyObject * const missing
 ) {
 	STRUCT_BEGIN_CRITICAL_SECTION(self);
 
 	for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
 		PyObject * const value = *struct_slot(type, self, i);
 
-		PyTuple_SET_ITEM(values, i, Py_NewRef(value != NULL ? value : Py_None));
+		PyTuple_SET_ITEM(values, i, value != NULL ? Py_NewRef(value) : Py_XNewRef(missing));
 	}
 
 	STRUCT_END_CRITICAL_SECTION();
@@ -261,11 +263,13 @@ static inline void struct_slots_ref_or_none_into(
  * Every slot the type owns, plus the instance dict pointer, under one
  * acquisition: the struct fields and the non-struct base members whose
  * offsets install_fields resolved. An unwritten slot stays unwritten in the
- * destination. `dict` receives a strong reference to the instance dict if
- * the slot holds one; reading never creates the dict, so copying a struct
- * that never had a __dict__ does not materialize one on the source. The
- * dict's contents are copied by the caller, outside this section. The loop
- * stores only, so nothing here can fail.
+ * destination, and one the destination already holds keeps its value, so a
+ * caller may write changes before the copy and have them survive it.
+ * `dict` receives a strong reference to the instance dict if the slot holds
+ * one; reading never creates the dict, so copying a struct that never had a
+ * __dict__ does not materialize one on the source. The dict's contents are
+ * copied by the caller, outside this section. The loop stores only, so
+ * nothing here can fail.
  */
 static inline void struct_slots_copy_into(
 	StructType const * const type,
@@ -277,18 +281,20 @@ static inline void struct_slots_copy_into(
 
 	for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
 		PyObject * const value = *struct_slot(type, source, i);
+		PyObject * * const destination_slot = struct_slot(type, destination, i);
 
-		if (value != NULL) {
-			*struct_slot(type, destination, i) = Py_NewRef(value);
+		if (value != NULL && *destination_slot == NULL) {
+			*destination_slot = Py_NewRef(value);
 		}
 	}
 
 	for (Py_ssize_t i = 0; i < type->struct_member_count; ++i) {
 		Py_ssize_t const offset = type->struct_member_offsets[i];
 		PyObject * const value = *(PyObject * *) ((char *) source + offset);
+		PyObject * * const destination_slot = (PyObject * *) ((char *) destination + offset);
 
-		if (value != NULL) {
-			*((PyObject * *) ((char *) destination + offset)) = Py_NewRef(value);
+		if (value != NULL && *destination_slot == NULL) {
+			*destination_slot = Py_NewRef(value);
 		}
 	}
 
@@ -299,6 +305,37 @@ static inline void struct_slots_copy_into(
 	}
 
 	STRUCT_END_CRITICAL_SECTION();
+}
+
+/*
+ * Installs a copy of the source dict, with entries the destination already
+ * holds winning: a constructor or __post_init__ that wrote its own dict
+ * keeps what it computed, and the copy fills the rest. The caller hands in
+ * the strong reference struct_slots_copy_into took, so nothing here reads
+ * the source again.
+ */
+static inline int struct_dict_copy_merged(
+	PyObject * const source_dict,
+	PyObject * const destination
+) {
+	PyObject * const copied = PyDict_Copy(source_dict);
+
+	if (copied == NULL) {
+		return -1;
+	}
+
+	PyObject * * const own_slot = _PyObject_GetDictPtr(destination);
+
+	if (own_slot != NULL && *own_slot != NULL && PyDict_Update(copied, *own_slot) < 0) {
+		Py_DECREF(copied);
+
+		return -1;
+	}
+
+	int const installed = PyObject_GenericSetDict(destination, copied, NULL);
+	Py_DECREF(copied);
+
+	return installed;
 }
 
 static inline Py_ssize_t struct_required_count(StructType const * const type) {

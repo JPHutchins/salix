@@ -5,7 +5,7 @@ import sysconfig
 
 import pytest
 
-from salix import Struct, from_mapping, set_field
+from salix import Struct, from_mapping, replace, set_field
 
 pytestmark = pytest.mark.skipif(
     bool(sysconfig.get_config_var("Py_GIL_DISABLED")),
@@ -448,6 +448,47 @@ def test_a_deferred_co_base_deepcopy_does_not_leak_the_method():
 
     assert sys.getrefcount(method) == before
 
+
+def test_replace_takes_one_reference_per_kept_and_changed_field_and_releases_them_with_the_replaced():
+    """The replaced instance is a fresh instance whose slots hold fresh
+    references: sharing the value is not sharing the count. A replace that
+    borrowed the source's references would leave the sentinel's count
+    unmoved, and one that forgot to release them would leave it stuck one
+    pair high after `del`."""
+
+    sentinel = Sentinel()
+    pair = Pair(sentinel, sentinel)
+    before = sys.getrefcount(sentinel)
+    replaced = replace(pair, first=sentinel)
+
+    assert sys.getrefcount(sentinel) == before + 2
+
+    del replaced
+
+    assert sys.getrefcount(sentinel) == before
+
+
+def test_replace_through_a_body_init_releases_the_transient_keywords():
+    """The slow path gathers the field values into a keyword dict that the
+    constructor call must release: a leak would keep the sentinel alive one
+    extra reference per replace."""
+
+    class Doubled(Struct, frozen=False):
+        value: object
+
+        def __init__(self, value: object) -> None:
+            self.value = value
+
+    sentinel = Sentinel()
+    original = Doubled(sentinel)
+    before = sys.getrefcount(sentinel)
+    replaced = replace(original, value=sentinel)
+
+    assert sys.getrefcount(sentinel) == before + 1
+
+    del replaced
+
+    assert sys.getrefcount(sentinel) == before
 
 def test_from_mapping_takes_one_reference_per_field_and_releases_them_with_the_instance():
     """The mapping values land in fresh slots with fresh references: a

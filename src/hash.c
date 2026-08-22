@@ -23,7 +23,7 @@ Py_hash_t Struct_hash(PyObject * const self) {
 		return HASH_ERR;
 	}
 
-	struct_slots_ref_or_none_into(type, self, values);
+	struct_slots_ref_into(type, self, values, Py_None);
 
 	if (Py_EnterRecursiveCall(" while hashing a struct") != 0) {
 		return HASH_ERR;

@@ -12,6 +12,13 @@ PyObject * Struct_vectorcall(
 
 PyObject * Struct_new(PyTypeObject * struct_class, PyObject * arguments, PyObject * keywords);
 
+PyObject * Struct_replace(
+	PyObject * self,
+	PyObject * const * arguments,
+	Py_ssize_t nargs,
+	PyObject * keyword_names
+);
+
 PyObject * Struct_set_field(PyObject * module, PyObject * arguments);
 
 PyObject * Struct_from_mapping(PyObject * module, PyObject * arguments);

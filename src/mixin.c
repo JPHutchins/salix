@@ -1,6 +1,7 @@
 #include <Python.h>
 
 #include "compare.h"
+#include "construct.h"
 #include "hash.h"
 #include "mixin.h"
 #include "owned.h"
@@ -62,6 +63,12 @@ PyTypeObject StructMixin_Type = {
 static PyMethodDef Struct_methods[] = {
 	{"__copy__", Struct_copy, METH_NOARGS, NULL},
 	{"__deepcopy__", Struct_deepcopy, METH_O, NULL},
+	{
+		"__replace__",
+		(PyCFunction)(void (*)(void)) Struct_replace,
+		METH_FASTCALL | METH_KEYWORDS,
+		NULL,
+	},
 	{.ml_name = NULL},
 };
 
@@ -436,12 +443,8 @@ static PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 	PY_MOVABLE(dict, NULL);
 	struct_slots_copy_into(type, self, copy, &dict);
 
-	if (dict != NULL) {
-		PY_OWNED(copied, PyDict_Copy(dict));
-
-		if (copied == NULL || PyObject_GenericSetDict(copy, copied, NULL) < 0) {
-			return NULL;
-		}
+	if (dict != NULL && struct_dict_copy_merged(dict, copy) < 0) {
+		return NULL;
 	}
 
 	return py_move(&copy);
