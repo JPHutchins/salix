@@ -145,8 +145,6 @@ PyObject * Struct_replace(
 			return NULL;
 		}
 
-		/* One acquisition for every kept field, so a free-threaded replace
-		 * hands the constructor a field set the source really held. */
 		PY_OWNED(values, PyTuple_New(type->struct_field_count));
 
 		if (values == NULL) {
@@ -197,9 +195,6 @@ PyObject * Struct_replace(
 			return NULL;
 		}
 
-		/* Whatever the constructor left unwritten -- fields, co-base members,
-		 * the instance dict -- the source fills, through the same primitive
-		 * the fast path uses, so the two paths diverge only in construction. */
 		if (struct_copy_slots_and_dict(type, self, replaced) < 0) {
 			return NULL;
 		}

@@ -166,9 +166,6 @@ static PyObject * replace(PyObject * const module, PyObject * const args, PyObje
 		return NULL;
 	}
 
-	/* The type-level lookup is copy.replace's own: an instance-dict entry
-	 * or a __getattr__ hook must not shadow the dunder the protocol
-	 * dispatches on. */
 	PY_OWNED(replacer, PyObject_GetAttrString((PyObject *) Py_TYPE(instance), "__replace__"));
 
 	if (replacer == NULL) {
