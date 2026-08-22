@@ -317,3 +317,30 @@ def test_a_metaclass_call_returning_a_foreign_struct_is_refused():
 
     with pytest.raises(SystemError, match="returned a different type"):
         replace(disguised, x=2)
+
+
+def test_a_metaclass_call_returning_a_subclass_instance_is_accepted():
+    class RogueMeta(type(Struct)):
+        def __call__(cls, *args: object, **kwargs: object) -> object:
+            if cls is Base:
+                return subclass
+            return super().__call__(*args, **kwargs)
+
+    class Base(Struct, metaclass=RogueMeta, frozen=False):
+        x: int = 0
+
+        def __init__(self, x: int = 0) -> None:
+            self.x = x
+
+    class Sub(Base, frozen=False):
+        pass
+
+    subclass = type.__call__(Sub)
+    base = type.__call__(Base)
+
+    assert type(base) is Base
+
+    replaced = replace(base, x=2)
+
+    assert type(replaced) is Sub
+    assert replaced.x == 0
