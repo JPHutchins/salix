@@ -26,8 +26,14 @@ PYTEST = (
 ENVIRONMENT_PER_INTERPRETER = {"UV_PROJECT_ENVIRONMENT": ".venvs/{PY}"}
 
 # setuptools is a build tool, not something the tests member should carry.
+# The two leaves must name the same interpreter, and neither may name a
+# version string the ambient VIRTUAL_ENV can flip to a free-threaded one:
+# uv venv creation is immune to that preference and resolves the plain
+# managed variant, so the venv the pytest leaf reuses is the one this
+# leaf builds against.
 BUILD = (
-    "uv run --no-project --managed-python --python {PY} --with setuptools"
+    "uv venv --python {PY} --managed-python .venvs/{PY}"
+    " && uv run --no-project --python .venvs/{PY}/bin/python --with setuptools"
     " python setup.py build_ext --inplace"
 )
 
