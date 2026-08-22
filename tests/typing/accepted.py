@@ -104,7 +104,7 @@ def set_field_takes_a_struct_a_name_and_any_value() -> None:
     set_field(Point(1, "two"), "y", object())
 
 
-def generic_struct_fields_type_check() -> None:
+def subscripting_a_generic_struct_narrows_the_field_type() -> None:
     assert_type(Ok(3).value, int)
     assert_type(Ok[str]("x").value, str)
 

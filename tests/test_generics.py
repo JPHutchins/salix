@@ -1,7 +1,4 @@
-import sys
 from typing import Generic, TypeVar
-
-import pytest
 
 from salix import Struct
 
@@ -38,7 +35,6 @@ def test_a_classic_generic_struct_can_be_inherited():
     assert Tagged.__struct_fields__ == ("value", "tag")
 
 
-@pytest.mark.skipif(sys.version_info < (3, 11), reason="typing's alias call is guarded from 3.11")
 def test_a_classic_generic_struct_can_be_subscripted_and_constructed():
     class Ok(Struct, Generic[T]):
         value: T
@@ -50,15 +46,6 @@ def test_a_classic_generic_struct_can_be_subscripted_and_constructed():
 
     assert Tagged[int](3, "t").value == 3
     assert Tagged[int](3, "t").tag == "t"
-
-
-@pytest.mark.skipif(sys.version_info >= (3, 11), reason="the upstream guard landed in 3.11")
-def test_3_10s_alias_call_hits_the_upstream_unguarded_orig_class_write():
-    class Ok(Struct, Generic[T]):
-        value: T
-
-    with pytest.raises(TypeError, match="does not support attribute assignment"):
-        Ok[int](3)
 
 
 def test_multiple_type_variables_bind_in_order():

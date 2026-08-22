@@ -100,9 +100,9 @@ members = ["bench", "tests", "tools"]
 
 [tool.ruff]
 # Lint only. There is no ruff format here and there should not be: CLAUDE.md
+# says follow the style already in the code base, not a common one.
 # PEP 695 syntax, collected only on 3.12+ while ruff parses at the 3.10 floor.
 extend-exclude = ["tests/test_generics_pep695.py"]
-# says follow the style already in the code base, not a common one.
 [tool.ruff.lint]
 # Rules that find defects, not rules that have opinions about layout. E402 is
 # in because setup.py and compile_flags.py both put an import after a
