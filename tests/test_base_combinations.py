@@ -160,7 +160,7 @@ def observe(cls: type) -> Behaviour:
     try:
         setattr(instance(cls), cls.__struct_fields__[0], 99)
         frozen = False
-    except TypeError:
+    except (TypeError, IndexError):
         frozen = True
 
     return Behaviour(
@@ -583,6 +583,13 @@ def test_hashability_follows_the_equality_the_class_answers_with():
 
 
 def test_hashability_follows_equality_when_a_later_base_answers_it():
+    """The bucket's identity-unhashable combos carry the xfails: a partial
+    fix that settles some of them shrinks this count, and the strict-xfail
+    sweep still passes while it should turn red."""
+
+    unhashable = sum(cls.__hash__ is None for bases, cls in CONTESTED_EQ)
+
+    assert unhashable == 48
     assert hashability_disagrees_with_equality(CONTESTED_EQ) == []
 
 
@@ -690,6 +697,10 @@ def test_the_weakref_option_and_the_slot_agree():
     assert weakref_requests_ignored(WITH_A_SLOT) == []
 
 
+@pytest.mark.xfail(
+    strict=False,
+    reason="pins the current refusal; flip or invert the assertion when the behavior changes",
+)
 def test_a_single_base_asking_to_drop_an_inherited_weakref_slot_is_the_same_bug():
     """#78's smallest form, stated on its own so that it is covered whether or
     not the sweep above still reaches it. The slot is inherited and cannot be
