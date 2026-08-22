@@ -36,7 +36,7 @@ ENVIRONMENT_PER_INTERPRETER = {"UV_PROJECT_ENVIRONMENT": ".venvs/{PY}"}
 # uv venv creation is immune to that preference and resolves the plain
 # managed variant, so the venv the pytest leaf reuses is the one the
 # build leaf compiles against.
-make_env = Task("uv venv --python {PY} --managed-python .venvs/{PY}", mutates=True)
+make_env = Task("uv venv --clear --python {PY} --managed-python .venvs/{PY}", mutates=True)
 
 BUILD = (
     "uv run --no-project --python .venvs/{PY}/bin/python --with setuptools"
