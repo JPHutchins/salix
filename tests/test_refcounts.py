@@ -5,7 +5,7 @@ import sysconfig
 
 import pytest
 
-from salix import Struct, replace, set_field
+from salix import Struct, from_mapping, replace, set_field
 
 pytestmark = pytest.mark.skipif(
     bool(sysconfig.get_config_var("Py_GIL_DISABLED")),
@@ -487,5 +487,20 @@ def test_replace_through_a_body_init_releases_the_transient_keywords():
     assert sys.getrefcount(sentinel) == before + 1
 
     del replaced
+
+    assert sys.getrefcount(sentinel) == before
+
+def test_from_mapping_takes_one_reference_per_field_and_releases_them_with_the_instance():
+    """The mapping values land in fresh slots with fresh references: a
+    constructor that borrowed the mapping's references would leave the
+    sentinel's count unmoved."""
+
+    sentinel = Sentinel()
+    before = sys.getrefcount(sentinel)
+    pair = from_mapping(Pair, {"first": sentinel, "second": sentinel})
+
+    assert sys.getrefcount(sentinel) == before + 2
+
+    del pair
 
     assert sys.getrefcount(sentinel) == before

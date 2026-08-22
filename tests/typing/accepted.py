@@ -2,7 +2,7 @@ from typing import Any, Literal
 
 from typing_extensions import assert_type
 
-from salix import Struct, replace, set_field
+from salix import Struct, from_mapping, replace, set_field
 
 
 class Point(Struct):
@@ -100,6 +100,11 @@ def set_field_takes_a_struct_a_name_and_any_value() -> None:
 def replace_returns_the_concrete_struct_type() -> None:
     assert_type(replace(Point(1, "two"), x=9), Point)
     replace(Point(1, "two"), y=object())
+
+
+def from_mapping_returns_the_concrete_struct_type() -> None:
+    assert_type(from_mapping(Point, {"x": 1, "y": "two"}), Point)
+    from_mapping(Point, {"x": object()})
 
 
 def __copy___returns_the_concrete_struct_type() -> None:

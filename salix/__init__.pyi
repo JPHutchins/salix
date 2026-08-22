@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Any, Final, TypeVar
 
 from typing_extensions import Self, dataclass_transform
@@ -31,3 +32,4 @@ _StructT = TypeVar("_StructT", bound=Struct)
 
 def set_field(instance: Struct, name: str, value: object, /) -> None: ...
 def replace(instance: _StructT, /, **changes: object) -> _StructT: ...
+def from_mapping(cls: type[_StructT], values: Mapping[str, object], /) -> _StructT: ...

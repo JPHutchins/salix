@@ -45,6 +45,12 @@ static PyMethodDef struct_functions[] = {
 		.ml_flags = METH_VARARGS | METH_KEYWORDS,
 		.ml_doc = "replace(instance, **changes) -- derive a copy with new field values.",
 	},
+	{
+		.ml_name = "from_mapping",
+		.ml_meth = Struct_from_mapping,
+		.ml_flags = METH_VARARGS,
+		.ml_doc = "from_mapping(cls, values) -- construct a struct from a mapping of field values.",
+	},
 	{.ml_name = NULL},
 };
 
