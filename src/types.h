@@ -238,20 +238,22 @@ static inline struct slot_pair struct_slot_pair_ref(
  * Every field into `values`, which must be a tuple of struct_field_count and
  * whose items must be unset. One acquisition rather than one per field, and so
  * a real snapshot -- hash is the reader that can have both, because nothing in
- * this loop calls back into Python. 3.14t, eight fields: 111.4ns to 81.1,
- * against 77.5 for the unsynchronised read this replaced.
+ * this loop calls back into Python. An unwritten slot takes `missing`: Py_None
+ * for readers that render, NULL for callers that skip. 3.14t, eight fields:
+ * 111.4ns to 81.1, against 77.5 for the unsynchronised read this replaced.
  */
-static inline void struct_slots_ref_or_none_into(
+static inline void struct_slots_ref_into(
 	StructType const * const type,
 	PyObject * const self,
-	PyObject * const values
+	PyObject * const values,
+	PyObject * const missing
 ) {
 	STRUCT_BEGIN_CRITICAL_SECTION(self);
 
 	for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
 		PyObject * const value = *struct_slot(type, self, i);
 
-		PyTuple_SET_ITEM(values, i, Py_NewRef(value != NULL ? value : Py_None));
+		PyTuple_SET_ITEM(values, i, value != NULL ? Py_NewRef(value) : Py_XNewRef(missing));
 	}
 
 	STRUCT_END_CRITICAL_SECTION();
@@ -306,29 +308,27 @@ static inline void struct_slots_copy_into(
 }
 
 /*
- * The shallow trio -- copy, and both replace paths -- shares this: the slots
- * and the instance dict, the dict copied and installed outside the section,
- * where the source's dict pointer is a strong reference again. Fails only
- * when the dict copy or its install does; a source without a dict slot is
- * success and reads never materialize one.
+ * Installs a copy of the source dict, with entries the destination already
+ * holds winning: a constructor or __post_init__ that wrote its own dict
+ * keeps what it computed, and the copy fills the rest. The caller hands in
+ * the strong reference struct_slots_copy_into took, so nothing here reads
+ * the source again.
  */
-static inline int struct_copy_slots_and_dict(
-	StructType const * const type,
-	PyObject * const source,
+static inline int struct_dict_copy_merged(
+	PyObject * const source_dict,
 	PyObject * const destination
 ) {
-	PyObject * dict = NULL;
-
-	struct_slots_copy_into(type, source, destination, &dict);
-
-	if (dict == NULL) {
-		return 0;
-	}
-
-	PyObject * const copied = PyDict_Copy(dict);
-	Py_DECREF(dict);
+	PyObject * const copied = PyDict_Copy(source_dict);
 
 	if (copied == NULL) {
+		return -1;
+	}
+
+	PyObject * * const own_slot = _PyObject_GetDictPtr(destination);
+
+	if (own_slot != NULL && *own_slot != NULL && PyDict_Update(copied, *own_slot) < 0) {
+		Py_DECREF(copied);
+
 		return -1;
 	}
 

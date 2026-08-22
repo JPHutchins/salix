@@ -216,3 +216,104 @@ def test_an_instance_dict_entry_does_not_shadow_the_dunder():
     replaced = replace(original, x=2)
 
     assert replaced == WithDict(2)
+
+
+def test_a_slow_path_replace_keeps_the_constructors_dict_entries():
+    class DictInit(Struct, Dicted, frozen=False):
+        x: int
+
+        def __init__(self, x: int) -> None:
+            self.x = x
+            self.extra = "fresh"
+
+    original = DictInit(1)
+    original.stale = "stale"
+    replaced = replace(original, x=2)
+
+    assert replaced.extra == "fresh"
+    assert replaced.stale == "stale"
+
+
+def test_an_unknown_change_is_refused_before_a_swallowing_init_sees_it():
+    class Swallowing(Struct, frozen=False):
+        x: int
+
+        def __init__(self, x: int, **rest: object) -> None:
+            self.x = x
+
+    with pytest.raises(TypeError, match="got an unexpected keyword argument 'z'"):
+        replace(Swallowing(1), z=2)
+
+
+def test_a_subset_signature_init_propagates_its_own_type_error():
+    class Subset(Struct, frozen=False):
+        x: int
+        y: int = 0
+
+        def __init__(self, x: int) -> None:
+            self.x = x
+
+    with pytest.raises(TypeError, match="unexpected keyword argument 'y'"):
+        replace(Subset(1), x=2)
+
+
+def test_an_init_none_class_fails_construction_before_replace_can_run():
+    class NoneInit(Struct):
+        x: int = 7
+        __init__ = None
+
+    with pytest.raises(TypeError, match="'NoneType' object is not callable"):
+        NoneInit(3)
+
+
+def test_a_zero_change_replace_of_a_mutable_struct_is_a_copy():
+    original = Mutable(1)
+    replaced = replace(original)
+
+    assert replaced is not original
+    assert replaced == original
+
+
+def test_post_init_runs_before_the_source_dict_is_installed():
+    seen = []
+
+    class Watched(Struct, Dicted, frozen=False):
+        x: int
+
+        def __post_init__(self) -> None:
+            seen.append(self.__dict__)
+
+    original = Watched(1)
+    original.extra = "world"
+    replaced = replace(original, x=2)
+
+    assert seen[-1] == {}
+    assert replaced.extra == "world"
+
+
+def test_a_metaclass_call_returning_a_foreign_struct_is_refused():
+    class RogueMeta(type(Struct)):
+        def __call__(cls, *args: object, **kwargs: object) -> object:
+            return alien if cls is Other else other
+
+    class Other(Struct, metaclass=RogueMeta, frozen=False):
+        x: int = 0
+
+        def __init__(self, x: int = 0) -> None:
+            self.x = x
+
+    class Alien(Struct, metaclass=RogueMeta, frozen=False):
+        x: int = 0
+
+        def __init__(self, x: int = 0) -> None:
+            self.x = x
+
+    other = type.__call__(Other)
+    alien = type.__call__(Alien)
+
+    disguised = Other(1)
+
+    assert type(disguised) is Alien
+
+    with pytest.raises(SystemError, match="returned a different type"):
+        replace(disguised, x=2)
