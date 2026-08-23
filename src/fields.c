@@ -8,7 +8,14 @@
 #include "result.h"
 #include "types.h"
 
+enum special_form_kind {
+	SPECIAL_FORM_NONE,
+	SPECIAL_FORM_CLASS_VAR,
+	SPECIAL_FORM_INIT_VAR,
+};
+
 struct special_form {
+	enum special_form_kind kind;
 	char const * name;
 	char const * instead;
 };
@@ -60,10 +67,12 @@ static enum result append_annotation(
 );
 
 static struct special_form const CLASS_VAR_FORM = {
+	.kind = SPECIAL_FORM_CLASS_VAR,
 	.name = "ClassVar",
 	.instead = "a class variable is a constant, so assign the value in the class body",
 };
 static struct special_form const INIT_VAR_FORM = {
+	.kind = SPECIAL_FORM_INIT_VAR,
 	.name = "InitVar",
 	.instead = "take the value in a custom __init__ and write the fields with set_field",
 };
@@ -117,6 +126,9 @@ static struct special_form special_form_of(
 static struct special_form form_within(PyObject * annotation, struct form_probes const * probes);
 static struct special_form named_special_form(PyObject * text, struct form_probes const * probes);
 static bool names_form(PyObject * text, PyObject * needle);
+static bool names_form_at_top(PyObject * text, PyObject * needle);
+static bool top_level_prefix(PyObject * text, Py_ssize_t until);
+static bool class_var_top_level(PyObject * annotation, struct form_probes const * probes);
 static bool continues_identifier(Py_UCS4 character);
 static PyObject * module_attribute(char const * module_name, char const * attribute);
 static enum result refuse_shared_mutable_contents(PyObject * field_name, PyObject * value);
@@ -398,6 +410,13 @@ static enum result append_declared(
 			case INHERITANCE_ERROR:
 				return RESULT_ERROR;
 			case INHERITANCE_INHERITED:
+				if (
+					declared_default != NULL &&
+					refuse_shared_mutable_contents(field_name, declared_default) != RESULT_OK
+				) {
+					return RESULT_ERROR;
+				}
+
 				continue;
 			case INHERITANCE_NEW:
 				break;
@@ -417,7 +436,25 @@ static enum result append_declared(
 				return RESULT_ERROR;
 			}
 
-			if (special.name == CLASS_VAR_FORM.name) {
+			if (special.kind == SPECIAL_FORM_CLASS_VAR) {
+				bool const top_level = class_var_top_level(annotation, &probes);
+
+				if (PyErr_Occurred()) {
+					return RESULT_ERROR;
+				}
+
+				if (!top_level) {
+					PyErr_Format(
+						PyExc_TypeError,
+						"'%U' is annotated %s, which salix does not support; "
+						"write it below the fields, without an annotation",
+						field_name,
+						special.name
+					);
+
+					return RESULT_ERROR;
+				}
+
 				if (declared_default == NULL) {
 					PyErr_Format(
 						PyExc_TypeError,
@@ -430,6 +467,13 @@ static enum result append_declared(
 				}
 
 				continue;
+			}
+
+			if (
+				declared_default != NULL &&
+				refuse_shared_mutable_contents(field_name, declared_default) != RESULT_OK
+			) {
+				return RESULT_ERROR;
 			}
 
 			PyErr_Format(
@@ -531,6 +575,47 @@ static struct special_form form_named_by(
 	}
 
 	return (struct special_form){0};
+}
+
+static bool class_var_object_top_level(
+	PyObject * const annotation,
+	struct form_probes const * const probes
+) {
+	if (probes->class_var == NULL || annotation == probes->class_var) {
+		return annotation == probes->class_var;
+	}
+
+	if (PyType_Check(annotation)) {
+		return false;
+	}
+
+	PY_OWNED(origin, optional_attribute(annotation, "__origin__"));
+
+	if (origin == NULL || origin != probes->class_var) {
+		return false;
+	}
+
+	PY_OWNED(metadata, optional_attribute(annotation, "__metadata__"));
+
+	if (PyErr_Occurred()) {
+		return false;
+	}
+
+	return metadata == NULL;
+}
+
+static bool class_var_top_level(
+	PyObject * const annotation,
+	struct form_probes const * const probes
+) {
+	if (PyUnicode_Check(annotation)) {
+		return (
+			probes->class_var_name != NULL &&
+			names_form_at_top(annotation, probes->class_var_name)
+		);
+	}
+
+	return class_var_object_top_level(annotation, probes);
 }
 
 static struct special_form special_form_of(
@@ -658,6 +743,74 @@ static bool names_form(PyObject * const text, PyObject * const needle) {
 		);
 
 		if (opens && closes) {
+			return true;
+		}
+
+		at = found;
+	}
+
+	return false;
+}
+
+static bool top_level_prefix(PyObject * const text, Py_ssize_t const until) {
+	int depth = 0;
+	bool single_quoted = false;
+	bool double_quoted = false;
+
+	for (Py_ssize_t at = 0; at < until; ++at) {
+		Py_UCS4 const character = PyUnicode_ReadChar(text, at);
+
+		if (single_quoted) {
+			single_quoted = character != '\'';
+			continue;
+		}
+
+		if (double_quoted) {
+			double_quoted = character != '"';
+			continue;
+		}
+
+		if (character == '\'') {
+			single_quoted = true;
+			continue;
+		}
+
+		if (character == '"') {
+			double_quoted = true;
+			continue;
+		}
+
+		if (character == '[' || character == '(') {
+			++depth;
+			continue;
+		}
+
+		if ((character == ']' || character == ')') && depth > 0) {
+			--depth;
+		}
+	}
+
+	return depth == 0 && !single_quoted && !double_quoted;
+}
+
+static bool names_form_at_top(PyObject * const text, PyObject * const needle) {
+	Py_ssize_t const length = PyUnicode_GET_LENGTH(text);
+	Py_ssize_t const form_length = PyUnicode_GET_LENGTH(needle);
+
+	for (Py_ssize_t at = 0; at + form_length <= length; ++at) {
+		Py_ssize_t const found = PyUnicode_Find(text, needle, at, length, 1);
+
+		if (found < 0) {
+			return false;
+		}
+
+		bool const opens = found == 0 || !continues_identifier(PyUnicode_ReadChar(text, found - 1));
+		bool const closes = (
+			found + form_length == length ||
+			!continues_identifier(PyUnicode_ReadChar(text, found + form_length))
+		);
+
+		if (opens && closes && top_level_prefix(text, found)) {
 			return true;
 		}
 

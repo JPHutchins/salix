@@ -47,7 +47,7 @@ def test_a_class_var_holding_a_mutable_is_the_constant_it_was_written_as():
 
 
 def test_a_bare_class_var_is_refused():
-    with pytest.raises(TypeError, match="annotated ClassVar"):
+    with pytest.raises(TypeError, match="without an assigned value"):
 
         class Bare(Struct):
             marker: ClassVar
@@ -223,6 +223,65 @@ def test_re_annotating_an_inherited_field_stays_a_no_op():
 
     assert Sub._struct_fields_ == ("x",)
     assert Sub(1).x == 1
+
+
+def test_re_annotating_an_inherited_field_with_a_value_replaces_the_default():
+    class Base(Struct):
+        x: int = 3
+
+    class Sub(Base):
+        x: ClassVar[int] = 5
+
+    assert Sub().x == 5
+
+
+def test_re_annotating_an_inherited_field_with_a_mutable_keeps_the_mutable_refusal():
+    class Base(Struct):
+        x: int = 3
+
+    with pytest.raises(TypeError, match="type hashes and whose value will not"):
+
+        class Sub(Base):
+            x: ClassVar[list] = ([1],)
+
+
+def test_re_annotating_an_inherited_class_var_without_a_value_is_refused():
+    class Base(Struct):
+        limit: ClassVar[int] = 10
+        name: str
+
+    with pytest.raises(TypeError, match="without an assigned value"):
+
+        class Sub(Base):
+            limit: ClassVar[int]
+
+
+def test_a_nested_class_var_with_a_value_is_still_refused():
+    with pytest.raises(TypeError, match="which salix does not support"):
+        type(Struct)(
+            "Wrapped",
+            (Struct,),
+            {"__annotations__": {"v": Annotated[ClassVar[int], "meta"]}, "v": 5},
+        )
+
+
+def test_a_nested_class_var_in_text_with_a_value_is_still_refused():
+    with pytest.raises(TypeError, match="which salix does not support"):
+        type(Struct)(
+            "Wrapped", (Struct,), {"__annotations__": {"v": "Optional[ClassVar[int]]"}, "v": 5}
+        )
+
+
+def test_a_quoted_class_var_in_text_with_a_value_is_still_refused():
+    with pytest.raises(TypeError, match="which salix does not support"):
+        type(Struct)("Wrapped", (Struct,), {"__annotations__": {"v": "'ClassVar[int]'"}, "v": 5})
+
+
+def test_an_init_var_with_a_shared_mutable_keeps_the_mutable_refusal():
+    with pytest.raises(TypeError, match="type hashes and whose value will not"):
+
+        class Seeded(Struct):
+            seed: InitVar[int] = ([1],)
 
 
 def test_a_renamed_import_is_not_resolved_in_the_source_text_form():
