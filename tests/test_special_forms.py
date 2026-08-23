@@ -232,7 +232,9 @@ def test_re_annotating_an_inherited_field_with_a_value_replaces_the_default():
     class Sub(Base):
         x: ClassVar[int] = 5
 
+    assert Sub._struct_fields_ == ("x",)
     assert Sub().x == 5
+    assert Sub(99).x == 99
 
 
 def test_re_annotating_an_inherited_field_with_a_mutable_keeps_the_mutable_refusal():
@@ -292,6 +294,38 @@ def test_an_init_var_with_a_shared_mutable_keeps_the_mutable_refusal():
 
         class Seeded(Struct):
             seed: InitVar[int] = ([1],)
+
+
+def test_a_non_string_annotation_key_still_gets_the_key_error():
+    with pytest.raises(TypeError, match="annotation keys must be strings"):
+        type(Struct)("Probe", (Struct,), {"__annotations__": {1: int}})
+
+
+def test_a_class_var_named_like_a_mixin_method_is_refused():
+    with pytest.raises(TypeError, match=r"is a ClassVar.*the mixin defines a method"):
+
+        class Colliding(Struct):
+            __copy__: ClassVar[object] = 5
+
+
+def test_a_class_var_operand_in_text_with_the_form_second_is_still_refused():
+    with pytest.raises(TypeError, match="which salix does not support"):
+        type(Struct)("Wrapped", (Struct,), {"__annotations__": {"v": "None | ClassVar[int]"}, "v": 5})
+
+
+def test_the_text_path_cannot_tell_the_user_s_type_apart():
+    """The spelling heuristic's mirror of the renamed-import hole: text naming
+    ClassVar is kept with a value whether the form or the author's own type is
+    meant, and refused without one.
+    """
+
+    Kept = type(Struct)("Kept", (Struct,), {"__annotations__": {"v": "ClassVar[int]"}, "v": 5})
+
+    assert Kept._struct_fields_ == ()
+    assert Kept.v == 5
+
+    with pytest.raises(TypeError, match="without an assigned value"):
+        type(Struct)("Refused", (Struct,), {"__annotations__": {"v": "ClassVar[int]"}})
 
 
 def test_a_renamed_import_is_not_resolved_in_the_source_text_form():

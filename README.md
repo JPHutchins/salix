@@ -32,7 +32,7 @@ paths differ at the edges:
 | annotation | object path | text path |
 | --- | --- | --- |
 | an alias of `ClassVar`, `CV[int]` | the form itself: kept with a value, refused without | accepted; the field swallows a positional |
-| a type of yours actually named `ClassVar` | accepted | refused |
+| a type of yours actually named `ClassVar` | accepted | kept with a value, refused without |
 | `Annotated[int, ClassVar]` | accepted | refused, though the `ClassVar` there is metadata |
 | `Optional[Annotated[ClassVar[int], "m"]]` | refused | refused |
 
