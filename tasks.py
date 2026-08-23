@@ -1,4 +1,3 @@
-import sys
 from pathlib import Path
 
 from camas import (
@@ -56,7 +55,8 @@ STRICT_BUILD = {"SALIX_STRICT": "1"}
 NIX_INPUTS = ("src/", "nix/", "tools/", "tests/", "flake.nix", "flake.lock", "pyproject.toml")
 
 build = Sequential(make_env, Task(BUILD, mutates=True, env=STRICT_BUILD))
-JUNIT_FORMAT = AgentFormat("--junitxml {report}", "junit", limit=1_000_000)
+FULL_SUITE_JUNIT = 1_000_000
+JUNIT_FORMAT = AgentFormat("--junitxml {report}", "junit", limit=FULL_SUITE_JUNIT)
 pytest = Task(
     PYTEST,
     env=ENVIRONMENT_PER_INTERPRETER,
@@ -119,16 +119,17 @@ type_check = Parallel(mypy, pyright, ty, tooling)
 
 # Lint, not format: the style here is the style already in the files, so ruff
 # runs as a checker and never as a formatter. The rule set is in pyproject.
-LINT_FORMAT = AgentFormat("--output-format rdjson", "rdjson", limit=64_000)
+RUFF_CHECK = "uv run --no-project --with ruff ruff check"
+HUNDREDS_OF_DIAGNOSTICS = 64_000
+LINT_FORMAT = AgentFormat("--output-format rdjson", "rdjson", limit=HUNDREDS_OF_DIAGNOSTICS)
 lint = Parallel(
     Task(
-        "uv run --no-project --with ruff ruff check .",
+        RUFF_CHECK + " . --exclude tests/test_generics_pep695.py",
         agent_format=LINT_FORMAT,
     ),
     Task(
-        "uv run --no-project --with ruff ruff check --target-version py312"
-        " tests/test_generics_pep695.py",
-        when=lambda changed: sys.version_info >= (3, 12),
+        RUFF_CHECK + " --target-version py312 tests/test_generics_pep695.py",
+        when=("tests/test_generics_pep695.py",),
         agent_format=LINT_FORMAT,
     ),
 )
