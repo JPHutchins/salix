@@ -124,12 +124,12 @@ HUNDREDS_OF_DIAGNOSTICS = 64_000
 LINT_FORMAT = AgentFormat("--output-format rdjson", "rdjson", limit=HUNDREDS_OF_DIAGNOSTICS)
 lint = Parallel(
     Task(
-        RUFF_CHECK + " . --exclude tests/test_generics_pep695.py",
+        RUFF_CHECK + " . --extend-exclude tests/test_generics_pep695.py",
         agent_format=LINT_FORMAT,
     ),
     Task(
         RUFF_CHECK + " --target-version py312 tests/test_generics_pep695.py",
-        when=("tests/test_generics_pep695.py",),
+        when=("tests/test_generics_pep695.py", "pyproject.toml"),
         agent_format=LINT_FORMAT,
     ),
 )
