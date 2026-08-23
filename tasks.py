@@ -1,6 +1,15 @@
 from pathlib import Path
 
-from camas import Claude, Config, Parallel, Project, Sequential, Task, by_suffix
+from camas import (
+    AgentFormat,
+    Claude,
+    Config,
+    Parallel,
+    Project,
+    Sequential,
+    Task,
+    by_suffix,
+)
 
 C_SOURCES = by_suffix((".c", ".h"), default=tuple(sorted(str(p) for p in Path("src").rglob("*.[ch]"))))
 
@@ -50,7 +59,11 @@ STRICT_BUILD = {"SALIX_STRICT": "1"}
 NIX_INPUTS = ("src/", "nix/", "tools/", "tests/", "flake.nix", "flake.lock", "pyproject.toml")
 
 build = Sequential(make_env, Task(BUILD, mutates=True, env=STRICT_BUILD))
-pytest = Task(PYTEST, env=ENVIRONMENT_PER_INTERPRETER)
+pytest = Task(
+    PYTEST,
+    env=ENVIRONMENT_PER_INTERPRETER,
+    agent_format=AgentFormat("--junitxml {report}", "junit"),
+)
 # --no-sync: analyze reaches this from ci, and CI never installs the project.
 compile_flags = Task("uv run --no-sync python tools/compile_flags.py", mutates=True)
 
@@ -108,7 +121,10 @@ type_check = Parallel(mypy, pyright, ty, tooling)
 
 # Lint, not format: the style here is the style already in the files, so ruff
 # runs as a checker and never as a formatter. The rule set is in pyproject.
-lint = Task("uv run --no-project --with ruff ruff check .")
+lint = Task(
+    "uv run --no-project --with ruff ruff check .",
+    agent_format=AgentFormat("--output-format rdjson", "rdjson"),
+)
 
 bench = Project("bench")
 
@@ -157,6 +173,7 @@ free_threaded_build = Sequential(
 free_threaded_pytest = Task(
     PYTEST.format(PY=FREE_THREADED),
     env=FREE_THREADED_ROOT | {"UV_PROJECT_ENVIRONMENT": ".venvs/" + FREE_THREADED},
+    agent_format=AgentFormat("--junitxml {report}", "junit"),
 )
 free_threaded = Sequential(free_threaded_build, free_threaded_pytest)
 benchmark = Sequential(
