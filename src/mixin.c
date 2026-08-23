@@ -697,6 +697,10 @@ static int Struct_set_attribute(
 		return PyObject_GenericSetAttr(self, name, value);
 	}
 
+	if (PyUnicode_CompareWithASCIIString(name, "__orig_class__") == 0) {
+		return 0;
+	}
+
 	PyErr_Format(
 		PyExc_TypeError,
 		"%.200s object does not support attribute %s",
