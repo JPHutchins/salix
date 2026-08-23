@@ -61,7 +61,7 @@ static enum result append_annotation(
 
 static struct special_form const CLASS_VAR_FORM = {
 	.name = "ClassVar",
-	.instead = "write it below the fields, without an annotation",
+	.instead = "a class variable is a constant, so assign the value in the class body",
 };
 static struct special_form const INIT_VAR_FORM = {
 	.name = "InitVar",
@@ -389,8 +389,7 @@ static enum result append_declared(
 			}
 		} else if (
 			refuse_reserved_name(field_name) != RESULT_OK ||
-			PyDict_SetItem(default_by_name, field_name, declared_default) < 0 ||
-			refuse_shared_mutable_contents(field_name, declared_default) != RESULT_OK
+			PyDict_SetItem(default_by_name, field_name, declared_default) < 0
 		) {
 			return RESULT_ERROR;
 		}
@@ -418,6 +417,21 @@ static enum result append_declared(
 				return RESULT_ERROR;
 			}
 
+			if (special.name == CLASS_VAR_FORM.name) {
+				if (declared_default == NULL) {
+					PyErr_Format(
+						PyExc_TypeError,
+						"'%U' is annotated ClassVar without an assigned value; %s",
+						field_name,
+						CLASS_VAR_FORM.instead
+					);
+
+					return RESULT_ERROR;
+				}
+
+				continue;
+			}
+
 			PyErr_Format(
 				PyExc_TypeError,
 				"'%U' is annotated %s, which salix does not support; %s",
@@ -426,6 +440,13 @@ static enum result append_declared(
 				special.instead
 			);
 
+			return RESULT_ERROR;
+		}
+
+		if (
+			declared_default != NULL &&
+			refuse_shared_mutable_contents(field_name, declared_default) != RESULT_OK
+		) {
 			return RESULT_ERROR;
 		}
 
