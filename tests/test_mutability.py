@@ -424,3 +424,14 @@ def test_a_child_of_a_fieldless_mutable_base_may_freeze_itself():
         Child(1).x = 9
 
     assert hash(Child(1)) == hash((1,))
+
+
+def test_the_orig_class_write_is_accepted_and_discarded():
+    class Ok(Struct):
+        value: int
+
+    ok = Ok(1)
+
+    ok.__orig_class__ = "typing bookkeeping"
+
+    assert not hasattr(ok, "__orig_class__")
