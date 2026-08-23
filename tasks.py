@@ -146,8 +146,13 @@ FREE_THREADED = "3.14t"
 # one is installed -- any patch, even with the default variant also installed --
 # so this one is kept in a root of its own where it cannot rebind the matrix.
 FREE_THREADED_ROOT = {"UV_PYTHON_INSTALL_DIR": ".free-threaded-python"}
-free_threaded_build = Task(
-    BUILD.format(PY=FREE_THREADED), mutates=True, env=FREE_THREADED_ROOT | STRICT_BUILD
+free_threaded_build = Sequential(
+    Task(
+        "uv venv --clear --python 3.14t --managed-python .venvs/3.14t",
+        mutates=True,
+        env=FREE_THREADED_ROOT,
+    ),
+    Task(BUILD.format(PY=FREE_THREADED), mutates=True, env=FREE_THREADED_ROOT | STRICT_BUILD),
 )
 free_threaded_pytest = Task(
     PYTEST.format(PY=FREE_THREADED),
