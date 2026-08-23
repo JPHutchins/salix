@@ -56,10 +56,11 @@ STRICT_BUILD = {"SALIX_STRICT": "1"}
 NIX_INPUTS = ("src/", "nix/", "tools/", "tests/", "flake.nix", "flake.lock", "pyproject.toml")
 
 build = Sequential(make_env, Task(BUILD, mutates=True, env=STRICT_BUILD))
+JUNIT_FORMAT = AgentFormat("--junitxml {report}", "junit", limit=1_000_000)
 pytest = Task(
     PYTEST,
     env=ENVIRONMENT_PER_INTERPRETER,
-    agent_format=AgentFormat("--junitxml {report}", "junit"),
+    agent_format=JUNIT_FORMAT,
 )
 # --no-sync: analyze reaches this from ci, and CI never installs the project.
 compile_flags = Task("uv run --no-sync python tools/compile_flags.py", mutates=True)
@@ -118,16 +119,17 @@ type_check = Parallel(mypy, pyright, ty, tooling)
 
 # Lint, not format: the style here is the style already in the files, so ruff
 # runs as a checker and never as a formatter. The rule set is in pyproject.
+LINT_FORMAT = AgentFormat("--output-format rdjson", "rdjson", limit=64_000)
 lint = Parallel(
     Task(
         "uv run --no-project --with ruff ruff check .",
-        agent_format=AgentFormat("--output-format rdjson", "rdjson"),
+        agent_format=LINT_FORMAT,
     ),
     Task(
         "uv run --no-project --with ruff ruff check --target-version py312"
         " tests/test_generics_pep695.py",
         when=lambda changed: sys.version_info >= (3, 12),
-        agent_format=AgentFormat("--output-format rdjson", "rdjson"),
+        agent_format=LINT_FORMAT,
     ),
 )
 
@@ -179,7 +181,7 @@ free_threaded_build = Sequential(
 free_threaded_pytest = Task(
     PYTEST.format(PY=FREE_THREADED),
     env=FREE_THREADED_ROOT | {"UV_PROJECT_ENVIRONMENT": ".venvs/" + FREE_THREADED},
-    agent_format=AgentFormat("--junitxml {report}", "junit"),
+    agent_format=JUNIT_FORMAT,
 )
 free_threaded = Sequential(free_threaded_build, free_threaded_pytest)
 benchmark = Sequential(
