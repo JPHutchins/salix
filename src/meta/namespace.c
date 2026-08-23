@@ -46,9 +46,9 @@ static enum result apply_options(
 );
 static enum result rebind(PyObject * namespace, char const * const * names, bool from_mixin);
 static enum result drop_class_variables(PyObject * namespace, PyObject * all_names);
-static int defines_a_method(
-	PyObject * bound,
-	PyObject * field_name,
+static int binding_belongs_to_body(
+	PyObject * namespace,
+	PyObject * name,
 	PyObject * class_name,
 	PyObject * * spelling
 );
@@ -484,22 +484,43 @@ enum result refuse_mixin_method_fields(PyObject * const all_names) {
 		return RESULT_ERROR;
 	}
 
+	PY_OWNED(
+		mixin_qualname,
+		PyObject_GetAttrString((PyObject *) &StructMixin_Type, "__qualname__")
+	);
+
+	if (mixin_qualname == NULL) {
+		return RESULT_ERROR;
+	}
+
 	Py_ssize_t position = 0;
 	PyObject * field_name;
 	PyObject * method;
 
 	while (PyDict_Next(mixin_dict, &position, &field_name, &method)) {
-		if (!PyObject_TypeCheck(method, &PyMethodDescr_Type)) {
-			continue;
-		}
-
 		int const present = PySequence_Contains(all_names, field_name);
 
 		if (present < 0) {
 			return RESULT_ERROR;
 		}
 
-		if (present == 1) {
+		if (present == 0) {
+			continue;
+		}
+
+		PY_MOVABLE(spelling, NULL);
+		int const belongs = binding_belongs_to_body(
+			mixin_dict,
+			field_name,
+			mixin_qualname,
+			&spelling
+		);
+
+		if (belongs < 0) {
+			return RESULT_ERROR;
+		}
+
+		if (belongs == 1) {
 			PyErr_Format(
 				PyExc_TypeError,
 				"%U is a field, and the mixin defines a method of the same "
@@ -521,24 +542,29 @@ enum result refuse_colliding_methods(
 ) {
 	for (Py_ssize_t i = 0; i < PyList_GET_SIZE(all_names); ++i) {
 		PyObject * const field_name = PyList_GET_ITEM(all_names, i);
-		PY_OWNED(bound, dict_value_ref(original_namespace, field_name));
-
-		if (bound == NULL) {
-			if (PyErr_Occurred()) {
-				return RESULT_ERROR;
-			}
-
-			continue;
-		}
-
 		PY_MOVABLE(spelling, NULL);
-		int const method = defines_a_method(bound, field_name, class_name, &spelling);
+		int const method = binding_belongs_to_body(
+			original_namespace,
+			field_name,
+			class_name,
+			&spelling
+		);
 
 		if (method < 0) {
 			return RESULT_ERROR;
 		}
 
 		if (method == 1) {
+			PY_OWNED(bound, dict_value_ref(original_namespace, field_name));
+
+			if (bound == NULL) {
+				if (PyErr_Occurred()) {
+					return RESULT_ERROR;
+				}
+
+				continue;
+			}
+
 			PyErr_Format(
 				PyExc_TypeError,
 				"'%U' is a field, and the class body binds a %.100s to that name "
@@ -605,12 +631,18 @@ static PyObject * qualname_of(PyObject * const value) {
 	return qualname_direct(func);
 }
 
-static int defines_a_method(
-	PyObject * const bound,
-	PyObject * const field_name,
+static int binding_belongs_to_body(
+	PyObject * const namespace,
+	PyObject * const name,
 	PyObject * const class_name,
 	PyObject * * const spelling
 ) {
+	PY_OWNED(bound, dict_value_ref(namespace, name));
+
+	if (bound == NULL) {
+		return PyErr_Occurred() ? -1 : 0;
+	}
+
 	if (
 		PyObject_TypeCheck(bound, &PyProperty_Type) ||
 		PyObject_TypeCheck(bound, &PyClassMethod_Type) ||
@@ -625,7 +657,7 @@ static int defines_a_method(
 		return PyErr_Occurred() ? -1 : 0;
 	}
 
-	return defined_in_this_body(qualname, field_name, class_name, spelling);
+	return defined_in_this_body(qualname, name, class_name, spelling);
 }
 
 static int defined_in_this_body(
