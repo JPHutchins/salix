@@ -859,6 +859,28 @@ class TestNameCollisions:
 
         assert Fine(21).doubled() == 42
 
+    @pytest.mark.parametrize(
+        "mixin_method",
+        (
+            "__copy__",
+            "__deepcopy__",
+            "__replace__",
+            "__repr__",
+            "__setattr__",
+            "__delattr__",
+            "__lt__",
+            "__le__",
+            "__eq__",
+            "__ne__",
+            "__gt__",
+            "__ge__",
+            "__hash__",
+        ),
+    )
+    def test_a_field_named_like_a_mixin_method_is_refused(self, mixin_method):
+        with pytest.raises(TypeError, match=r"is a field.*the mixin defines a method"):
+            type(Struct)("Collide", (Struct,), {"__annotations__": {mixin_method: int}})
+
 
 class TestDefaultsThatAreCallable:
     """The negative control for #54's refusal, and the reason it asks a
