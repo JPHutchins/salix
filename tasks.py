@@ -1,3 +1,4 @@
+import sys
 from pathlib import Path
 
 from camas import (
@@ -38,14 +39,10 @@ ENVIRONMENT_PER_INTERPRETER = {"UV_PROJECT_ENVIRONMENT": ".venvs/{PY}"}
 # The two leaves must name the same interpreter, and neither may name a
 # version string the ambient VIRTUAL_ENV can flip to a free-threaded one:
 # uv venv creation is immune to that preference and resolves the plain
-# managed variant, so the venv the pytest leaf reuses is the one this
-# leaf builds against.
-# The two leaves must name the same interpreter, and neither may name a
-# version string the ambient VIRTUAL_ENV can flip to a free-threaded one:
-# uv venv creation is immune to that preference and resolves the plain
 # managed variant, so the venv the pytest leaf reuses is the one the
 # build leaf compiles against.
-make_env = Task("uv venv --clear --python {PY} --managed-python .venvs/{PY}", mutates=True)
+MAKE_ENV = "uv venv --clear --python {PY} --managed-python .venvs/{PY}"
+make_env = Task(MAKE_ENV, mutates=True)
 
 BUILD = (
     "uv run --no-project --python .venvs/{PY}/bin/python --with setuptools"
@@ -67,7 +64,7 @@ pytest = Task(
 # --no-sync: analyze reaches this from ci, and CI never installs the project.
 compile_flags = Task("uv run --no-sync python tools/compile_flags.py", mutates=True)
 
-clean = Task("git clean -xdf -e .venv -e .camas -e .claude", mutates=True)
+clean = Task("git clean -xdf -e .venv -e .venvs -e .free-threaded-python -e .camas -e .claude", mutates=True)
 update_python_targets = Task("uv run python tools/update_python_targets.py", mutates=True)
 
 c_format = Task("jphfmt -i {paths}", paths=C_SOURCES, mutates=True)
@@ -121,9 +118,17 @@ type_check = Parallel(mypy, pyright, ty, tooling)
 
 # Lint, not format: the style here is the style already in the files, so ruff
 # runs as a checker and never as a formatter. The rule set is in pyproject.
-lint = Task(
-    "uv run --no-project --with ruff ruff check .",
-    agent_format=AgentFormat("--output-format rdjson", "rdjson"),
+lint = Parallel(
+    Task(
+        "uv run --no-project --with ruff ruff check .",
+        agent_format=AgentFormat("--output-format rdjson", "rdjson"),
+    ),
+    Task(
+        "uv run --no-project --with ruff ruff check --target-version py312"
+        " tests/test_generics_pep695.py",
+        when=lambda changed: sys.version_info >= (3, 12),
+        agent_format=AgentFormat("--output-format rdjson", "rdjson"),
+    ),
 )
 
 bench = Project("bench")
@@ -164,9 +169,10 @@ FREE_THREADED = "3.14t"
 FREE_THREADED_ROOT = {"UV_PYTHON_INSTALL_DIR": ".free-threaded-python"}
 free_threaded_build = Sequential(
     Task(
-        "uv venv --clear --python 3.14t --managed-python .venvs/3.14t",
+        MAKE_ENV.format(PY=FREE_THREADED),
         mutates=True,
         env=FREE_THREADED_ROOT,
+        when=lambda changed: not (Path(".venvs") / FREE_THREADED / "bin/python").exists(),
     ),
     Task(BUILD.format(PY=FREE_THREADED), mutates=True, env=FREE_THREADED_ROOT | STRICT_BUILD),
 )
