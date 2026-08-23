@@ -134,7 +134,6 @@ select = [
 # are pointless comparisons and useless attribute accesses. That is the test.
 "tests/typing/rejected.py" = ["B015", "B018"]
 
-
 [tool.pytest.ini_options]
 # README.md is here because its examples are the only claims about the API
 # written in prose, so they are run rather than proof-read. testpaths is what
