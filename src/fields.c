@@ -78,6 +78,21 @@ static struct special_form const INIT_VAR_FORM = {
 	.instead = "take the value in a custom __init__ and write the fields with set_field",
 };
 
+static char const * const class_var_machinery_names[] = {
+	"__init__",
+	"__post_init__",
+	"__new__",
+	"__match_args__",
+	"__slots__",
+	"__weakref__",
+	"__dict__",
+	"__getstate__",
+	"__setstate__",
+	"__reduce__",
+	"__reduce_ex__",
+	NULL,
+};
+
 char const * const reserved_metadata_names[] = {
 	"_struct_fields_",
 	"_struct_defaults_",
@@ -116,6 +131,20 @@ static enum result refuse_reserved_name(PyObject * const field_name) {
 
 	return RESULT_ERROR;
 }
+
+static char const * class_var_machinery_name_of(PyObject * const name) {
+	for (
+		char const * const * machinery = class_var_machinery_names;
+		*machinery != NULL;
+		++machinery
+	) {
+		if (PyUnicode_CompareWithASCIIString(name, *machinery) == 0) {
+			return *machinery;
+		}
+	}
+
+	return NULL;
+}
 static PyObject * build_defaults(PyObject * all_names, PyObject * default_by_name);
 static enum result reject_unsafe_default(PyObject * field_name, PyObject * value);
 static PyObject * checked_annotations(PyObject * namespace);
@@ -127,6 +156,7 @@ static struct special_form special_form_of(
 static struct special_form form_within(PyObject * annotation, struct form_probes const * probes);
 static struct special_form named_special_form(PyObject * text, struct form_probes const * probes);
 static bool names_form(PyObject * text, PyObject * needle);
+static bool names_form_matching(PyObject * text, PyObject * needle, bool top_only);
 static bool names_form_at_top(PyObject * text, PyObject * needle);
 static bool top_level_prefix(PyObject * text, Py_ssize_t until);
 static bool top_level_suffix(PyObject * text, Py_ssize_t from);
@@ -470,6 +500,17 @@ static enum result append_declared(
 				return RESULT_ERROR;
 			}
 
+			if (class_var_machinery_name_of(field_name) != NULL) {
+				PyErr_Format(
+					PyExc_TypeError,
+					"'%U' cannot be a ClassVar: salix installs its own class "
+					"attribute of that name; rename it",
+					field_name
+				);
+
+				return RESULT_ERROR;
+			}
+
 			if (PyList_Append(class_var_names, field_name) < 0) {
 				return RESULT_ERROR;
 			}
@@ -727,150 +768,101 @@ static bool continues_identifier(Py_UCS4 const character) {
 	return PyUnicode_IsIdentifier(probe) == 1;
 }
 
-static bool names_form(PyObject * const text, PyObject * const needle) {
-	Py_ssize_t const length = PyUnicode_GET_LENGTH(text);
-	Py_ssize_t const form_length = PyUnicode_GET_LENGTH(needle);
-
-	for (Py_ssize_t at = 0; at + form_length <= length; ++at) {
-		Py_ssize_t const found = PyUnicode_Find(text, needle, at, length, 1);
-
-		if (found < 0) {
-			return false;
-		}
-
-		bool const opens = found == 0 || !continues_identifier(PyUnicode_ReadChar(text, found - 1));
-		bool const closes = (
-			found + form_length == length ||
-			!continues_identifier(PyUnicode_ReadChar(text, found + form_length))
-		);
-
-		if (opens && closes) {
-			return true;
-		}
-
-		at = found;
-	}
-
-	return false;
-}
-
 static bool top_level_prefix(PyObject * const text, Py_ssize_t const until) {
-	int depth = 0;
-	bool single_quoted = false;
-	bool double_quoted = false;
-
 	for (Py_ssize_t at = 0; at < until; ++at) {
 		Py_UCS4 const character = PyUnicode_ReadChar(text, at);
 
-		if (single_quoted) {
-			if (character == '\\') {
-				++at;
-				continue;
-			}
-
-			single_quoted = character != '\'';
-			continue;
-		}
-
-		if (double_quoted) {
-			if (character == '\\') {
-				++at;
-				continue;
-			}
-
-			double_quoted = character != '"';
-			continue;
-		}
-
-		if (character == '\'') {
-			single_quoted = true;
-			continue;
-		}
-
-		if (character == '"') {
-			double_quoted = true;
-			continue;
-		}
-
-		if (character == '[' || character == '(') {
-			++depth;
-			continue;
-		}
-
-		if ((character == ']' || character == ')') && depth > 0) {
-			--depth;
-			continue;
-		}
-
-		if (character == '|' && depth == 0) {
+		if (
+			character != '.' &&
+			!Py_UNICODE_ISSPACE(character) &&
+			!continues_identifier(character)
+		) {
 			return false;
 		}
 	}
 
-	return depth == 0 && !single_quoted && !double_quoted;
+	return true;
 }
 
 static bool top_level_suffix(PyObject * const text, Py_ssize_t const from) {
 	Py_ssize_t const length = PyUnicode_GET_LENGTH(text);
-	int depth = 0;
-	bool single_quoted = false;
-	bool double_quoted = false;
+	Py_ssize_t at = from;
 
-	for (Py_ssize_t at = from; at < length; ++at) {
-		Py_UCS4 const character = PyUnicode_ReadChar(text, at);
+	while (at < length && Py_UNICODE_ISSPACE(PyUnicode_ReadChar(text, at))) {
+		++at;
+	}
 
-		if (single_quoted) {
-			if (character == '\\') {
-				++at;
+	if (at < length && PyUnicode_ReadChar(text, at) == '[') {
+		int depth = 0;
+		bool single_quoted = false;
+		bool double_quoted = false;
+
+		for (; at < length; ++at) {
+			Py_UCS4 const character = PyUnicode_ReadChar(text, at);
+
+			if (single_quoted) {
+				if (character == '\\') {
+					++at;
+					continue;
+				}
+
+				single_quoted = character != '\'';
 				continue;
 			}
 
-			single_quoted = character != '\'';
-			continue;
-		}
+			if (double_quoted) {
+				if (character == '\\') {
+					++at;
+					continue;
+				}
 
-		if (double_quoted) {
-			if (character == '\\') {
-				++at;
+				double_quoted = character != '"';
 				continue;
 			}
 
-			double_quoted = character != '"';
-			continue;
-		}
+			if (character == '\'') {
+				single_quoted = true;
+				continue;
+			}
 
-		if (character == '\'') {
-			single_quoted = true;
-			continue;
-		}
+			if (character == '"') {
+				double_quoted = true;
+				continue;
+			}
 
-		if (character == '"') {
-			double_quoted = true;
-			continue;
-		}
+			if (character == '[') {
+				++depth;
+				continue;
+			}
 
-		if (character == '[' || character == '(') {
-			++depth;
-			continue;
-		}
-
-		if (character == ']' || character == ')') {
-			if (depth > 0) {
+			if (character == ']') {
 				--depth;
-			}
 
-			continue;
+				if (depth == 0) {
+					++at;
+
+					break;
+				}
+			}
 		}
 
-		if (character == '|' && depth == 0) {
+		if (depth != 0) {
 			return false;
 		}
 	}
 
-	return depth == 0 && !single_quoted && !double_quoted;
+	while (at < length && Py_UNICODE_ISSPACE(PyUnicode_ReadChar(text, at))) {
+		++at;
+	}
+
+	return at == length;
 }
 
-static bool names_form_at_top(PyObject * const text, PyObject * const needle) {
+static bool names_form_matching(
+	PyObject * const text,
+	PyObject * const needle,
+	bool const top_only
+) {
 	Py_ssize_t const length = PyUnicode_GET_LENGTH(text);
 	Py_ssize_t const form_length = PyUnicode_GET_LENGTH(needle);
 
@@ -890,8 +882,10 @@ static bool names_form_at_top(PyObject * const text, PyObject * const needle) {
 		if (
 			opens &&
 			closes &&
-			top_level_prefix(text, found) &&
-			top_level_suffix(text, found + form_length)
+			(
+				!top_only ||
+				(top_level_prefix(text, found) && top_level_suffix(text, found + form_length))
+			)
 		) {
 			return true;
 		}
@@ -900,6 +894,14 @@ static bool names_form_at_top(PyObject * const text, PyObject * const needle) {
 	}
 
 	return false;
+}
+
+static bool names_form(PyObject * const text, PyObject * const needle) {
+	return names_form_matching(text, needle, false);
+}
+
+static bool names_form_at_top(PyObject * const text, PyObject * const needle) {
+	return names_form_matching(text, needle, true);
 }
 
 /*

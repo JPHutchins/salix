@@ -313,6 +313,29 @@ def test_a_class_var_operand_in_text_with_the_form_second_is_still_refused():
         type(Struct)("Wrapped", (Struct,), {"__annotations__": {"v": "None | ClassVar[int]"}, "v": 5})
 
 
+@pytest.mark.parametrize(
+    "annotation",
+    [
+        "ClassVar[int] or None",
+        "ClassVar[int] + int",
+        "ClassVar[int] & int",
+        "(ClassVar[int])",
+        "ClassVar[int][str]",
+    ],
+    ids=["or", "plus", "ampersand", "parenthesized", "double-subscript"],
+)
+def test_an_operator_around_the_form_in_text_with_a_value_is_still_refused(annotation):
+    with pytest.raises(TypeError, match="which salix does not support"):
+        type(Struct)("Wrapped", (Struct,), {"__annotations__": {"v": annotation}, "v": 5})
+
+
+def test_a_class_var_named_like_salix_machinery_is_refused():
+    with pytest.raises(TypeError, match="cannot be a ClassVar: salix installs its own"):
+
+        class Colliding(Struct):
+            __match_args__: ClassVar[tuple] = ()
+
+
 def test_the_text_path_cannot_tell_the_user_s_type_apart():
     """The spelling heuristic's mirror of the renamed-import hole: text naming
     ClassVar is kept with a value whether the form or the author's own type is
