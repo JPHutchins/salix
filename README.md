@@ -20,7 +20,9 @@ Point(x=1.0, y=2.0)
 A name annotated `ClassVar[...]` at the top level is a class variable:
 with an assigned value it is kept in the class dict and excluded from
 the field plan, the constructor, and every metadata table; without one
-it is refused, because a class variable is a constant. `InitVar[...]`
+it is refused, because a class variable is a constant. An inherited
+field name stays a field: the inheritance rule outranks the ClassVar
+annotation, so re-annotating one re-declares the field. `InitVar[...]`
 is refused, and so is a `ClassVar` nested inside another annotation.
 The check walks the annotation's forms when it arrives as an object;
 when it arrives as source text — a quoted string, or a

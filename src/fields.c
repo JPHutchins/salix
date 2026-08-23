@@ -128,6 +128,7 @@ static struct special_form named_special_form(PyObject * text, struct form_probe
 static bool names_form(PyObject * text, PyObject * needle);
 static bool names_form_at_top(PyObject * text, PyObject * needle);
 static bool top_level_prefix(PyObject * text, Py_ssize_t until);
+static bool top_level_suffix(PyObject * text, Py_ssize_t from);
 static bool class_var_top_level(PyObject * annotation, struct form_probes const * probes);
 static bool continues_identifier(Py_UCS4 character);
 static PyObject * module_attribute(char const * module_name, char const * attribute);
@@ -368,6 +369,10 @@ static enum result append_declared(
 	for (Py_ssize_t at = 0; at < PyList_GET_SIZE(declared); ++at) {
 		PyObject * const field_name = PyList_GET_ITEM(declared, at);
 
+		if (refuse_reserved_name(field_name) != RESULT_OK) {
+			return RESULT_ERROR;
+		}
+
 		PY_OWNED(annotation, dict_value_ref(annotations, field_name));
 
 		if (annotation == NULL) {
@@ -399,10 +404,7 @@ static enum result append_declared(
 			if (PyErr_Occurred()) {
 				return RESULT_ERROR;
 			}
-		} else if (
-			refuse_reserved_name(field_name) != RESULT_OK ||
-			PyDict_SetItem(default_by_name, field_name, declared_default) < 0
-		) {
+		} else if (PyDict_SetItem(default_by_name, field_name, declared_default) < 0) {
 			return RESULT_ERROR;
 		}
 
@@ -432,10 +434,6 @@ static enum result append_declared(
 		}
 
 		if (special.name != NULL) {
-			if (refuse_reserved_name(field_name) != RESULT_OK) {
-				return RESULT_ERROR;
-			}
-
 			if (special.kind == SPECIAL_FORM_CLASS_VAR) {
 				bool const top_level = class_var_top_level(annotation, &probes);
 
@@ -761,11 +759,21 @@ static bool top_level_prefix(PyObject * const text, Py_ssize_t const until) {
 		Py_UCS4 const character = PyUnicode_ReadChar(text, at);
 
 		if (single_quoted) {
+			if (character == '\\') {
+				++at;
+				continue;
+			}
+
 			single_quoted = character != '\'';
 			continue;
 		}
 
 		if (double_quoted) {
+			if (character == '\\') {
+				++at;
+				continue;
+			}
+
 			double_quoted = character != '"';
 			continue;
 		}
@@ -793,6 +801,66 @@ static bool top_level_prefix(PyObject * const text, Py_ssize_t const until) {
 	return depth == 0 && !single_quoted && !double_quoted;
 }
 
+static bool top_level_suffix(PyObject * const text, Py_ssize_t const from) {
+	Py_ssize_t const length = PyUnicode_GET_LENGTH(text);
+	int depth = 0;
+	bool single_quoted = false;
+	bool double_quoted = false;
+
+	for (Py_ssize_t at = from; at < length; ++at) {
+		Py_UCS4 const character = PyUnicode_ReadChar(text, at);
+
+		if (single_quoted) {
+			if (character == '\\') {
+				++at;
+				continue;
+			}
+
+			single_quoted = character != '\'';
+			continue;
+		}
+
+		if (double_quoted) {
+			if (character == '\\') {
+				++at;
+				continue;
+			}
+
+			double_quoted = character != '"';
+			continue;
+		}
+
+		if (character == '\'') {
+			single_quoted = true;
+			continue;
+		}
+
+		if (character == '"') {
+			double_quoted = true;
+			continue;
+		}
+
+		if (character == '[' || character == '(') {
+			++depth;
+			continue;
+		}
+
+		if (character == ']' || character == ')') {
+			if (depth > 0) {
+				--depth;
+			}
+
+			continue;
+		}
+
+		if (character == '|' && depth == 0) {
+			return false;
+		}
+	}
+
+	return depth == 0 && !single_quoted && !double_quoted;
+}
+
 static bool names_form_at_top(PyObject * const text, PyObject * const needle) {
 	Py_ssize_t const length = PyUnicode_GET_LENGTH(text);
 	Py_ssize_t const form_length = PyUnicode_GET_LENGTH(needle);
@@ -810,7 +878,12 @@ static bool names_form_at_top(PyObject * const text, PyObject * const needle) {
 			!continues_identifier(PyUnicode_ReadChar(text, found + form_length))
 		);
 
-		if (opens && closes && top_level_prefix(text, found)) {
+		if (
+			opens &&
+			closes &&
+			top_level_prefix(text, found) &&
+			top_level_suffix(text, found + form_length)
+		) {
 			return true;
 		}
 

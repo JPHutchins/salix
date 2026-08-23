@@ -277,6 +277,16 @@ def test_a_quoted_class_var_in_text_with_a_value_is_still_refused():
         type(Struct)("Wrapped", (Struct,), {"__annotations__": {"v": "'ClassVar[int]'"}, "v": 5})
 
 
+def test_a_class_var_operand_of_a_union_in_text_with_a_value_is_still_refused():
+    with pytest.raises(TypeError, match="which salix does not support"):
+        type(Struct)("Wrapped", (Struct,), {"__annotations__": {"v": "ClassVar[int] | None"}, "v": 5})
+
+
+def test_an_escaped_quote_inside_the_string_does_not_end_it():
+    with pytest.raises(TypeError, match="which salix does not support"):
+        type(Struct)("Wrapped", (Struct,), {"__annotations__": {"v": "'a\\'b ClassVar[int]'"}, "v": 5})
+
+
 def test_an_init_var_with_a_shared_mutable_keeps_the_mutable_refusal():
     with pytest.raises(TypeError, match="type hashes and whose value will not"):
 
