@@ -302,7 +302,7 @@ def test_a_non_string_annotation_key_still_gets_the_key_error():
 
 
 def test_a_class_var_named_like_a_mixin_method_is_refused():
-    with pytest.raises(TypeError, match=r"is a ClassVar.*the mixin defines a method"):
+    with pytest.raises(TypeError, match="cannot be a ClassVar: a double-underscore name"):
 
         class Colliding(Struct):
             __copy__: ClassVar[object] = 5
@@ -330,10 +330,27 @@ def test_an_operator_around_the_form_in_text_with_a_value_is_still_refused(annot
 
 
 def test_a_class_var_named_like_salix_machinery_is_refused():
-    with pytest.raises(TypeError, match="cannot be a ClassVar: salix installs its own"):
+    with pytest.raises(TypeError, match="cannot be a ClassVar: a double-underscore name"):
 
         class Colliding(Struct):
             __match_args__: ClassVar[tuple] = ()
+
+
+def test_a_dunder_class_var_without_a_value_reports_the_machinery_refusal():
+    with pytest.raises(TypeError, match="cannot be a ClassVar"):
+
+        class Colliding(Struct):
+            __len__: ClassVar[object]
+
+
+def test_a_keyword_before_the_form_in_text_with_a_value_is_still_refused():
+    with pytest.raises(TypeError, match="which salix does not support"):
+        type(Struct)("Wrapped", (Struct,), {"__annotations__": {"v": "and ClassVar[int]"}, "v": 5})
+
+
+def test_a_two_argument_class_var_in_text_with_a_value_is_still_refused():
+    with pytest.raises(TypeError, match="which salix does not support"):
+        type(Struct)("Wrapped", (Struct,), {"__annotations__": {"v": "ClassVar[int, str]"}, "v": 5})
 
 
 def test_the_text_path_cannot_tell_the_user_s_type_apart():

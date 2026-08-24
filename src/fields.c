@@ -78,21 +78,6 @@ static struct special_form const INIT_VAR_FORM = {
 	.instead = "take the value in a custom __init__ and write the fields with set_field",
 };
 
-static char const * const class_var_machinery_names[] = {
-	"__init__",
-	"__post_init__",
-	"__new__",
-	"__match_args__",
-	"__slots__",
-	"__weakref__",
-	"__dict__",
-	"__getstate__",
-	"__setstate__",
-	"__reduce__",
-	"__reduce_ex__",
-	NULL,
-};
-
 char const * const reserved_metadata_names[] = {
 	"_struct_fields_",
 	"_struct_defaults_",
@@ -132,18 +117,16 @@ static enum result refuse_reserved_name(PyObject * const field_name) {
 	return RESULT_ERROR;
 }
 
-static char const * class_var_machinery_name_of(PyObject * const name) {
-	for (
-		char const * const * machinery = class_var_machinery_names;
-		*machinery != NULL;
-		++machinery
-	) {
-		if (PyUnicode_CompareWithASCIIString(name, *machinery) == 0) {
-			return *machinery;
-		}
-	}
+static bool class_var_machinery_name(PyObject * const name) {
+	Py_ssize_t const length = PyUnicode_GET_LENGTH(name);
 
-	return NULL;
+	return (
+		length >= 4 &&
+		PyUnicode_ReadChar(name, 0) == '_' &&
+		PyUnicode_ReadChar(name, 1) == '_' &&
+		PyUnicode_ReadChar(name, length - 1) == '_' &&
+		PyUnicode_ReadChar(name, length - 2) == '_'
+	);
 }
 static PyObject * build_defaults(PyObject * all_names, PyObject * default_by_name);
 static enum result reject_unsafe_default(PyObject * field_name, PyObject * value);
@@ -489,23 +472,23 @@ static enum result append_declared(
 				return RESULT_ERROR;
 			}
 
+			if (class_var_machinery_name(field_name)) {
+				PyErr_Format(
+					PyExc_TypeError,
+					"'%U' cannot be a ClassVar: a double-underscore name shadows "
+					"Python's slot and protocol lookups; rename it",
+					field_name
+				);
+
+				return RESULT_ERROR;
+			}
+
 			if (declared_default == NULL) {
 				PyErr_Format(
 					PyExc_TypeError,
 					"'%U' is annotated ClassVar without an assigned value; %s",
 					field_name,
 					CLASS_VAR_FORM.instead
-				);
-
-				return RESULT_ERROR;
-			}
-
-			if (class_var_machinery_name_of(field_name) != NULL) {
-				PyErr_Format(
-					PyExc_TypeError,
-					"'%U' cannot be a ClassVar: salix installs its own class "
-					"attribute of that name; rename it",
-					field_name
 				);
 
 				return RESULT_ERROR;
@@ -769,6 +752,8 @@ static bool continues_identifier(Py_UCS4 const character) {
 }
 
 static bool top_level_prefix(PyObject * const text, Py_ssize_t const until) {
+	Py_ssize_t last_non_space = -1;
+
 	for (Py_ssize_t at = 0; at < until; ++at) {
 		Py_UCS4 const character = PyUnicode_ReadChar(text, at);
 
@@ -779,9 +764,13 @@ static bool top_level_prefix(PyObject * const text, Py_ssize_t const until) {
 		) {
 			return false;
 		}
+
+		if (!Py_UNICODE_ISSPACE(character)) {
+			last_non_space = at;
+		}
 	}
 
-	return true;
+	return last_non_space == -1 || PyUnicode_ReadChar(text, last_non_space) == '.';
 }
 
 static bool top_level_suffix(PyObject * const text, Py_ssize_t const from) {
@@ -843,6 +832,10 @@ static bool top_level_suffix(PyObject * const text, Py_ssize_t const from) {
 
 					break;
 				}
+			}
+
+			if (character == ',' && depth == 1) {
+				return false;
 			}
 		}
 
