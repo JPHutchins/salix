@@ -174,16 +174,22 @@ def test_built_and_dropped_interned_classes_free_completely_under_stress():
     A dangling clear (the class decrefing an already-freed singleton) crashes
     here, and a leak keeps a weakref alive. 3.10/3.11 are where the claimed
     ordering lives; the harness runs everywhere CI does.
+
+    The positive controls: every iteration asserts the interned path is the
+    one under stress, and the collects must have freed something -- otherwise
+    the pass is vacuous.
     """
 
     surviving = 0
+    collected = 0
 
     for i in range(200):
         built = type(Struct)(f"Dropped{i}", (Struct,), {})
-        built()
+        assert built() is built()
         class_ref = weakref.ref(built)
         del built
-        gc.collect()
+        collected += gc.collect()
         surviving += class_ref() is not None
 
     assert surviving == 0
+    assert collected > 0
