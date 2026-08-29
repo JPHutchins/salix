@@ -70,9 +70,9 @@ def test_defaults():
 
 def test_immutable():
     p = Point2D(1.0, 2.0)
-    with pytest.raises(TypeError):
+    with pytest.raises(AttributeError):
         p.x = 9.0
-    with pytest.raises(TypeError):
+    with pytest.raises(AttributeError):
         del p.x
 
 

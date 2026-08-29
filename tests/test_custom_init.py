@@ -209,7 +209,7 @@ def test_a_frozen_struct_with_a_body_init_cannot_write_its_fields():
         def __init__(self) -> None:
             self.x = 1
 
-    with pytest.raises(TypeError, match="does not support attribute assignment"):
+    with pytest.raises(AttributeError, match="does not support attribute assignment"):
         Frozen()
 
 
