@@ -8,7 +8,14 @@
 #include "result.h"
 #include "types.h"
 
+enum special_form_kind {
+	SPECIAL_FORM_NONE,
+	SPECIAL_FORM_CLASS_VAR,
+	SPECIAL_FORM_INIT_VAR,
+};
+
 struct special_form {
+	enum special_form_kind kind;
 	char const * name;
 	char const * instead;
 };
@@ -46,6 +53,7 @@ static enum result append_declared(
 	PyObject * namespace,
 	PyObject * all_names,
 	PyObject * new_names,
+	PyObject * class_var_names,
 	PyObject * default_by_name,
 	PyObject * annotation_values,
 	PyObject * metadata_values,
@@ -60,10 +68,12 @@ static enum result append_annotation(
 );
 
 static struct special_form const CLASS_VAR_FORM = {
+	.kind = SPECIAL_FORM_CLASS_VAR,
 	.name = "ClassVar",
-	.instead = "write it below the fields, without an annotation",
+	.instead = "a class variable is a constant, so assign the value in the class body",
 };
 static struct special_form const INIT_VAR_FORM = {
+	.kind = SPECIAL_FORM_INIT_VAR,
 	.name = "InitVar",
 	.instead = "take the value in a custom __init__ and write the fields with set_field",
 };
@@ -106,6 +116,18 @@ static enum result refuse_reserved_name(PyObject * const field_name) {
 
 	return RESULT_ERROR;
 }
+
+static bool class_var_machinery_name(PyObject * const name) {
+	Py_ssize_t const length = PyUnicode_GET_LENGTH(name);
+
+	return (
+		length >= 4 &&
+		PyUnicode_ReadChar(name, 0) == '_' &&
+		PyUnicode_ReadChar(name, 1) == '_' &&
+		PyUnicode_ReadChar(name, length - 1) == '_' &&
+		PyUnicode_ReadChar(name, length - 2) == '_'
+	);
+}
 static PyObject * build_defaults(PyObject * all_names, PyObject * default_by_name);
 static enum result reject_unsafe_default(PyObject * field_name, PyObject * value);
 static PyObject * checked_annotations(PyObject * namespace);
@@ -117,6 +139,11 @@ static struct special_form special_form_of(
 static struct special_form form_within(PyObject * annotation, struct form_probes const * probes);
 static struct special_form named_special_form(PyObject * text, struct form_probes const * probes);
 static bool names_form(PyObject * text, PyObject * needle);
+static bool names_form_matching(PyObject * text, PyObject * needle, bool top_only);
+static bool names_form_at_top(PyObject * text, PyObject * needle);
+static bool top_level_prefix(PyObject * text, Py_ssize_t until);
+static bool top_level_suffix(PyObject * text, Py_ssize_t from);
+static bool class_var_top_level(PyObject * annotation, struct form_probes const * probes);
 static bool continues_identifier(Py_UCS4 character);
 static PyObject * module_attribute(char const * module_name, char const * attribute);
 static enum result refuse_shared_mutable_contents(PyObject * field_name, PyObject * value);
@@ -132,6 +159,7 @@ struct field_plan field_plan_build(StructType const * const base, PyObject * con
 
 	PY_MOVABLE(all_names, PyList_New(0));
 	PY_MOVABLE(new_names, PyList_New(0));
+	PY_MOVABLE(class_var_names, PyList_New(0));
 	PY_MOVABLE(annotation_values, PyList_New(0));
 	PY_MOVABLE(metadata_values, PyList_New(0));
 	PY_OWNED(default_by_name, PyDict_New());
@@ -140,6 +168,7 @@ struct field_plan field_plan_build(StructType const * const base, PyObject * con
 	if (
 		all_names != NULL &&
 		new_names != NULL &&
+		class_var_names != NULL &&
 		annotation_values != NULL &&
 		metadata_values != NULL &&
 		default_by_name != NULL &&
@@ -152,6 +181,7 @@ struct field_plan field_plan_build(StructType const * const base, PyObject * con
 				namespace,
 				all_names,
 				new_names,
+				class_var_names,
 				default_by_name,
 				annotation_values,
 				metadata_values,
@@ -169,6 +199,7 @@ struct field_plan field_plan_build(StructType const * const base, PyObject * con
 			plan.metadata = built_metadata;
 			plan.all_names = py_move(&all_names);
 			plan.new_names = py_move(&new_names);
+			plan.class_var_names = py_move(&class_var_names);
 		} else {
 			Py_XDECREF(built_defaults);
 			Py_XDECREF(built_annotations);
@@ -182,6 +213,7 @@ struct field_plan field_plan_build(StructType const * const base, PyObject * con
 void field_plan_clear(struct field_plan * const plan) {
 	Py_CLEAR(plan->all_names);
 	Py_CLEAR(plan->new_names);
+	Py_CLEAR(plan->class_var_names);
 	Py_CLEAR(plan->defaults);
 	Py_CLEAR(plan->annotations);
 	Py_CLEAR(plan->metadata);
@@ -324,6 +356,7 @@ static enum result append_declared(
 	PyObject * const namespace,
 	PyObject * const all_names,
 	PyObject * const new_names,
+	PyObject * const class_var_names,
 	PyObject * const default_by_name,
 	PyObject * const annotation_values,
 	PyObject * const metadata_values,
@@ -381,17 +414,17 @@ static enum result append_declared(
 			return RESULT_ERROR;
 		}
 
+		if (refuse_reserved_name(field_name) != RESULT_OK) {
+			return RESULT_ERROR;
+		}
+
 		PY_OWNED(declared_default, dict_value_ref(namespace, field_name));
 
 		if (declared_default == NULL) {
 			if (PyErr_Occurred()) {
 				return RESULT_ERROR;
 			}
-		} else if (
-			refuse_reserved_name(field_name) != RESULT_OK ||
-			PyDict_SetItem(default_by_name, field_name, declared_default) < 0 ||
-			refuse_shared_mutable_contents(field_name, declared_default) != RESULT_OK
-		) {
+		} else if (PyDict_SetItem(default_by_name, field_name, declared_default) < 0) {
 			return RESULT_ERROR;
 		}
 
@@ -399,6 +432,13 @@ static enum result append_declared(
 			case INHERITANCE_ERROR:
 				return RESULT_ERROR;
 			case INHERITANCE_INHERITED:
+				if (
+					declared_default != NULL &&
+					refuse_shared_mutable_contents(field_name, declared_default) != RESULT_OK
+				) {
+					return RESULT_ERROR;
+				}
+
 				continue;
 			case INHERITANCE_NEW:
 				break;
@@ -413,11 +453,62 @@ static enum result append_declared(
 			return RESULT_ERROR;
 		}
 
-		if (special.name != NULL) {
-			if (refuse_reserved_name(field_name) != RESULT_OK) {
+		if (special.name != NULL && special.kind == SPECIAL_FORM_CLASS_VAR) {
+			bool const top_level = class_var_top_level(annotation, &probes);
+
+			if (PyErr_Occurred()) {
 				return RESULT_ERROR;
 			}
 
+			if (!top_level) {
+				PyErr_Format(
+					PyExc_TypeError,
+					"'%U' is annotated %s, which salix does not support; "
+					"write it below the fields, without an annotation",
+					field_name,
+					special.name
+				);
+
+				return RESULT_ERROR;
+			}
+
+			if (class_var_machinery_name(field_name)) {
+				PyErr_Format(
+					PyExc_TypeError,
+					"'%U' cannot be a ClassVar: a double-underscore name shadows "
+					"Python's slot and protocol lookups; rename it",
+					field_name
+				);
+
+				return RESULT_ERROR;
+			}
+
+			if (declared_default == NULL) {
+				PyErr_Format(
+					PyExc_TypeError,
+					"'%U' is annotated ClassVar without an assigned value; %s",
+					field_name,
+					CLASS_VAR_FORM.instead
+				);
+
+				return RESULT_ERROR;
+			}
+
+			if (PyList_Append(class_var_names, field_name) < 0) {
+				return RESULT_ERROR;
+			}
+
+			continue;
+		}
+
+		if (
+			declared_default != NULL &&
+			refuse_shared_mutable_contents(field_name, declared_default) != RESULT_OK
+		) {
+			return RESULT_ERROR;
+		}
+
+		if (special.name != NULL) {
 			PyErr_Format(
 				PyExc_TypeError,
 				"'%U' is annotated %s, which salix does not support; %s",
@@ -510,6 +601,47 @@ static struct special_form form_named_by(
 	}
 
 	return (struct special_form){0};
+}
+
+static bool class_var_object_top_level(
+	PyObject * const annotation,
+	struct form_probes const * const probes
+) {
+	if (probes->class_var == NULL || annotation == probes->class_var) {
+		return annotation == probes->class_var;
+	}
+
+	if (PyType_Check(annotation)) {
+		return false;
+	}
+
+	PY_OWNED(origin, optional_attribute(annotation, "__origin__"));
+
+	if (origin == NULL || origin != probes->class_var) {
+		return false;
+	}
+
+	PY_OWNED(metadata, optional_attribute(annotation, "__metadata__"));
+
+	if (PyErr_Occurred()) {
+		return false;
+	}
+
+	return metadata == NULL;
+}
+
+static bool class_var_top_level(
+	PyObject * const annotation,
+	struct form_probes const * const probes
+) {
+	if (PyUnicode_Check(annotation)) {
+		return (
+			probes->class_var_name != NULL &&
+			names_form_at_top(annotation, probes->class_var_name)
+		);
+	}
+
+	return class_var_object_top_level(annotation, probes);
 }
 
 static struct special_form special_form_of(
@@ -619,7 +751,111 @@ static bool continues_identifier(Py_UCS4 const character) {
 	return PyUnicode_IsIdentifier(probe) == 1;
 }
 
-static bool names_form(PyObject * const text, PyObject * const needle) {
+static bool top_level_prefix(PyObject * const text, Py_ssize_t const until) {
+	Py_ssize_t last_non_space = -1;
+
+	for (Py_ssize_t at = 0; at < until; ++at) {
+		Py_UCS4 const character = PyUnicode_ReadChar(text, at);
+
+		if (
+			character != '.' &&
+			!Py_UNICODE_ISSPACE(character) &&
+			!continues_identifier(character)
+		) {
+			return false;
+		}
+
+		if (!Py_UNICODE_ISSPACE(character)) {
+			last_non_space = at;
+		}
+	}
+
+	return last_non_space == -1 || PyUnicode_ReadChar(text, last_non_space) == '.';
+}
+
+static bool top_level_suffix(PyObject * const text, Py_ssize_t const from) {
+	Py_ssize_t const length = PyUnicode_GET_LENGTH(text);
+	Py_ssize_t at = from;
+
+	while (at < length && Py_UNICODE_ISSPACE(PyUnicode_ReadChar(text, at))) {
+		++at;
+	}
+
+	if (at < length && PyUnicode_ReadChar(text, at) == '[') {
+		int depth = 0;
+		bool single_quoted = false;
+		bool double_quoted = false;
+
+		for (; at < length; ++at) {
+			Py_UCS4 const character = PyUnicode_ReadChar(text, at);
+
+			if (single_quoted) {
+				if (character == '\\') {
+					++at;
+					continue;
+				}
+
+				single_quoted = character != '\'';
+				continue;
+			}
+
+			if (double_quoted) {
+				if (character == '\\') {
+					++at;
+					continue;
+				}
+
+				double_quoted = character != '"';
+				continue;
+			}
+
+			if (character == '\'') {
+				single_quoted = true;
+				continue;
+			}
+
+			if (character == '"') {
+				double_quoted = true;
+				continue;
+			}
+
+			if (character == '[') {
+				++depth;
+				continue;
+			}
+
+			if (character == ']') {
+				--depth;
+
+				if (depth == 0) {
+					++at;
+
+					break;
+				}
+			}
+
+			if (character == ',' && depth == 1) {
+				return false;
+			}
+		}
+
+		if (depth != 0) {
+			return false;
+		}
+	}
+
+	while (at < length && Py_UNICODE_ISSPACE(PyUnicode_ReadChar(text, at))) {
+		++at;
+	}
+
+	return at == length;
+}
+
+static bool names_form_matching(
+	PyObject * const text,
+	PyObject * const needle,
+	bool const top_only
+) {
 	Py_ssize_t const length = PyUnicode_GET_LENGTH(text);
 	Py_ssize_t const form_length = PyUnicode_GET_LENGTH(needle);
 
@@ -636,7 +872,14 @@ static bool names_form(PyObject * const text, PyObject * const needle) {
 			!continues_identifier(PyUnicode_ReadChar(text, found + form_length))
 		);
 
-		if (opens && closes) {
+		if (
+			opens &&
+			closes &&
+			(
+				!top_only ||
+				(top_level_prefix(text, found) && top_level_suffix(text, found + form_length))
+			)
+		) {
 			return true;
 		}
 
@@ -644,6 +887,14 @@ static bool names_form(PyObject * const text, PyObject * const needle) {
 	}
 
 	return false;
+}
+
+static bool names_form(PyObject * const text, PyObject * const needle) {
+	return names_form_matching(text, needle, false);
+}
+
+static bool names_form_at_top(PyObject * const text, PyObject * const needle) {
+	return names_form_matching(text, needle, true);
 }
 
 /*

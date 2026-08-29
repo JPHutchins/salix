@@ -17,23 +17,29 @@ Point(x=1.0, y=2.0)
 
 ## ClassVar and InitVar
 
-A field annotated `ClassVar[...]` or `InitVar[...]` is refused at class
-creation when the annotation reaches the check as one of those forms. The
-check walks the annotation's forms when it arrives as an object; when it
-arrives as source text — a quoted string, or a future-annotations string —
-the check is a spelling match, and the two paths differ at the edges:
+A name annotated `ClassVar[...]` at the top level is a class variable:
+with an assigned value it is kept in the class dict and excluded from
+the field plan, the constructor, and every metadata table; without one
+it is refused, because a class variable is a constant. An inherited
+field name stays a field: the inheritance rule outranks the ClassVar
+annotation, so re-annotating one re-declares the field. `InitVar[...]`
+is refused, and so is a `ClassVar` nested inside another annotation.
+The check walks the annotation's forms when it arrives as an object;
+when it arrives as source text — a quoted string, or a
+future-annotations string — the check is a spelling match, and the two
+paths differ at the edges:
 
 | annotation | object path | text path |
 | --- | --- | --- |
-| an alias of `ClassVar`, `CV[int]` | refused | accepted; the field swallows a positional |
-| a type of yours actually named `ClassVar` | accepted | refused |
+| an alias of `ClassVar`, `CV[int]` | the form itself: kept with a value, refused without | accepted; the field swallows a positional |
+| a type of yours actually named `ClassVar` | accepted | kept with a value, refused without |
 | `Annotated[int, ClassVar]` | accepted | refused, though the `ClassVar` there is metadata |
 | `Optional[Annotated[ClassVar[int], "m"]]` | refused | refused |
 
-3.14 evaluates resolvable annotations by default, so there the alias reaches
-the object path and is refused; a name whose root cannot be resolved
-arrives as an object too, and is accepted, while any other evaluation
-error still fails the class. Every row is pinned in
+3.14 evaluates resolvable annotations by default, so there the alias
+reaches the object path and is the form; a name whose root cannot be
+resolved arrives as an object too, and is accepted, while any other
+evaluation error still fails the class. Every row is pinned in
 `tests/test_classvar_paths.py`.
 
 ## Caching a computed value

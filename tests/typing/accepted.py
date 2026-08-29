@@ -1,4 +1,4 @@
-from typing import Any, Generic, Literal, TypeVar
+from typing import Any, ClassVar, Generic, Literal, TypeVar
 
 from typing_extensions import assert_type
 
@@ -13,6 +13,11 @@ class Point(Struct):
 class Defaulted(Struct):
     a: int
     b: str = "b"
+
+
+class Constants(Struct):
+    limit: ClassVar[int] = 10
+    name: str
 
 
 class Mutable(Struct, frozen=False):
@@ -47,6 +52,12 @@ def the_constructor_is_synthesised_from_the_annotations() -> None:
 def a_default_makes_its_argument_optional() -> None:
     assert_type(Defaulted(1).b, str)
     assert_type(Defaulted(1, "other").b, str)
+
+
+def a_class_var_is_a_class_attribute_and_not_a_constructor_argument() -> None:
+    assert_type(Constants.limit, int)
+    assert_type(Constants("x").limit, int)
+    assert_type(Constants("x").name, str)
 
 
 def a_mutable_struct_accepts_a_write() -> None:

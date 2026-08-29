@@ -7,20 +7,47 @@ import pytest
 from salix import Struct
 
 
-def test_a_class_var_is_refused():
-    """The shape a dataclass port arrives with, which used to fail with a
-    message about default ordering that never mentioned ClassVar.
+def test_a_class_var_is_kept_and_not_a_field():
+    """The shape a dataclass port arrives with: the annotated binding stays in
+    the class dict, and the name never enters the field plan.
     """
 
-    with pytest.raises(TypeError, match="annotated ClassVar"):
+    class Registry(Struct):
+        instances: ClassVar[list] = []
+        name: str
 
-        class Registry(Struct):
-            instances: ClassVar[list] = []
-            name: str
+    assert Registry._struct_fields_ == ("name",)
+    assert Registry.instances == []
+    assert Registry("x").instances == []
+
+
+def test_a_class_var_is_excluded_from_every_metadata_table():
+    class Tagged(Struct):
+        limit: ClassVar[int] = 10
+        name: str
+
+    assert Tagged._struct_fields_ == ("name",)
+    assert Tagged._struct_defaults_ == ()
+    assert Tagged._struct_annotations_ == (str,)
+    assert Tagged.__match_args__ == ("name",)
+    assert Tagged.limit == 10
+    assert Tagged("x").limit == 10
+
+
+def test_a_class_var_holding_a_mutable_is_the_constant_it_was_written_as():
+    """The shared-mutable refusal is a field rule; a ClassVar declares the
+    sharing, so the unannotated path's semantics apply.
+    """
+
+    class Registry(Struct):
+        instances: ClassVar[list] = [1]
+
+    assert Registry._struct_fields_ == ()
+    assert Registry.instances == [1]
 
 
 def test_a_bare_class_var_is_refused():
-    with pytest.raises(TypeError, match="annotated ClassVar"):
+    with pytest.raises(TypeError, match="without an assigned value"):
 
         class Bare(Struct):
             marker: ClassVar
@@ -34,7 +61,7 @@ def test_an_init_var_is_refused():
 
 
 def test_each_says_what_to_do_instead():
-    with pytest.raises(TypeError, match="without an annotation"):
+    with pytest.raises(TypeError, match="without an assigned value"):
         type(Struct)("A", (Struct,), {"__annotations__": {"v": ClassVar[int]}})
 
     with pytest.raises(TypeError, match="set_field"):
@@ -198,6 +225,149 @@ def test_re_annotating_an_inherited_field_stays_a_no_op():
     assert Sub(1).x == 1
 
 
+def test_re_annotating_an_inherited_field_with_a_value_replaces_the_default():
+    class Base(Struct):
+        x: int = 3
+
+    class Sub(Base):
+        x: ClassVar[int] = 5
+
+    assert Sub._struct_fields_ == ("x",)
+    assert Sub().x == 5
+    assert Sub(99).x == 99
+
+
+def test_re_annotating_an_inherited_field_with_a_mutable_keeps_the_mutable_refusal():
+    class Base(Struct):
+        x: int = 3
+
+    with pytest.raises(TypeError, match="type hashes and whose value will not"):
+
+        class Sub(Base):
+            x: ClassVar[list] = ([1],)
+
+
+def test_re_annotating_an_inherited_class_var_without_a_value_is_refused():
+    class Base(Struct):
+        limit: ClassVar[int] = 10
+        name: str
+
+    with pytest.raises(TypeError, match="without an assigned value"):
+
+        class Sub(Base):
+            limit: ClassVar[int]
+
+
+def test_a_nested_class_var_with_a_value_is_still_refused():
+    with pytest.raises(TypeError, match="which salix does not support"):
+        type(Struct)(
+            "Wrapped",
+            (Struct,),
+            {"__annotations__": {"v": Annotated[ClassVar[int], "meta"]}, "v": 5},
+        )
+
+
+def test_a_nested_class_var_in_text_with_a_value_is_still_refused():
+    with pytest.raises(TypeError, match="which salix does not support"):
+        type(Struct)(
+            "Wrapped", (Struct,), {"__annotations__": {"v": "Optional[ClassVar[int]]"}, "v": 5}
+        )
+
+
+def test_a_quoted_class_var_in_text_with_a_value_is_still_refused():
+    with pytest.raises(TypeError, match="which salix does not support"):
+        type(Struct)("Wrapped", (Struct,), {"__annotations__": {"v": "'ClassVar[int]'"}, "v": 5})
+
+
+def test_a_class_var_operand_of_a_union_in_text_with_a_value_is_still_refused():
+    with pytest.raises(TypeError, match="which salix does not support"):
+        type(Struct)("Wrapped", (Struct,), {"__annotations__": {"v": "ClassVar[int] | None"}, "v": 5})
+
+
+def test_an_escaped_quote_inside_the_string_does_not_end_it():
+    with pytest.raises(TypeError, match="which salix does not support"):
+        type(Struct)("Wrapped", (Struct,), {"__annotations__": {"v": "'a\\'b ClassVar[int]'"}, "v": 5})
+
+
+def test_an_init_var_with_a_shared_mutable_keeps_the_mutable_refusal():
+    with pytest.raises(TypeError, match="type hashes and whose value will not"):
+
+        class Seeded(Struct):
+            seed: InitVar[int] = ([1],)
+
+
+def test_a_non_string_annotation_key_still_gets_the_key_error():
+    with pytest.raises(TypeError, match="annotation keys must be strings"):
+        type(Struct)("Probe", (Struct,), {"__annotations__": {1: int}})
+
+
+def test_a_class_var_named_like_a_mixin_method_is_refused():
+    with pytest.raises(TypeError, match="cannot be a ClassVar: a double-underscore name"):
+
+        class Colliding(Struct):
+            __copy__: ClassVar[object] = 5
+
+
+def test_a_class_var_operand_in_text_with_the_form_second_is_still_refused():
+    with pytest.raises(TypeError, match="which salix does not support"):
+        type(Struct)("Wrapped", (Struct,), {"__annotations__": {"v": "None | ClassVar[int]"}, "v": 5})
+
+
+@pytest.mark.parametrize(
+    "annotation",
+    [
+        "ClassVar[int] or None",
+        "ClassVar[int] + int",
+        "ClassVar[int] & int",
+        "(ClassVar[int])",
+        "ClassVar[int][str]",
+    ],
+    ids=["or", "plus", "ampersand", "parenthesized", "double-subscript"],
+)
+def test_an_operator_around_the_form_in_text_with_a_value_is_still_refused(annotation):
+    with pytest.raises(TypeError, match="which salix does not support"):
+        type(Struct)("Wrapped", (Struct,), {"__annotations__": {"v": annotation}, "v": 5})
+
+
+def test_a_class_var_named_like_salix_machinery_is_refused():
+    with pytest.raises(TypeError, match="cannot be a ClassVar: a double-underscore name"):
+
+        class Colliding(Struct):
+            __match_args__: ClassVar[tuple] = ()
+
+
+def test_a_dunder_class_var_without_a_value_reports_the_machinery_refusal():
+    with pytest.raises(TypeError, match="cannot be a ClassVar"):
+
+        class Colliding(Struct):
+            __len__: ClassVar[object]
+
+
+def test_a_keyword_before_the_form_in_text_with_a_value_is_still_refused():
+    with pytest.raises(TypeError, match="which salix does not support"):
+        type(Struct)("Wrapped", (Struct,), {"__annotations__": {"v": "and ClassVar[int]"}, "v": 5})
+
+
+def test_a_two_argument_class_var_in_text_with_a_value_is_still_refused():
+    with pytest.raises(TypeError, match="which salix does not support"):
+        type(Struct)("Wrapped", (Struct,), {"__annotations__": {"v": "ClassVar[int, str]"}, "v": 5})
+
+
+def test_the_text_path_cannot_tell_the_user_s_type_apart():
+    """The spelling heuristic's mirror of the renamed-import hole: text naming
+    ClassVar is kept with a value whether the form or the author's own type is
+    meant, and refused without one.
+    """
+
+    Kept = type(Struct)("Kept", (Struct,), {"__annotations__": {"v": "ClassVar[int]"}, "v": 5})
+
+    assert Kept._struct_fields_ == ()
+    assert Kept.v == 5
+
+    with pytest.raises(TypeError, match="without an assigned value"):
+        type(Struct)("Refused", (Struct,), {"__annotations__": {"v": "ClassVar[int]"}})
+
+
 def test_a_renamed_import_is_not_resolved_in_the_source_text_form():
     """`from typing import ClassVar as CV` gives `CV[int]`, which names nothing
     the text can match. Recorded as the known hole in the heuristic rather than
@@ -223,28 +393,45 @@ def test_a_plain_annotated_is_still_a_field():
     assert Tagged(1, []).v == 1
 
 
-@pytest.mark.parametrize("FORM", [ClassVar, InitVar], ids=["ClassVar", "InitVar"])
-def test_a_real_future_annotations_module_takes_the_text_path(tmp_path, FORM):
+def test_a_real_future_annotations_module_keeps_the_class_var(tmp_path):
     """Every other text-path case here hands salix a string it built itself.
     This one makes the compiler produce the annotations, which is the only way
-    to know the path is reachable the way a user reaches it -- and both forms
-    go through it, because what the compiler stores is the source text and the
-    two forms are different text.
+    to know the path is reachable the way a user reaches it.
     """
 
     module = tmp_path / "future_struct.py"
     module.write_text(
         "from __future__ import annotations\n"
-        f"from {FORM.__module__} import {FORM.__name__}\n"
+        "from typing import ClassVar\n"
         "from salix import Struct\n"
         "\n"
         "class Registry(Struct):\n"
-        f"    instances: {FORM.__name__}[list] = []\n"
+        "    instances: ClassVar[list] = []\n"
+        "    name: str\n"
+    )
+    namespace: dict[str, object] = {"__name__": "future_struct"}
+
+    exec(compile(module.read_text(), str(module), "exec"), namespace)
+    Registry = namespace["Registry"]
+
+    assert Registry._struct_fields_ == ("name",)  # type: ignore[attr-defined]
+    assert Registry.instances == []  # type: ignore[attr-defined]
+
+
+def test_a_real_future_annotations_module_takes_the_text_path_for_init_var(tmp_path):
+    module = tmp_path / "future_init_var.py"
+    module.write_text(
+        "from __future__ import annotations\n"
+        "from dataclasses import InitVar\n"
+        "from salix import Struct\n"
+        "\n"
+        "class Seeded(Struct):\n"
+        "    seed: InitVar[int] = 0\n"
         "    name: str\n"
     )
 
-    with pytest.raises(TypeError, match=f"annotated {FORM.__name__}"):
-        exec(compile(module.read_text(), str(module), "exec"), {"__name__": "future_struct"})
+    with pytest.raises(TypeError, match="annotated InitVar"):
+        exec(compile(module.read_text(), str(module), "exec"), {"__name__": "future_init_var"})
 
 
 def test_a_real_future_annotations_module_still_builds_ordinary_fields():
