@@ -1,4 +1,6 @@
+import importlib.metadata
 import inspect
+import os
 import sys
 from pathlib import Path
 from typing import Generic, TypeVar
@@ -117,10 +119,13 @@ def test_a_field_named_signature_is_refused():
         type(Struct)("Blocked", (Struct,), {"__annotations__": {"__signature__": int, "x": int}})
 
 
-def test_the_module_version_matches_pyproject():
+def test_the_module_version_matches_its_declaration():
     import salix
 
-    declared = tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"]
+    if os.environ.get("SALIX_REQUIRE_INSTALLED") == "1":
+        declared = importlib.metadata.version("salix")
+    else:
+        declared = tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"]
 
     assert salix.__version__ == declared
 
