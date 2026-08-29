@@ -17,10 +17,10 @@ class Mutable(Struct, frozen=False):
 
 
 def test_a_struct_is_frozen_unless_it_says_otherwise():
-    with pytest.raises(TypeError, match="does not support attribute assignment"):
+    with pytest.raises(AttributeError, match="does not support attribute assignment"):
         Frozen(1).x = 9
 
-    with pytest.raises(TypeError, match="does not support attribute deletion"):
+    with pytest.raises(AttributeError, match="does not support attribute deletion"):
         del Frozen(1).x
 
 
@@ -28,7 +28,7 @@ def test_frozen_true_is_accepted_and_is_the_default_anyway():
     class Explicit(Struct, frozen=True):
         x: int
 
-    with pytest.raises(TypeError, match="does not support attribute assignment"):
+    with pytest.raises(AttributeError, match="does not support attribute assignment"):
         Explicit(1).x = 9
 
 
@@ -112,7 +112,7 @@ def test_frozenness_is_inherited():
     class Child(Frozen):
         z: int = 3
 
-    with pytest.raises(TypeError, match="does not support attribute assignment"):
+    with pytest.raises(AttributeError, match="does not support attribute assignment"):
         Child(1, 2, 3).z = 9
 
 
@@ -133,7 +133,7 @@ def test_a_frozen_struct_may_strengthen_a_mutable_one():
 
     instance = Child(1)
 
-    with pytest.raises(TypeError, match="does not support attribute assignment"):
+    with pytest.raises(AttributeError, match="does not support attribute assignment"):
         instance.x = 9
 
     assert instance == Child(1)
@@ -155,10 +155,10 @@ def test_frozen_true_over_a_mutable_base_holds_beside_a_permissive_co_base():
         pass
 
     for Child in (Ahead, Behind):
-        with pytest.raises(TypeError, match="does not support attribute"):
+        with pytest.raises(AttributeError, match="does not support attribute"):
             Child(1).x = 9
 
-        with pytest.raises(TypeError, match="does not support attribute"):
+        with pytest.raises(AttributeError, match="does not support attribute"):
             del Child(1).x
 
 
@@ -184,10 +184,10 @@ def test_a_frozen_child_of_a_frozen_base_holds_beside_a_permissive_co_base():
     for Child in (Ahead, Behind):
         assert "__setattr__" in Child.__dict__
 
-        with pytest.raises(TypeError, match="does not support attribute"):
+        with pytest.raises(AttributeError, match="does not support attribute"):
             Child(1).x = 9
 
-        with pytest.raises(TypeError, match="does not support attribute"):
+        with pytest.raises(AttributeError, match="does not support attribute"):
             del Child(1).x
 
 
@@ -222,7 +222,7 @@ def test_a_frozen_setattr_escape_beside_a_permissive_co_base_keeps_answering():
 
             assert instance.x == 9
 
-            with pytest.raises(TypeError, match="does not support attribute"):
+            with pytest.raises(AttributeError, match="does not support attribute"):
                 del instance.x
         else:
             # The parent build refuses the escape the same way on 3.10-3.12:
@@ -231,7 +231,7 @@ def test_a_frozen_setattr_escape_beside_a_permissive_co_base_keeps_answering():
             with pytest.raises(TypeError):
                 Child(1).x = 9
 
-            with pytest.raises(TypeError):
+            with pytest.raises(AttributeError):
                 del Child(1).x
 
     class Escaping(FrozenBase):
@@ -241,7 +241,7 @@ def test_a_frozen_setattr_escape_beside_a_permissive_co_base_keeps_answering():
     class InheritedAhead(Permissive, Escaping):
         pass
 
-    with pytest.raises(TypeError, match="does not support attribute"):
+    with pytest.raises(AttributeError, match="does not support attribute"):
         InheritedAhead(1).x = 9
 
 
@@ -268,13 +268,13 @@ def test_a_frozen_delattr_escape_beside_a_permissive_co_base_keeps_answering():
         if sys.version_info >= (3, 13):
             del Child(1).x
 
-            with pytest.raises(TypeError, match="does not support attribute"):
+            with pytest.raises(AttributeError, match="does not support attribute"):
                 Child(1).x = 9
         else:
             with pytest.raises(TypeError):
                 del Child(1).x
 
-            with pytest.raises(TypeError):
+            with pytest.raises(AttributeError):
                 Child(1).x = 9
 
 
@@ -348,8 +348,12 @@ def test_a_frozen_structs_body_delattr_keeps_answering():
             deleted.append(name)
 
     for Child in (Single, Strengthened):
-        with pytest.raises(TypeError):
-            Child(1).x = 9
+        if sys.version_info >= (3, 13) or Child is Single:
+            with pytest.raises(AttributeError):
+                Child(1).x = 9
+        else:
+            with pytest.raises(TypeError):
+                Child(1).x = 9
 
         del Child(1).x
 
@@ -420,7 +424,7 @@ def test_a_child_of_a_fieldless_mutable_base_may_freeze_itself():
     class Child(Fieldless, frozen=True):
         x: int
 
-    with pytest.raises(TypeError, match="does not support attribute assignment"):
+    with pytest.raises(AttributeError, match="does not support attribute assignment"):
         Child(1).x = 9
 
     assert hash(Child(1)) == hash((1,))

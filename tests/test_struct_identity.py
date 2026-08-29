@@ -534,7 +534,7 @@ class TestAMetaclassSubclass:
 
         Built = META("Built", (Base,), {"__annotations__": {}}, frozen=True)
 
-        with pytest.raises(TypeError, match="does not support attribute"):
+        with pytest.raises(AttributeError, match="does not support attribute"):
             Built(1).x = 9
 
     def test_a_delegate_that_swallows_the_options_gets_the_displaced_slot_advice(self):

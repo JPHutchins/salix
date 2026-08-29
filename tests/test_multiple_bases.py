@@ -159,7 +159,7 @@ class TestWhichBaseAnswers:
         class Both(MutableFieldless, WithFields):
             c: int
 
-        with pytest.raises(TypeError, match="does not support attribute assignment"):
+        with pytest.raises(AttributeError, match="does not support attribute assignment"):
             Both(1, 2, 3).a = 99
 
         with pytest.raises(TypeError, match="mutable struct cannot inherit"):
@@ -181,7 +181,7 @@ class TestWhichBaseAnswers:
         class Strengthened(FrozenFieldless, MutableFields, frozen=True):
             c: int
 
-        with pytest.raises(TypeError, match="does not support attribute assignment"):
+        with pytest.raises(AttributeError, match="does not support attribute assignment"):
             Strengthened(1, 2).a = 99
 
     def test_a_repr_less_base_in_front_takes_the_repr_with_it(self):

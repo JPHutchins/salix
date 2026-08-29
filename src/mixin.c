@@ -702,8 +702,8 @@ static int Struct_set_attribute(
 	}
 
 	PyErr_Format(
-		PyExc_TypeError,
-		"%.200s object does not support attribute %s",
+		PyExc_AttributeError,
+		"'%.200s' object does not support attribute %s",
 		Py_TYPE(self)->tp_name,
 		value == NULL ? "deletion" : "assignment"
 	);
