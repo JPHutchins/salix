@@ -477,10 +477,7 @@ static enum result drop_class_variables(PyObject * const namespace, PyObject * c
 	return RESULT_OK;
 }
 
-enum result refuse_mixin_method_fields(
-	PyObject * const all_names,
-	PyObject * const class_var_names
-) {
+enum result refuse_mixin_method_fields(PyObject * const all_names) {
 	PY_OWNED(mixin_dict, struct_type_dict(&StructMixin_Type));
 
 	if (mixin_dict == NULL) {
@@ -497,30 +494,24 @@ enum result refuse_mixin_method_fields(
 	}
 
 	Py_ssize_t position = 0;
-	PyObject * mixin_name;
+	PyObject * field_name;
 	PyObject * method;
 
-	while (PyDict_Next(mixin_dict, &position, &mixin_name, &method)) {
-		int const field = PySequence_Contains(all_names, mixin_name);
+	while (PyDict_Next(mixin_dict, &position, &field_name, &method)) {
+		int const present = PySequence_Contains(all_names, field_name);
 
-		if (field < 0) {
+		if (present < 0) {
 			return RESULT_ERROR;
 		}
 
-		int const class_var = (field == 0 ? PySequence_Contains(class_var_names, mixin_name) : 0);
-
-		if (class_var < 0) {
-			return RESULT_ERROR;
-		}
-
-		if (field == 0 && class_var == 0) {
+		if (present == 0) {
 			continue;
 		}
 
 		PY_MOVABLE(spelling, NULL);
 		int const belongs = binding_belongs_to_body(
 			mixin_dict,
-			mixin_name,
+			field_name,
 			mixin_qualname,
 			&spelling
 		);
@@ -532,12 +523,9 @@ enum result refuse_mixin_method_fields(
 		if (belongs == 1) {
 			PyErr_Format(
 				PyExc_TypeError,
-				field == 1
-					? "%U is a field, and the mixin defines a method of the same "
-						"name which the field's descriptor would shadow; rename the field"
-					: "%U is a ClassVar, and the mixin defines a method of the same "
-						"name which the class-variable binding would shadow; rename one of them",
-				mixin_name
+				"%U is a field, and the mixin defines a method of the same "
+				"name which the field's descriptor would shadow; rename the field",
+				field_name
 			);
 
 			return RESULT_ERROR;
@@ -570,11 +558,7 @@ enum result refuse_colliding_methods(
 			PY_OWNED(bound, dict_value_ref(original_namespace, field_name));
 
 			if (bound == NULL) {
-				if (PyErr_Occurred()) {
-					return RESULT_ERROR;
-				}
-
-				continue;
+				return RESULT_ERROR;
 			}
 
 			PyErr_Format(

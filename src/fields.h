@@ -6,15 +6,14 @@
 #include "types.h"
 
 struct field_plan {
-	PyObject * all_names;        /* list[str] */
-	PyObject * new_names;        /* list[str] */
-	PyObject * class_var_names;  /* list[str] */
-	PyObject * defaults;         /* tuple */
-	PyObject * annotations;      /* tuple[Any], aligned with all_names */
-	PyObject * metadata;         /* tuple[tuple[Any, ...]], aligned with all_names */
+	PyObject * all_names;      /* list[str] */
+	PyObject * new_names;      /* list[str] */
+	PyObject * defaults;       /* tuple */
+	PyObject * annotations;    /* tuple[Any], aligned with all_names */
+	PyObject * metadata;       /* tuple[tuple[Any, ...]], aligned with all_names */
 };
 
-/* Owns its six references.  On failure every member is NULL and an
+/* Owns its five references.  On failure every member is NULL and an
  * exception is set. */
 struct field_plan field_plan_build(StructType const * base, PyObject * namespace);
 
