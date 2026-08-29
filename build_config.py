@@ -1,4 +1,17 @@
+import re
+from pathlib import Path
 from typing import Final, NamedTuple
+
+_version_match = re.search(
+    r'^version\s*=\s*["\']([^"\']+)["\']',
+    Path("pyproject.toml").read_text(),
+    re.MULTILINE,
+)
+
+if _version_match is None:
+    raise SystemExit("build_config.py: no version found in pyproject.toml")
+
+VERSION: Final = _version_match.group(1)
 
 
 class BuildConfig(NamedTuple):
@@ -33,6 +46,7 @@ BUILD: Final = BuildConfig(
     # while c23 needs GCC 14+ or Clang 18+. An sdist has to compile on whatever
     # the machine has, and Ubuntu 24.04 LTS still ships GCC 13.
     c_flags=(
+        f"-DSALIX_VERSION={VERSION}",
         "-std=c2x",
         "-O2",
         "-Wdouble-promotion",

@@ -2,7 +2,12 @@
 name = "salix-tests"
 version = "0"
 requires-python = ">=3.10"
-dependencies = ["pytest>=9", "hypothesis>=6", "packaging>=24"]
+dependencies = [
+    "pytest>=9",
+    "hypothesis>=6",
+    "packaging>=24",
+    "tomli>=2; python_version < '3.11'",
+]
 
 [tool.uv]
 package = false

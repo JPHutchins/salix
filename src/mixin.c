@@ -10,6 +10,7 @@
 #include "types.h"
 
 static int Struct_set_attribute(PyObject * self, PyObject * name, PyObject * value);
+PyObject * Struct_get_signature(PyObject * self, void * closure);
 static PyObject * Struct_copy(PyObject * self, PyObject * noargs);
 static PyObject * Struct_deepcopy(PyObject * self, PyObject * memo);
 static PyObject * copy_delegate(
@@ -44,12 +45,13 @@ static PyObject * Struct_get_annotations_as_msgspec(PyObject * self, void * clos
 static PyObject * Struct_get_metadata(PyObject * self, void * closure);
 static PyObject * Struct_get_metadata_as_msgspec(PyObject * self, void * closure);
 static PyObject * metadata_of(PyObject * self, enum struct_metadata which, char const * name);
-static PyGetSetDef Struct_getset[9];
+static PyGetSetDef Struct_getset[10];
 static PyMethodDef Struct_methods[];
 
 PyTypeObject StructMixin_Type = {
 	PyVarObject_HEAD_INIT(NULL, 0)
 	.tp_name = "salix._StructMixin",
+	.tp_doc = "The mixin carrying struct behavior; use Struct to build one.",
 	.tp_basicsize = sizeof(PyObject),
 	.tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
 	.tp_setattro = Struct_set_attribute,
@@ -666,6 +668,11 @@ static PyGetSetDef Struct_getset[] = {
 		.get = Struct_get_metadata_as_msgspec,
 		.doc = "the Annotated extras under the public name for it",
 	},
+	{
+		.name = "__signature__",
+		.get = Struct_get_signature,
+		.doc = "the constructor signature inspect.signature reads",
+	},
 	{.name = NULL},
 };
 
@@ -686,6 +693,101 @@ static PyObject * metadata_of(
 	);
 
 	return NULL;
+}
+
+PyObject * Struct_get_signature(PyObject * const self, void * const closure) {
+	StructType * type;
+
+	if (is_struct(self)) {
+		type = struct_type_of(self);
+	} else if (is_struct_class(self)) {
+		type = (StructType *) self;
+	} else {
+		PyErr_Format(
+			PyExc_AttributeError,
+			"__signature__ is defined on structs, and %.200s is not one",
+			Py_TYPE(self)->tp_name
+		);
+
+		return NULL;
+	}
+
+	PyObject * const bound = dict_get_string(((PyTypeObject *) type)->tp_dict, "__signature__");
+
+	if (bound != NULL) {
+		return Py_NewRef(bound);
+	}
+	if (PyErr_Occurred()) {
+		return NULL;
+	}
+
+	if (defines_own_init(type)) {
+		PyErr_SetString(
+			PyExc_AttributeError,
+			"the class defines its own __init__, whose signature answers instead"
+		);
+
+		return NULL;
+	}
+
+	PY_OWNED(inspect_module, PyImport_ImportModule("inspect"));
+
+	if (inspect_module == NULL) {
+		return NULL;
+	}
+
+	PY_OWNED(parameter_type, PyObject_GetAttrString(inspect_module, "Parameter"));
+	PY_OWNED(signature_type, PyObject_GetAttrString(inspect_module, "Signature"));
+	PY_OWNED(parameters, PyList_New(type->struct_field_count));
+
+	if (parameter_type == NULL || signature_type == NULL || parameters == NULL) {
+		return NULL;
+	}
+
+	PY_OWNED(kind, PyObject_GetAttrString(parameter_type, "POSITIONAL_OR_KEYWORD"));
+	PY_OWNED(empty, PyObject_GetAttrString(parameter_type, "empty"));
+
+	if (kind == NULL || empty == NULL) {
+		return NULL;
+	}
+
+	Py_ssize_t const required_count = struct_required_count(type);
+
+	for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
+		PyObject * const field_name = PyTuple_GET_ITEM(type->struct_field_names, i);
+		PyObject * const default_value = (
+			i < required_count ? empty :
+			PyTuple_GET_ITEM(type->struct_defaults, i - required_count)
+		);
+		PY_OWNED(arguments, PyTuple_Pack(2, field_name, kind));
+		PY_OWNED(keywords, PyDict_New());
+
+		if (
+			arguments == NULL ||
+			keywords == NULL ||
+			PyDict_SetItemString(keywords, "default", default_value) < 0 ||
+			PyDict_SetItemString(
+					keywords,
+					"annotation",
+					PyTuple_GET_ITEM(type->struct_annotations, i)
+				) <
+				0
+		) {
+			return NULL;
+		}
+
+		PY_MOVABLE(parameter, PyObject_Call(parameter_type, arguments, keywords));
+
+		if (parameter == NULL) {
+			return NULL;
+		}
+
+		PyList_SET_ITEM(parameters, i, py_move(&parameter));
+	}
+
+	PY_MOVABLE(signature, PyObject_CallOneArg(signature_type, parameters));
+
+	return py_move(&signature);
 }
 
 static int Struct_set_attribute(

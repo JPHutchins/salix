@@ -1131,6 +1131,7 @@ dependencies = [
     { name = "hypothesis" },
     { name = "packaging" },
     { name = "pytest" },
+    { name = "tomli", marker = "python_full_version < '3.11'" },
 ]
 
 [package.metadata]
@@ -1138,6 +1139,7 @@ requires-dist = [
     { name = "hypothesis", specifier = ">=6" },
     { name = "packaging", specifier = ">=24" },
     { name = "pytest", specifier = ">=9" },
+    { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2" },
 ]
 
 [[package]]

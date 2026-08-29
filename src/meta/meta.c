@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "meta.h"
+#include "../mixin.h"
 #include "../result.h"
 #include "../types.h"
 
@@ -13,11 +14,12 @@ static PyObject * StructMeta_get_field_names(PyObject * self, void * closure);
 static PyObject * StructMeta_get_defaults(PyObject * self, void * closure);
 static PyObject * StructMeta_get_annotations(PyObject * self, void * closure);
 static PyObject * StructMeta_get_metadata(PyObject * self, void * closure);
-static PyGetSetDef StructMeta_getset[9];
+static PyGetSetDef StructMeta_getset[10];
 static PyObject * StructMeta_call(PyObject * self, PyObject * args, PyObject * keywords);
 PyTypeObject StructMeta_Type = {
 	PyVarObject_HEAD_INIT(NULL, 0)
 	.tp_name = "salix._StructMeta",
+	.tp_doc = "The metaclass of struct classes; use the Struct base to build one.",
 	.tp_basicsize = sizeof(StructType),
 	.tp_itemsize = sizeof(struct PyMemberDef),
 	.tp_flags = (
@@ -76,6 +78,11 @@ static PyGetSetDef StructMeta_getset[] = {
 		.name = "__struct_metadata__",
 		.get = StructMeta_get_metadata,
 		.doc = "the Annotated extras under the public name for it",
+	},
+	{
+		.name = "__signature__",
+		.get = Struct_get_signature,
+		.doc = "the constructor signature inspect.signature reads",
 	},
 	{.name = NULL},
 };
@@ -331,11 +338,21 @@ static bool reserved_set_contains(char const * const name) {
 }
 
 static void test_the_reservation_and_the_getset_tables_agree(void) {
+	/* __signature__ is machinery, not metadata: it is not reserved, because a
+	 * class-body binding of the name deliberately overrides it. */
 	for (PyGetSetDef const * entry = StructMeta_Type.tp_getset; entry->name != NULL; ++entry) {
+		if (strcmp(entry->name, "__signature__") == 0) {
+			continue;
+		}
+
 		TEST_ASSERT_TRUE(reserved_set_contains(entry->name));
 	}
 
 	for (PyGetSetDef const * entry = StructMixin_Type.tp_getset; entry->name != NULL; ++entry) {
+		if (strcmp(entry->name, "__signature__") == 0) {
+			continue;
+		}
+
 		TEST_ASSERT_TRUE(reserved_set_contains(entry->name));
 	}
 

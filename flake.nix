@@ -77,14 +77,15 @@
         ];
       };
 
-      # The in-file tests read src/ and tests/c/ only, so touching them does not
-      # invalidate a single cross build.
+      # The in-file tests read src/, tests/c/ and the version in pyproject.toml,
+      # so touching them does not invalidate a single cross build.
       testSource = lib.fileset.toSource {
         root = ./.;
         fileset = lib.fileset.unions [
           ./src
           ./tests/c
           ./build_config.py
+          ./pyproject.toml
         ];
       };
 

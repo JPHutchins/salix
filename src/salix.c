@@ -1,6 +1,13 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 
+#ifndef SALIX_VERSION
+#	define SALIX_VERSION 0.0.0
+#endif
+
+#define SALIX_STRINGIZE_INNER(version) #version
+#define SALIX_STRINGIZE(version) SALIX_STRINGIZE_INNER(version)
+
 #include "construct.h"
 #include "meta.h"
 #include "mixin.h"
@@ -222,6 +229,10 @@ static int struct_exec(PyObject * const module) {
 		return RESULT_ERROR;
 	}
 
+	if (PyModule_AddStringConstant(module, "__version__", SALIX_STRINGIZE(SALIX_VERSION)) < 0) {
+		return RESULT_ERROR;
+	}
+
 	return add_struct_base(module);
 }
 
@@ -243,12 +254,22 @@ static PyObject * create_struct_base(PyObject * const module) {
 	PY_OWNED(module_name, PyUnicode_FromString(struct_module.m_name));
 	PY_OWNED(bases, PyTuple_Pack(1, (PyObject *) &StructMixin_Type));
 	PY_OWNED(namespace, PyDict_New());
+	PY_OWNED(
+		doc,
+		PyUnicode_FromString(
+			"A struct: fields are the annotated class-body names; instances are "
+			"frozen by default and compare by field value."
+		)
+	);
 
-	if (name == NULL || module_name == NULL || bases == NULL || namespace == NULL) {
+	if (name == NULL || module_name == NULL || bases == NULL || namespace == NULL || doc == NULL) {
 		return NULL;
 	}
 
-	if (PyDict_SetItemString(namespace, "__module__", module_name) < 0) {
+	if (
+		PyDict_SetItemString(namespace, "__module__", module_name) < 0 ||
+		PyDict_SetItemString(namespace, "__doc__", doc) < 0
+	) {
 		return NULL;
 	}
 
