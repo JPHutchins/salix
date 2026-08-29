@@ -558,7 +558,11 @@ enum result refuse_colliding_methods(
 			PY_OWNED(bound, dict_value_ref(original_namespace, field_name));
 
 			if (bound == NULL) {
-				return RESULT_ERROR;
+				if (PyErr_Occurred()) {
+					return RESULT_ERROR;
+				}
+
+				continue;
 			}
 
 			PyErr_Format(
