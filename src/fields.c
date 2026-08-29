@@ -53,7 +53,6 @@ static enum result append_declared(
 	PyObject * namespace,
 	PyObject * all_names,
 	PyObject * new_names,
-	PyObject * class_var_names,
 	PyObject * default_by_name,
 	PyObject * annotation_values,
 	PyObject * metadata_values,
@@ -159,7 +158,6 @@ struct field_plan field_plan_build(StructType const * const base, PyObject * con
 
 	PY_MOVABLE(all_names, PyList_New(0));
 	PY_MOVABLE(new_names, PyList_New(0));
-	PY_MOVABLE(class_var_names, PyList_New(0));
 	PY_MOVABLE(annotation_values, PyList_New(0));
 	PY_MOVABLE(metadata_values, PyList_New(0));
 	PY_OWNED(default_by_name, PyDict_New());
@@ -168,7 +166,6 @@ struct field_plan field_plan_build(StructType const * const base, PyObject * con
 	if (
 		all_names != NULL &&
 		new_names != NULL &&
-		class_var_names != NULL &&
 		annotation_values != NULL &&
 		metadata_values != NULL &&
 		default_by_name != NULL &&
@@ -181,7 +178,6 @@ struct field_plan field_plan_build(StructType const * const base, PyObject * con
 				namespace,
 				all_names,
 				new_names,
-				class_var_names,
 				default_by_name,
 				annotation_values,
 				metadata_values,
@@ -199,7 +195,6 @@ struct field_plan field_plan_build(StructType const * const base, PyObject * con
 			plan.metadata = built_metadata;
 			plan.all_names = py_move(&all_names);
 			plan.new_names = py_move(&new_names);
-			plan.class_var_names = py_move(&class_var_names);
 		} else {
 			Py_XDECREF(built_defaults);
 			Py_XDECREF(built_annotations);
@@ -213,7 +208,6 @@ struct field_plan field_plan_build(StructType const * const base, PyObject * con
 void field_plan_clear(struct field_plan * const plan) {
 	Py_CLEAR(plan->all_names);
 	Py_CLEAR(plan->new_names);
-	Py_CLEAR(plan->class_var_names);
 	Py_CLEAR(plan->defaults);
 	Py_CLEAR(plan->annotations);
 	Py_CLEAR(plan->metadata);
@@ -356,7 +350,6 @@ static enum result append_declared(
 	PyObject * const namespace,
 	PyObject * const all_names,
 	PyObject * const new_names,
-	PyObject * const class_var_names,
 	PyObject * const default_by_name,
 	PyObject * const annotation_values,
 	PyObject * const metadata_values,
@@ -461,6 +454,13 @@ static enum result append_declared(
 			}
 
 			if (!top_level) {
+				if (
+					declared_default != NULL &&
+					refuse_shared_mutable_contents(field_name, declared_default) != RESULT_OK
+				) {
+					return RESULT_ERROR;
+				}
+
 				PyErr_Format(
 					PyExc_TypeError,
 					"'%U' is annotated %s, which salix does not support; "
@@ -491,10 +491,6 @@ static enum result append_declared(
 					CLASS_VAR_FORM.instead
 				);
 
-				return RESULT_ERROR;
-			}
-
-			if (PyList_Append(class_var_names, field_name) < 0) {
 				return RESULT_ERROR;
 			}
 

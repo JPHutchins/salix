@@ -267,6 +267,15 @@ def test_a_nested_class_var_with_a_value_is_still_refused():
         )
 
 
+def test_a_nested_class_var_with_a_shared_mutable_keeps_the_mutable_diagnosis():
+    with pytest.raises(TypeError, match="type hashes and whose value will not"):
+        type(Struct)(
+            "Wrapped",
+            (Struct,),
+            {"__annotations__": {"v": Annotated[ClassVar[list], "meta"]}, "v": ([1],)},
+        )
+
+
 def test_a_nested_class_var_in_text_with_a_value_is_still_refused():
     with pytest.raises(TypeError, match="which salix does not support"):
         type(Struct)(

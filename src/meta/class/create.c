@@ -153,7 +153,7 @@ struct field_plan plan = field_plan_build(base, original_namespace);
 		verify_settle_names_readable(original_namespace) != RESULT_OK ||
 		refuse_reserved_metadata_names(original_namespace, plan.new_names) != RESULT_OK ||
 		refuse_colliding_methods(original_namespace, plan.all_names, name) != RESULT_OK ||
-		refuse_mixin_method_fields(plan.all_names, plan.class_var_names) != RESULT_OK ||
+		refuse_mixin_method_fields(plan.all_names) != RESULT_OK ||
 		refuse_slot_name_fields(plan.new_names) != RESULT_OK ||
 		refuse_displaced_slots(
 				original_namespace,
