@@ -160,7 +160,7 @@ def observe(cls: type) -> Behaviour:
     try:
         setattr(instance(cls), cls.__struct_fields__[0], 99)
         frozen = False
-    except (AttributeError, IndexError):
+    except (TypeError, AttributeError, IndexError):
         frozen = True
 
     return Behaviour(

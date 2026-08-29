@@ -697,7 +697,7 @@ static int Struct_set_attribute(
 		return PyObject_GenericSetAttr(self, name, value);
 	}
 
-	if (PyUnicode_CompareWithASCIIString(name, "__orig_class__") == 0) {
+	if (PyUnicode_Check(name) && PyUnicode_CompareWithASCIIString(name, "__orig_class__") == 0) {
 		return 0;
 	}
 
