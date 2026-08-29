@@ -1,3 +1,4 @@
+import gc
 import weakref
 
 import pytest
@@ -165,3 +166,24 @@ def test_a_diverting_setattro_co_base_is_not_interned():
         pass
 
     assert WithDivert() is not WithDivert()
+
+
+def test_built_and_dropped_interned_classes_free_completely_under_stress():
+    """The lifetime stress shape: build a qualifying class, touch its
+    singleton, drop every reference, collect -- and the pair frees together.
+    A dangling clear (the class decrefing an already-freed singleton) crashes
+    here, and a leak keeps a weakref alive. 3.10/3.11 are where the claimed
+    ordering lives; the harness runs everywhere CI does.
+    """
+
+    surviving = 0
+
+    for i in range(200):
+        built = type(Struct)(f"Dropped{i}", (Struct,), {})
+        built()
+        class_ref = weakref.ref(built)
+        del built
+        gc.collect()
+        surviving += class_ref() is not None
+
+    assert surviving == 0
