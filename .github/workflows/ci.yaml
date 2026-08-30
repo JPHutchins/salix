@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
 
 concurrency:
@@ -62,3 +63,36 @@ jobs:
           path: result-wheels
       - run: uv sync --locked --no-install-workspace --only-group ci
       - run: uv run --no-sync camas coverage --OS ${{ matrix.OS }} --PY ${{ matrix.PY }}
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [wheels, coverage]
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    environment:
+      name: pypi
+      url: https://pypi.org/p/salix
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+      - uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7.0.2
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix', 'nix/**') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+          gc-max-store-size-linux: 5G
+          save: false
+      - run: nix develop --command uv sync --locked --no-install-workspace --only-group ci
+      - env:
+          TAG: ${{ github.ref_name }}
+        run: nix develop --command uv run --no-sync python tools/check_tag.py "$TAG"
+      - run: nix build .#release --out-link result-release
+      # dist/ because that is where the publish action looks, and a symlink
+      # into the nix store is not something it can read.
+      - run: |
+          mkdir -p dist
+          cp -L result-release/*.whl result-release/*.tar.gz dist/
+          ls -l dist
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
