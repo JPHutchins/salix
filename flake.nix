@@ -58,7 +58,7 @@
         lib.filter ({ pythonMinor, ... }: abiIsFrozen matrix.pythons.${pythonMinor}.version) wheelIds
       );
 
-      # Only what a wheel is built from, so editing the tests does not
+      # Only what a wheel is built from, so editing tests/ does not
       # invalidate every cross build.
       buildSourceFiles = lib.fileset.unions [
         ./src
