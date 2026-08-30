@@ -74,6 +74,7 @@
           ./MANIFEST.in
           ./README.md
           ./LICENSE
+          ./CODE_OF_CONDUCT.md
         ];
       };
 

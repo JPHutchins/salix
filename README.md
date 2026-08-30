@@ -183,8 +183,9 @@ without one. The table and the caching behaviors above are pinned in
 
 ## Working in the repo
 
-The contributor loop is documented in `CONTRIBUTING.md`. `uv run camas
-benchmark` says what it costs.
+The contributor loop is documented in `CONTRIBUTING.md`, and community
+standards in `CODE_OF_CONDUCT.md`. `uv run camas benchmark` says what it
+costs.
 
 ## License
 
