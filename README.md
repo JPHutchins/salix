@@ -21,10 +21,14 @@ Point(x=1.0, y=2.0)
 pip install salix
 ```
 
-Wheels are published for every supported CPython — including the
-free-threaded builds — on every platform PyPI carries. salix supports CPython
-3.10 through 3.15. A machine PyPI has no wheel for compiles the sdist, which
-needs setuptools and a C compiler. PyPy and GraalPy satisfy the version floor
+Wheels are published for Windows, macOS, and glibc Linux on x86_64 and
+arm64, for the supported CPythons whose ABI is frozen — a release or an rc.
+A pre-release interpreter's wheels are built and tested but held back until
+its rc. salix supports CPython 3.10 through 3.15, including the free-threaded
+builds. The full matrix is `nix/python-targets.nix`; a configuration missing
+from it has no wheel. A machine PyPI has no wheel for compiles the sdist,
+which needs setuptools and a C compiler — on every OS but Windows, where
+MSVC cannot compile this source. PyPy and GraalPy satisfy the version floor
 but cannot compile the C source, and have no wheels.
 
 ## What salix is and is not
@@ -40,8 +44,9 @@ of the same four names answering the same values.
 The keywords select out of the default. `frozen=False` opens the record for
 writes. `eq=False` drops the value equality and hashing, leaving identity.
 `order=True` adds the field-order comparisons and requires `eq=True`.
-`repr=False`, `match_args`, and `weakref` stand in for the `__repr__`, the
-pattern-matching signature, and the `__weakref__` slot.
+`repr`, `match_args`, and `weakref` default to `True`, `True`, and `False`
+and stand in for the `__repr__`, the pattern-matching signature, and the
+`__weakref__` slot.
 
 salix is not the libraries that do more. `dataclasses` builds the same record
 in pure Python. `attrs` layers converters, validators, and a plugin ecosystem
@@ -50,7 +55,7 @@ serialization library whose `Struct` validates. salix does the record and
 nothing else — no serialization, no validation, no coercion — in C, which is
 where its import and type-creation times come from. Programs that need those
 features need those libraries; salix is for the ones that only need the
-record.
+record. `salix/__init__.pyi` is the whole of the API.
 
 ## Defaults
 
@@ -70,12 +75,14 @@ instance, not shared:
 
 The copy preserves the exact type or it is not a copy — a `defaultdict` copy
 would be a plain `dict` — so the rule stops at the four, and a subclass of one
-of them is shared. A non-empty default of the four is refused at class
-creation, because a copy can only be shallow and the contents would still be
-shared: default it empty and fill it in `__post_init__` with `set_field`.
-`__struct_defaults__` holds the class's own copy, severed from whatever the
-class body named: appending to the module-level object afterwards does not
-reach the class.
+of them is stored as the class body's object itself, shared. A non-empty
+default of the four is refused at class creation, because a copy can only be
+shallow and the contents would still be shared: default it empty and fill it
+in `__post_init__` with `set_field`. For the four, `__struct_defaults__`
+holds the class's own copy, severed from whatever the class body named:
+appending to the module-level object afterwards does not reach the class.
+The getters hand the stored objects out, not copies: do not mutate what
+`__struct_defaults__` returns.
 
 ## ClassVar and InitVar
 
