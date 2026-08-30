@@ -26,8 +26,8 @@ arm64, for the supported CPythons whose ABI is frozen — a release or an rc.
 A pre-release interpreter's wheels are built and tested but held back until
 its rc. salix supports CPython 3.10 through 3.15, including the free-threaded
 builds. The full matrix is `nix/python-targets.nix`; a configuration missing
-from it has no wheel. A machine PyPI has no wheel for compiles the sdist,
-which needs setuptools and a C compiler — on every OS but Windows, where
+from it has no wheel. On a machine PyPI has no wheel for, pip compiles the
+sdist — which needs setuptools and a C compiler — except on Windows, where
 MSVC cannot compile this source. PyPy and GraalPy satisfy the version floor
 but cannot compile the C source, and have no wheels.
 
@@ -36,12 +36,12 @@ but cannot compile the C source, and have no wheels.
 A struct's fields are the annotated names of its class body, and the
 constructor takes them in that order. Instances are frozen by default: reads,
 value equality, hashing, and a repr come with the class; writes do not.
-Inheritance extends the plan — a subclass adds its fields after its base's —
-and the metadata reads back: `_struct_fields_`, `_struct_defaults_`,
+Inheritance extends the field list — a subclass adds its fields after its
+base's — and the metadata reads back: `_struct_fields_`, `_struct_defaults_`,
 `_struct_annotations_`, and `_struct_metadata_`, with `__`-prefixed spellings
 of the same four names answering the same values.
 
-The keywords select out of the default. `frozen=False` opens the record for
+The keywords opt out of the defaults. `frozen=False` opens the record for
 writes. `eq=False` drops the value equality and hashing, leaving identity.
 `order=True` adds the field-order comparisons and requires `eq=True`.
 `repr`, `match_args`, and `weakref` default to `True`, `True`, and `False`
@@ -50,12 +50,12 @@ and stand in for the `__repr__`, the pattern-matching signature, and the
 
 salix is not the libraries that do more. `dataclasses` builds the same record
 in pure Python. `attrs` layers converters, validators, and a plugin ecosystem
-on top. `NamedTuple` is the tuple-shaped ancestor. `msgspec` is a
+on top. `NamedTuple` is the tuple-shaped predecessor. `msgspec` is a
 serialization library whose `Struct` validates. salix does the record and
-nothing else — no serialization, no validation, no coercion — in C, which is
-where its import and type-creation times come from. Programs that need those
-features need those libraries; salix is for the ones that only need the
-record. `salix/__init__.pyi` is the whole of the API.
+nothing else — no serialization, no field-value validation, no coercion — in
+C, which is where its import and type-creation times come from. Programs that
+need those features need those libraries; salix is for the ones that only
+need the record. `salix/__init__.pyi` is the whole of the API.
 
 ## Defaults
 
@@ -78,11 +78,13 @@ would be a plain `dict` — so the rule stops at the four, and a subclass of one
 of them is stored as the class body's object itself, shared. A non-empty
 default of the four is refused at class creation, because a copy can only be
 shallow and the contents would still be shared: default it empty and fill it
-in `__post_init__` with `set_field`. For the four, `__struct_defaults__`
-holds the class's own copy, severed from whatever the class body named:
-appending to the module-level object afterwards does not reach the class.
-The getters hand the stored objects out, not copies: do not mutate what
-`__struct_defaults__` returns.
+in `__post_init__` with `set_field`. A default whose value cannot be hashed
+is refused the same way — `x: tuple = (1, [])` dies at class creation —
+because every instance would share it while its hash raises. For the four,
+`__struct_defaults__` holds the class's own copy, severed from whatever the
+class body named: appending to the module-level object afterwards does not
+reach the class. The getters hand the stored objects out, not copies: do not
+mutate what `__struct_defaults__` returns.
 
 ## ClassVar and InitVar
 
