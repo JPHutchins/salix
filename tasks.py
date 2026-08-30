@@ -45,6 +45,7 @@ make_env = Task(MAKE_ENV, mutates=True)
 
 BUILD = (
     "uv run --no-project --python .venvs/{PY}/bin/python --with setuptools"
+    ' --with "tomli>=2; python_version < \'3.11\'"'
     " python setup.py build_ext --inplace"
 )
 

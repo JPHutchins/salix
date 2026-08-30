@@ -411,6 +411,16 @@ static enum result append_declared(
 			return RESULT_ERROR;
 		}
 
+		if (PyUnicode_CompareWithASCIIString(field_name, "__signature__") == 0) {
+			PyErr_Format(
+				PyExc_TypeError,
+				"'__signature__' is salix's signature machinery and cannot be a "
+				"field; bind a signature in the class body without an annotation"
+			);
+
+			return RESULT_ERROR;
+		}
+
 		PY_OWNED(declared_default, dict_value_ref(namespace, field_name));
 
 		if (declared_default == NULL) {

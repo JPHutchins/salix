@@ -31,6 +31,7 @@ typedef struct StructType {
 	Py_ssize_t * struct_member_offsets;
 	PyObject * struct_post_init;
 	PyObject * struct_singleton;
+	PyObject * struct_signature;
 
 	Py_ssize_t struct_field_count;
 	Py_ssize_t struct_default_count;

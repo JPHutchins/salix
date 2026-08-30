@@ -10,6 +10,7 @@
 #include "types.h"
 
 static int Struct_set_attribute(PyObject * self, PyObject * name, PyObject * value);
+PyObject * Struct_get_signature(PyObject * self, void * closure);
 static PyObject * Struct_copy(PyObject * self, PyObject * noargs);
 static PyObject * Struct_deepcopy(PyObject * self, PyObject * memo);
 static PyObject * copy_delegate(
@@ -44,12 +45,13 @@ static PyObject * Struct_get_annotations_as_msgspec(PyObject * self, void * clos
 static PyObject * Struct_get_metadata(PyObject * self, void * closure);
 static PyObject * Struct_get_metadata_as_msgspec(PyObject * self, void * closure);
 static PyObject * metadata_of(PyObject * self, enum struct_metadata which, char const * name);
-static PyGetSetDef Struct_getset[9];
+static PyGetSetDef Struct_getset[10];
 static PyMethodDef Struct_methods[];
 
 PyTypeObject StructMixin_Type = {
 	PyVarObject_HEAD_INIT(NULL, 0)
 	.tp_name = "salix._StructMixin",
+	.tp_doc = "The mixin carrying struct behavior; use Struct to build one.",
 	.tp_basicsize = sizeof(PyObject),
 	.tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
 	.tp_setattro = Struct_set_attribute,
@@ -666,6 +668,11 @@ static PyGetSetDef Struct_getset[] = {
 		.get = Struct_get_metadata_as_msgspec,
 		.doc = "the Annotated extras under the public name for it",
 	},
+	{
+		.name = "__signature__",
+		.get = Struct_get_signature,
+		.doc = "the constructor signature inspect.signature reads",
+	},
 	{.name = NULL},
 };
 
@@ -686,6 +693,213 @@ static PyObject * metadata_of(
 	);
 
 	return NULL;
+}
+
+PyObject * Struct_get_signature(PyObject * const self, void * const closure) {
+	StructType * type;
+
+	if (is_struct(self)) {
+		type = struct_type_of(self);
+	} else if (is_struct_class(self)) {
+		type = (StructType *) self;
+	} else {
+		PyErr_Format(
+			PyExc_AttributeError,
+			"__signature__ is defined on structs, and %.200s is not one",
+			Py_TYPE(self)->tp_name
+		);
+
+		return NULL;
+	}
+
+	PyTypeObject * const cls = (PyTypeObject *) type;
+	PyObject * const mro = cls->tp_mro;
+	Py_ssize_t mixin = 0;
+
+	while (
+		mixin < PyTuple_GET_SIZE(mro) &&
+		PyTuple_GET_ITEM(mro, mixin) != (PyObject *) &StructMixin_Type
+	) {
+		mixin += 1;
+	}
+
+	PY_OWNED(binding_name, PyUnicode_FromString("__signature__"));
+
+	if (binding_name == NULL) {
+		return NULL;
+	}
+
+	PY_OWNED(own_dict, struct_type_dict(cls));
+
+	if (own_dict == NULL) {
+		return NULL;
+	}
+
+	PY_MOVABLE(own_binding, dict_value_ref(own_dict, binding_name));
+
+	if (own_binding != NULL) {
+		if (own_binding != Py_None) {
+			return py_move(&own_binding);
+		}
+
+		Py_DECREF(own_binding);
+	}
+	if (PyErr_Occurred()) {
+		return NULL;
+	}
+
+	if (defines_own_init(type)) {
+		PyErr_SetString(
+			PyExc_AttributeError,
+			"the class defines its own __init__, whose signature answers instead"
+		);
+
+		return NULL;
+	}
+
+	for (Py_ssize_t i = 1; i < mixin; i += 1) {
+		PyObject * const entry = PyTuple_GET_ITEM(mro, i);
+
+		PY_OWNED(entry_dict, struct_type_dict((PyTypeObject *) entry));
+
+		if (entry_dict == NULL) {
+			return NULL;
+		}
+
+		int const present = PyDict_Contains(entry_dict, binding_name);
+
+		if (present < 0) {
+			return NULL;
+		}
+
+		if (present == 0) {
+			continue;
+		}
+
+		PY_MOVABLE(bound, dict_value_ref(entry_dict, binding_name));
+
+		if (bound != NULL) {
+			if (bound != Py_None) {
+				return py_move(&bound);
+			}
+
+			Py_DECREF(bound);
+		}
+
+		if (PyErr_Occurred()) {
+			return NULL;
+		}
+	}
+
+	if (type->struct_signature != NULL) {
+		return Py_NewRef(type->struct_signature);
+	}
+
+	PY_OWNED(inspect_module, PyImport_ImportModule("inspect"));
+
+	if (inspect_module == NULL) {
+		return NULL;
+	}
+
+	PY_OWNED(parameter_type, PyObject_GetAttrString(inspect_module, "Parameter"));
+	PY_OWNED(signature_type, PyObject_GetAttrString(inspect_module, "Signature"));
+	PY_OWNED(parameters, PyList_New(type->struct_field_count));
+
+	if (parameter_type == NULL || signature_type == NULL || parameters == NULL) {
+		return NULL;
+	}
+
+	PY_OWNED(kind, PyObject_GetAttrString(parameter_type, "POSITIONAL_OR_KEYWORD"));
+	PY_OWNED(empty, PyObject_GetAttrString(parameter_type, "empty"));
+
+	if (kind == NULL || empty == NULL) {
+		return NULL;
+	}
+
+	Py_ssize_t const required_count = struct_required_count(type);
+
+	for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
+		PyObject * const field_name = PyTuple_GET_ITEM(type->struct_field_names, i);
+		PyObject * const default_value = (
+			i < required_count ? empty :
+			PyTuple_GET_ITEM(type->struct_defaults, i - required_count)
+		);
+		PY_OWNED(arguments, PyTuple_Pack(2, field_name, kind));
+		PY_OWNED(keywords, PyDict_New());
+
+		if (
+			arguments == NULL ||
+			keywords == NULL ||
+			PyDict_SetItemString(keywords, "default", default_value) < 0 ||
+			PyDict_SetItemString(
+					keywords,
+					"annotation",
+					PyTuple_GET_ITEM(type->struct_annotations, i)
+				) <
+				0
+		) {
+			return NULL;
+		}
+
+		PY_MOVABLE(parameter, PyObject_Call(parameter_type, arguments, keywords));
+
+		if (parameter == NULL) {
+			return NULL;
+		}
+
+		PyList_SET_ITEM(parameters, i, py_move(&parameter));
+	}
+
+	PY_MOVABLE(signature, PyObject_CallOneArg(signature_type, parameters));
+
+	if (signature == NULL) {
+		return NULL;
+	}
+
+	STRUCT_BEGIN_CRITICAL_SECTION(type);
+
+	if (type->struct_signature == NULL) {
+		type->struct_signature = Py_NewRef(signature);
+	}
+
+	STRUCT_END_CRITICAL_SECTION();
+
+	return py_move(&signature);
+}
+
+int Struct_set_signature(PyObject * const self, PyObject * const value, void * const closure) {
+	if (!is_struct_class(self)) {
+		PyErr_Format(
+			PyExc_AttributeError,
+			"__signature__ is defined on structs, and %.200s is not one",
+			Py_TYPE(self)->tp_name
+		);
+
+		return -1;
+	}
+
+	PY_OWNED(dict, struct_type_dict((PyTypeObject *) self));
+
+	if (dict == NULL) {
+		return -1;
+	}
+
+	if (value == NULL) {
+		if (PyDict_DelItemString(dict, "__signature__") < 0) {
+			if (PyErr_ExceptionMatches(PyExc_KeyError)) {
+				PyErr_Clear();
+				PyErr_Format(PyExc_AttributeError, "__signature__");
+			}
+
+			return -1;
+		}
+	} else if (PyDict_SetItemString(dict, "__signature__", value) < 0) {
+		return -1;
+	}
+
+	PyType_Modified((PyTypeObject *) self);
+
+	return 0;
 }
 
 static int Struct_set_attribute(

@@ -1,4 +1,15 @@
+import sys
+from pathlib import Path
 from typing import Final, NamedTuple
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib
+
+VERSION: Final = tomllib.loads(
+    Path(__file__).resolve().with_name("pyproject.toml").read_text(encoding="utf-8")
+)["project"]["version"]
 
 
 class BuildConfig(NamedTuple):
@@ -33,6 +44,7 @@ BUILD: Final = BuildConfig(
     # while c23 needs GCC 14+ or Clang 18+. An sdist has to compile on whatever
     # the machine has, and Ubuntu 24.04 LTS still ships GCC 13.
     c_flags=(
+        f"-DSALIX_VERSION={VERSION}",
         "-std=c2x",
         "-O2",
         "-Wdouble-promotion",
