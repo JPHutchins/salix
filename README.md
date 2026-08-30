@@ -21,15 +21,16 @@ Point(x=1.0, y=2.0)
 pip install salix
 ```
 
-Wheels are published for Windows, macOS, and glibc Linux on x86_64 and
-arm64, for the supported CPythons whose ABI is frozen — a release or an rc.
-A pre-release interpreter's wheels are built and tested but held back until
-its rc. salix supports CPython 3.10 through 3.15, including the free-threaded
-builds. The full matrix is `nix/python-targets.nix`; a configuration missing
-from it has no wheel. On a machine PyPI has no wheel for, pip compiles the
-sdist — which needs setuptools and a C compiler — except on Windows, where
-MSVC cannot compile this source. PyPy and GraalPy satisfy the version floor
-and have no wheels, and whether the sdist builds there is untested.
+`nix/python-targets.nix` is the wheel matrix, and wheels are published for
+its cells — Windows, macOS, and glibc Linux on x86_64 and arm64, for the
+supported CPythons whose ABI is frozen. A pre-release interpreter's wheels
+are built and tested but held back until its rc, and a configuration missing
+from the matrix has no wheel. salix supports CPython 3.10 through 3.15,
+including the free-threaded builds. On a machine PyPI has no wheel for, pip
+compiles the sdist — which needs setuptools and a C compiler — except on
+Windows, where MSVC cannot compile this source. PyPy and GraalPy satisfy the
+version floor and have no wheels, and whether the sdist builds there is
+untested.
 
 ## What salix is and is not
 
@@ -38,20 +39,20 @@ constructor takes them in that order. Instances are frozen by default: reads,
 value equality, hashing, and a repr come with the class; writes do not.
 A body-written `__init__` — inherited or not — replaces the field
 constructor, and on a frozen struct the body fills fields with `set_field`
-(the Caching section shows the pattern), since assignment raises. Inheritance
-extends the field list — a subclass adds its fields after its base's — and
-the metadata reads back: `_struct_fields_`,
+(see Caching a computed value — the example there runs in `__post_init__`),
+since assignment raises. Inheritance extends the field list — a subclass adds
+its fields after its base's — and the metadata reads back: `_struct_fields_`,
 `_struct_defaults_`, `_struct_annotations_`, and `_struct_metadata_`, with
 `__`-prefixed spellings of the same four names answering the same values.
 
 The keywords opt out of the defaults. `frozen=False` opens the record for
 writes and drops the hashing — under the default `eq=True` a writable struct
 is unhashable, and a body `__hash__` still stands. `eq=False` drops the value
-equality and hashing, leaving identity — unless the body defines its own
-`__eq__` without a `__hash__`, which makes the struct unhashable. `order=True`
-adds the field-order comparisons and requires `eq=True`. `repr`, `match_args`,
-and `weakref` default to `True`, `True`, and `False` and stand in for the
-`__repr__`, the pattern-matching signature, and the `__weakref__` slot.
+equality and hashing, leaving identity — the exceptions are named in Caching
+a computed value. `order=True` adds the field-order comparisons and requires
+`eq=True`. `repr`, `match_args`, and `weakref` default to `True`, `True`, and
+`False` and stand in for the `__repr__`, the pattern-matching signature, and
+the `__weakref__` slot.
 
 salix is not the libraries that do more. `dataclasses` builds the same record
 in pure Python. `attrs` layers converters, validators, and a plugin ecosystem
@@ -87,10 +88,11 @@ in `__post_init__` with `set_field` — unless the body writes its own
 `__init__`, which replaces the constructor that runs `__post_init__` (see
 What salix is and is not). A default whose type hashes but whose value cannot
 is refused the same way — `x: tuple = (1, [])` dies at class creation —
-because every instance would share it while its hash raises; a type outside
-the four that declares `__hash__ = None` is left alone and shared. A field
-without a default cannot follow one that has it: append defaulted fields, or
-default the new field too. For the four, `__struct_defaults__` holds the
+because every instance would share it while its hash raises; a hash that
+fails by recursing slips through and is shared, and so does a type outside
+the four that declares `__hash__ = None`. A field without a default cannot
+follow one that has it: append defaulted fields, or default the new field
+too. For the four, `__struct_defaults__` holds the
 class's own copy, severed from whatever the class body named: appending to
 the module-level object afterwards does not reach the class. The getters hand
 the stored objects out, not copies: do not mutate what `__struct_defaults__`
