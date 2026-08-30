@@ -58,18 +58,14 @@
         lib.filter ({ pythonMinor, ... }: abiIsFrozen matrix.pythons.${pythonMinor}.version) wheelIds
       );
 
-      # Only what a wheel is built from, so editing the README or the tests does
-      # not invalidate every cross build.
+      # Only what a wheel is built from, so editing the tests does not
+      # invalidate every cross build.
       buildSourceFiles = lib.fileset.unions [
         ./src
         ./salix
         ./build_config.py
         ./setup.py
         ./pyproject.toml
-        # Without it the sdist has no build_config.py and no headers, and so
-        # cannot build. A wheel does not care; the sdist is the only thing
-        # that reads it, and it is the only thing that notices.
-        ./MANIFEST.in
         ./README.md
         ./LICENSE
       ];
@@ -128,13 +124,15 @@
 
           cTests = pkgs.callPackage ./nix/c-tests.nix { src = testSource; };
 
-          # Governance docs ride the sdist alone: no wheel build reads them, and
-          # buildSourceFiles is what the wheels are built from.
+          # MANIFEST.in and the governance docs ride the sdist alone: without
+          # the manifest the sdist has no build_config.py and no headers, and a
+          # wheel build would only parse it and warn on the misses.
           sdist = pkgs.callPackage ./nix/sdist.nix {
             src = lib.fileset.toSource {
               root = ./.;
               fileset = lib.fileset.unions [
                 buildSourceFiles
+                ./MANIFEST.in
                 ./CODE_OF_CONDUCT.md
               ];
             };
