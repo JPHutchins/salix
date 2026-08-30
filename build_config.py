@@ -2,10 +2,17 @@ import re
 from pathlib import Path
 from typing import Final, NamedTuple
 
+_project_text = Path(__file__).resolve().with_name("pyproject.toml").read_text(encoding="utf-8")
+_project_header = re.search(r'^\[project\][ \t]*(?:#[^\r\n]*)?$', _project_text, re.MULTILINE)
+
+if _project_header is None:
+    raise SystemExit("build_config.py: no [project] table found in pyproject.toml")
+
+_project_section = re.split(
+    r'^\[', _project_text[_project_header.end() :], maxsplit=1, flags=re.MULTILINE
+)[0]
 _version_match = re.search(
-    r'^\[project\]$.*?^version\s*=\s*["\']([^"\']+)["\']',
-    Path(__file__).resolve().with_name("pyproject.toml").read_text(),
-    re.MULTILINE | re.DOTALL,
+    r'^version[ \t]*=[ \t]*["\']([^"\']+)["\']', _project_section, re.MULTILINE
 )
 
 if _version_match is None:

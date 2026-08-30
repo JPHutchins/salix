@@ -712,27 +712,45 @@ PyObject * Struct_get_signature(PyObject * const self, void * const closure) {
 		return NULL;
 	}
 
-	PyObject * const mro = ((PyTypeObject *) type)->tp_mro;
+	PyTypeObject * const cls = (PyTypeObject *) type;
+	PyObject * const mro = cls->tp_mro;
+	Py_ssize_t mixin = 0;
 
-	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); i += 1) {
-		PY_OWNED(entry_dict, struct_type_dict((PyTypeObject *) PyTuple_GET_ITEM(mro, i)));
+	while (
+		mixin < PyTuple_GET_SIZE(mro) &&
+		PyTuple_GET_ITEM(mro, mixin) != (PyObject *) &StructMixin_Type
+	) {
+		mixin += 1;
+	}
+
+	PY_OWNED(binding_name, PyUnicode_FromString("__signature__"));
+
+	if (binding_name == NULL) {
+		return NULL;
+	}
+
+	for (Py_ssize_t i = 0; i < mixin; i += 1) {
+		PyObject * const entry = PyTuple_GET_ITEM(mro, i);
+
+		PY_OWNED(entry_dict, struct_type_dict((PyTypeObject *) entry));
 
 		if (entry_dict == NULL) {
 			return NULL;
 		}
 
-		PyObject * const bound = dict_get_string(entry_dict, "__signature__");
+		int const present = PyDict_Contains(entry_dict, binding_name);
 
-		if (bound != NULL) {
-			if (Py_TYPE(bound) == &PyGetSetDescr_Type) {
-				continue;
-			}
-
-			return Py_NewRef(bound);
-		}
-		if (PyErr_Occurred()) {
+		if (present < 0) {
 			return NULL;
 		}
+
+		if (present == 0) {
+			continue;
+		}
+
+		PY_MOVABLE(bound, dict_value_ref(entry_dict, binding_name));
+
+		return bound != NULL ? py_move(&bound) : NULL;
 	}
 
 	if (type->struct_signature != NULL) {

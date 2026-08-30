@@ -137,6 +137,38 @@ def test_the_computed_signature_is_cached_per_type():
     assert Point.__signature__ is Point.__signature__
 
 
+def test_a_subclass_of_an_own_init_struct_inherits_the_init_signature():
+    """Measured, not assumed: the subclass's constructor is the inherited
+    __init__ — Sub(a=2) constructs and Sub(b=2) fails — so the inherited
+    signature is the call form to advertise, and the field keeps its
+    default."""
+
+    class WithInit(Struct):
+        def __init__(self, a: int) -> None:
+            pass
+
+    class Sub(WithInit):
+        b: int = 1
+
+    assert list(inspect.signature(Sub).parameters) == ["a"]
+    assert Sub(a=2).b == 1
+
+
+def test_a_struct_meta_subclass_dispatch_resolves_the_class():
+    """A StructMeta subclass passes both dispatch branches unchanged."""
+
+    Meta = type(Struct)
+
+    class MyMeta(Meta):
+        pass
+
+    class ViaMeta(Struct, metaclass=MyMeta):
+        x: int
+
+    assert list(inspect.signature(ViaMeta).parameters) == ["x"]
+    assert ViaMeta(1).__signature__ == ViaMeta.__signature__
+
+
 def test_a_field_named_signature_is_refused():
     with pytest.raises(TypeError, match="signature machinery"):
         type(Struct)("Blocked", (Struct,), {"__annotations__": {"__signature__": int, "x": int}})
@@ -149,7 +181,7 @@ def test_the_module_version_matches_its_declaration():
         declared = importlib.metadata.version("salix")
     else:
         declared = tomllib.loads(
-            (Path(__file__).resolve().parent.parent / "pyproject.toml").read_text()
+            (Path(__file__).resolve().parent.parent / "pyproject.toml").read_text(encoding="utf-8")
         )["project"]["version"]
 
     assert salix.__version__ == declared
