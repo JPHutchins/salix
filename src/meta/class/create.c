@@ -21,7 +21,12 @@ struct chain_verdict {
 };
 static int code_accepts_keyword(PyCodeObject * code, PyObject * varnames, char const * keyword);
 static PyObject * metaclass_chain(PyTypeObject * winner);
-static struct chain_verdict chain_probe(PyObject * chain, PyObject * keywords, bool weakref_column);
+static struct chain_verdict chain_probe(
+	PyObject * chain,
+	PyObject * keywords,
+	bool weakref_column,
+	PyObject * * declined
+);
 static StructType * create_class(
 	PyTypeObject * metatype,
 	PyTypeObject * handoff,
@@ -31,6 +36,7 @@ static StructType * create_class(
 	PyObject * const * keyword_rungs,
 	Py_ssize_t keyword_rung_count,
 	PyObject * forwarded_keywords,
+	PyObject * forwarded_options,
 	bool laddered,
 	PyObject * handoff_attempt,
 	PyObject * handoff_declined,
@@ -48,7 +54,13 @@ PyObject * build_struct_class(
 ) {
 	struct base_survey const survey = survey_bases(bases);
 	struct options const inherited = inherited_options(survey.behaviour, survey.facts);
-	struct options_request request = options_read(keywords, inherited, survey.facts);
+	PY_MOVABLE(forwarded_options, NULL);
+	struct options_request request = options_read(
+		keywords,
+		inherited,
+		survey.facts,
+		&forwarded_options
+	);
 
 	if (request.tag == OPTIONS_REJECTED) {
 		return NULL;
@@ -82,7 +94,7 @@ PyObject * build_struct_class(
 			return NULL;
 		}
 
-		verdict = chain_probe(chain, keywords, weakref_keyword_rides);
+		verdict = chain_probe(chain, keywords, weakref_keyword_rides, NULL);
 
 		if (verdict.accepts_all < 0) {
 			return NULL;
@@ -123,6 +135,49 @@ PyObject * build_struct_class(
 				keyword_rung_count = 3;
 			} else {
 				keyword_rung_count = 2;
+			}
+		}
+	}
+
+	if (
+		forwarded_options != NULL &&
+		PyDict_GET_SIZE(forwarded_options) > 0 &&
+		verdict.accepts_all == 0
+	) {
+		PyObject * declined = NULL;
+		struct chain_verdict const unowned_verdict = chain_probe(
+			chain,
+			forwarded_options,
+			false,
+			&declined
+		);
+
+		if (unowned_verdict.accepts_all < 0) {
+			return NULL;
+		}
+
+		if (unowned_verdict.accepts_all == 0) {
+			if (declined == NULL) {
+				PyObject * unowned_value = NULL;
+				Py_ssize_t unowned_position = 0;
+				PyDict_Next(forwarded_options, &unowned_position, &declined, &unowned_value);
+			}
+
+			PyErr_Format(
+				PyExc_TypeError,
+				"'%U' cannot reach __init_subclass__ through %.200s.__new__",
+				declined,
+				handoff->tp_name
+			);
+
+			return NULL;
+		}
+
+		if (forwarded_keywords == NULL) {
+			forwarded_keywords = forwarded_options;
+		} else {
+			if (PyDict_Update(forwarded_keywords, forwarded_options) < 0) {
+				return NULL;
 			}
 		}
 	}
@@ -220,6 +275,7 @@ struct field_plan plan = field_plan_build(base, original_namespace);
 			keyword_rungs,
 			keyword_rung_count,
 			forwarded_keywords,
+			forwarded_options,
 			laddered,
 			state->handoff_attempt,
 			state->handoff_declined,
@@ -325,7 +381,8 @@ static int code_accepts_keyword(
 static struct chain_verdict chain_probe(
 	PyObject * const chain,
 	PyObject * const keywords,
-	bool const weakref_column
+	bool const weakref_column,
+	PyObject * * const declined
 ) {
 	struct chain_verdict verdict = {.accepts_all = 1, .accepts_weakref = 1, .readable = true};
 
@@ -380,6 +437,11 @@ static struct chain_verdict chain_probe(
 
 			if (accepts == 0) {
 				verdict.accepts_all = 0;
+
+				if (declined != NULL) {
+					*declined = key;
+				}
+
 				break;
 			}
 		}
@@ -445,6 +507,7 @@ static StructType * create_class(
 	PyObject * const * const keyword_rungs,
 	Py_ssize_t const keyword_rung_count,
 	PyObject * forwarded_keywords,
+	PyObject * forwarded_options,
 	bool const laddered,
 	PyObject * const handoff_attempt,
 	PyObject * const handoff_declined,
@@ -463,7 +526,7 @@ static StructType * create_class(
 		created = PyType_Type.tp_new(
 			builder,
 			type_args,
-			builder == handoff ? NULL : forwarded_keywords
+			builder == handoff ? forwarded_options : forwarded_keywords
 		);
 	}
 

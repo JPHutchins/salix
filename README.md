@@ -54,7 +54,9 @@ equality and hashing, leaving identity — the exceptions are named in Caching
 a computed value. `order=True` adds the field-order comparisons and requires
 `eq=True`. `repr`, `match_args`, and `weakref` default to `True`, `True`, and
 `False` and stand in for the `__repr__`, the pattern-matching signature, and
-the `__weakref__` slot.
+the `__weakref__` slot. The six are consumed by the machinery; a class keyword
+it does not own reaches `__init_subclass__` in the usual way, and one the
+hierarchy does not claim still fails the class.
 
 salix is not the libraries that do more. `dataclasses` builds the same record
 in pure Python. `attrs` layers converters, validators, and a plugin ecosystem

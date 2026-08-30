@@ -45,8 +45,12 @@ def test_the_defaults_are_dataclass_defaults():
         weakref.ref(Plain(1, 2))
 
 
-def test_an_unknown_keyword_names_the_ones_that_exist():
-    with pytest.raises(TypeError, match="'frozn' is not a struct class keyword"):
+def test_an_unclaimed_keyword_fails_the_class():
+    """CPython asks object.__init_subclass__, which names the new class and
+    takes no keywords, so the typo still dies -- without salix's curated list.
+    """
+
+    with pytest.raises(TypeError, match="takes no keyword arguments"):
 
         class Typo(Struct, frozn=False):
             x: int
@@ -55,10 +59,73 @@ def test_an_unknown_keyword_names_the_ones_that_exist():
 def test_a_deferred_dataclass_option_is_rejected_rather_than_ignored():
     """kw_only is not implemented; silently accepting it would be the bug."""
 
-    with pytest.raises(TypeError, match="is not a struct class keyword"):
+    with pytest.raises(TypeError, match="takes no keyword arguments"):
 
         class Unsupported(Struct, kw_only=True):
             x: int
+
+
+class TestPep487Keywords:
+    def test_a_hierarchy_declares_its_own_class_keyword(self):
+        class Base(Struct):
+            def __init_subclass__(cls, plugin=None, **kw):
+                super().__init_subclass__(**kw)
+                cls.plugin = plugin
+
+        class Child(Base, plugin="x"):
+            value: int
+
+        assert Child.plugin == "x"
+        assert Child(1).value == 1
+
+    def test_the_keyword_is_inherited_down_the_hierarchy(self):
+        class Base(Struct):
+            def __init_subclass__(cls, plugin=None, **kw):
+                super().__init_subclass__(**kw)
+                cls.plugin = plugin
+
+        class Middle(Base):
+            value: int
+
+        class Leaf(Middle, plugin="y"):
+            extra: int = 0
+
+        assert Leaf.plugin == "y"
+        assert Leaf(1).extra == 0
+
+    def test_a_salix_keyword_never_reaches_init_subclass(self):
+        seen = []
+
+        class Base(Struct):
+            def __init_subclass__(cls, **kw):
+                seen.append(kw)
+                super().__init_subclass__(**kw)
+
+        class Child(Base, frozen=False):
+            value: int
+
+        assert seen == [{}]
+
+    def test_a_keyword_the_hierarchy_does_not_claim_fails(self):
+        class Base(Struct):
+            def __init_subclass__(cls):
+                pass
+
+        with pytest.raises(TypeError, match="unexpected keyword argument 'plugin'"):
+            class Child(Base, plugin="x"):
+                value: int
+
+    def test_a_salix_keyword_is_still_consumed_beside_a_forwarded_one(self):
+        class Base(Struct):
+            def __init_subclass__(cls, plugin=None, **kw):
+                super().__init_subclass__(**kw)
+                cls.plugin = plugin
+
+        class Child(Base, plugin="x", frozen=False):
+            value: int
+
+        assert Child.plugin == "x"
+        Child(1).value = 2
 
 
 class TestEq:

@@ -30,18 +30,19 @@ static struct options_request checked(
 	struct base_facts facts,
 	bool weakref_written
 );
-static struct options_request reject_unknown(PyObject * keyword);
-static PyObject * accepted_keywords(void);
 
 struct options_request options_read(
 	PyObject * const keywords,
 	struct options const inherited,
-	struct base_facts const facts
+	struct base_facts const facts,
+	PyObject * * const forwarded
 ) {
 	/* The record a reader hands in must already carry the base-derived facts;
 	 * inherited_options is the only producer and forces both columns. A caller
 	 * that skips the force would otherwise get a refusal for a keyword nobody
 	 * wrote, or a record that contradicts the settle verify downstream. */
+	*forwarded = NULL;
+
 	if (
 		(!inherited.frozen && facts.fielded_frozen) ||
 		(!inherited.weakref && facts.weakref_carried)
@@ -62,6 +63,12 @@ struct options_request options_read(
 		};
 	}
 
+	PY_MOVABLE(collected, PyDict_New());
+
+	if (collected == NULL) {
+		return (struct options_request){.tag = OPTIONS_REJECTED};
+	}
+
 	struct options requested = inherited;
 	bool weakref_written = false;
 	PyObject * keyword;
@@ -71,11 +78,12 @@ struct options_request options_read(
 	while (PyDict_Next(keywords, &position, &keyword, &value)) {
 		struct option_lookup const found = find_option(keyword);
 
-		switch (found.tag) {
-			case OPTION_LOOKUP_UNKNOWN:
-				return reject_unknown(keyword);
-			case OPTION_LOOKUP_FOUND:
-				break;
+		if (found.tag == OPTION_LOOKUP_UNKNOWN) {
+			if (PyDict_SetItem(collected, keyword, value) < 0) {
+				return (struct options_request){.tag = OPTIONS_REJECTED};
+			}
+
+			continue;
 		}
 
 		int const truth = PyObject_IsTrue(value);
@@ -88,7 +96,13 @@ struct options_request options_read(
 		requested = with_option(requested, found.option, truth != 0);
 	}
 
-	return checked(requested, facts, weakref_written);
+	struct options_request const request = checked(requested, facts, weakref_written);
+
+	if (request.tag == OPTIONS_RESOLVED) {
+		*forwarded = py_move(&collected);
+	}
+
+	return request;
 }
 
 static struct option_lookup find_option(PyObject * const keyword) {
@@ -162,42 +176,6 @@ static struct options_request checked(
 	};
 }
 
-static struct options_request reject_unknown(PyObject * const keyword) {
-	PY_OWNED(accepted, accepted_keywords());
-
-	if (accepted != NULL) {
-		PyErr_Format(
-			PyExc_TypeError,
-			"'%U' is not a struct class keyword; expected one of %U",
-			keyword,
-			accepted
-		);
-	}
-
-	return (struct options_request){.tag = OPTIONS_REJECTED};
-}
-
-/* Listed from the table rather than spelled out, so a new option cannot leave
- * the message behind. */
-static PyObject * accepted_keywords(void) {
-	PY_OWNED(names, PyList_New(0));
-	PY_OWNED(separator, PyUnicode_FromString(", "));
-
-	if (names == NULL || separator == NULL) {
-		return NULL;
-	}
-
-	for (Py_ssize_t i = 0; i < OPTION_COUNT; ++i) {
-		PY_OWNED(name, PyUnicode_FromString(option_keywords[i]));
-
-		if (name == NULL || PyList_Append(names, name) < 0) {
-			return NULL;
-		}
-	}
-
-	return PyUnicode_Join(separator, names);
-}
-
 #ifdef TESTING
 
 #	include "testing.h"
@@ -223,49 +201,112 @@ static struct base_facts facts_of(
 }
 
 static void test_no_keywords_inherit_the_base(void) {
+	PY_MOVABLE(forwarded, NULL);
 	struct options inherited = options_initial();
 	inherited.eq = false;
 
 	struct options_request const request = options_read(
 		NULL,
 		inherited,
-		facts_of(false, false, false)
+		facts_of(false, false, false),
+		&forwarded
 	);
 
 	TEST_ASSERT_EQUAL_INT(OPTIONS_RESOLVED, request.tag);
 	TEST_ASSERT_FALSE(request.options.eq);
 	TEST_ASSERT_TRUE(request.options.frozen);
+	TEST_ASSERT_NULL(forwarded);
 }
 
 static void test_a_keyword_replaces_only_the_flag_it_names(void) {
 	PyObject * const keywords = keywords_of("order", true);
+	PY_MOVABLE(forwarded, NULL);
 	struct options_request const request = options_read(
 		keywords,
 		options_initial(),
-		facts_of(false, false, false)
+		facts_of(false, false, false),
+		&forwarded
 	);
 
 	TEST_ASSERT_EQUAL_INT(OPTIONS_RESOLVED, request.tag);
 	TEST_ASSERT_TRUE(request.options.order);
 	TEST_ASSERT_TRUE(request.options.eq);
 	TEST_ASSERT_TRUE(request.options.frozen);
+	TEST_ASSERT_EQUAL_INT(0, PyDict_Size(forwarded));
 
 	Py_DECREF(keywords);
 }
 
-static void test_an_unknown_keyword_is_rejected(void) {
+static void test_an_unknown_keyword_is_collected_for_forwarding(void) {
 	PyObject * const keywords = keywords_of("frozn", true);
+	PY_MOVABLE(forwarded, NULL);
 	struct options_request const request = options_read(
 		keywords,
 		options_initial(),
-		facts_of(false, false, false)
+		facts_of(false, false, false),
+		&forwarded
 	);
 
-	TEST_ASSERT_EQUAL_INT(OPTIONS_REJECTED, request.tag);
-	TEST_ASSERT_TRUE(PyErr_ExceptionMatches(PyExc_TypeError));
+	TEST_ASSERT_EQUAL_INT(OPTIONS_RESOLVED, request.tag);
+	TEST_ASSERT_TRUE(request.options.frozen);
+	TEST_ASSERT_FALSE(PyErr_Occurred());
+	TEST_ASSERT_EQUAL_INT(1, PyDict_Size(forwarded));
+	TEST_ASSERT_EQUAL_INT(1, PyObject_IsTrue(PyDict_GetItemString(forwarded, "frozn")));
 
-	PyErr_Clear();
 	Py_DECREF(keywords);
+}
+
+static void test_only_unowned_keywords_are_forwarded(void) {
+	PyObject * const keywords = PyDict_New();
+
+	PyDict_SetItemString(keywords, "frozn", Py_True);
+	PyDict_SetItemString(keywords, option_keywords[OPTION_FROZEN], Py_False);
+
+	PY_MOVABLE(forwarded, NULL);
+	struct options_request const request = options_read(
+		keywords,
+		options_initial(),
+		facts_of(false, false, false),
+		&forwarded
+	);
+
+	TEST_ASSERT_EQUAL_INT(OPTIONS_RESOLVED, request.tag);
+	TEST_ASSERT_FALSE(request.options.frozen);
+	TEST_ASSERT_EQUAL_INT(1, PyDict_Size(forwarded));
+	TEST_ASSERT_EQUAL_INT(1, PyObject_IsTrue(PyDict_GetItemString(forwarded, "frozn")));
+
+	Py_DECREF(keywords);
+}
+
+static void test_the_owned_keywords_leave_nothing_to_forward(void) {
+	PyObject * const keywords = keywords_of("frozen", false);
+	PY_MOVABLE(forwarded, NULL);
+	struct options_request const request = options_read(
+		keywords,
+		options_initial(),
+		facts_of(false, false, false),
+		&forwarded
+	);
+
+	TEST_ASSERT_EQUAL_INT(OPTIONS_RESOLVED, request.tag);
+	TEST_ASSERT_FALSE(request.options.frozen);
+	TEST_ASSERT_EQUAL_INT(0, PyDict_Size(forwarded));
+
+	Py_DECREF(keywords);
+}
+
+static void test_null_keywords_forward_nothing(void) {
+	PY_MOVABLE(forwarded, NULL);
+	struct options_request const request = options_read(
+		NULL,
+		options_initial(),
+		facts_of(false, false, false),
+		&forwarded
+	);
+
+	TEST_ASSERT_EQUAL_INT(OPTIONS_RESOLVED, request.tag);
+	TEST_ASSERT_NULL(forwarded);
+	TEST_ASSERT_FALSE(PyErr_Occurred());
 }
 
 static void test_ordering_without_equality_is_rejected(void) {
@@ -273,14 +314,17 @@ static void test_ordering_without_equality_is_rejected(void) {
 	struct options inherited = options_initial();
 	inherited.eq = false;
 
+	PY_MOVABLE(forwarded, NULL);
 	struct options_request const request = options_read(
 		keywords,
 		inherited,
-		facts_of(false, false, false)
+		facts_of(false, false, false),
+		&forwarded
 	);
 
 	TEST_ASSERT_EQUAL_INT(OPTIONS_REJECTED, request.tag);
 	TEST_ASSERT_TRUE(PyErr_ExceptionMatches(PyExc_TypeError));
+	TEST_ASSERT_NULL(forwarded);
 
 	PyErr_Clear();
 	Py_DECREF(keywords);
@@ -288,10 +332,13 @@ static void test_ordering_without_equality_is_rejected(void) {
 
 static void test_a_fielded_frozen_base_pins_frozen(void) {
 	PyObject * const keywords = keywords_of("frozen", false);
+	PY_MOVABLE(forwarded, NULL);
+
 	struct options_request const constrained = options_read(
 		keywords,
 		options_initial(),
-		facts_of(true, false, false)
+		facts_of(true, false, false),
+		&forwarded
 	);
 
 	TEST_ASSERT_EQUAL_INT(OPTIONS_REJECTED, constrained.tag);
@@ -300,11 +347,13 @@ static void test_a_fielded_frozen_base_pins_frozen(void) {
 	struct options_request const free = options_read(
 		keywords,
 		options_initial(),
-		facts_of(false, false, false)
+		facts_of(false, false, false),
+		&forwarded
 	);
 
 	TEST_ASSERT_EQUAL_INT(OPTIONS_RESOLVED, free.tag);
 	TEST_ASSERT_FALSE(free.options.frozen);
+	TEST_ASSERT_EQUAL_INT(0, PyDict_Size(forwarded));
 
 	Py_DECREF(keywords);
 }
@@ -314,10 +363,12 @@ static void test_a_carried_weakref_slot_refuses_the_explicit_drop(void) {
 	struct options inherited = options_initial();
 	inherited.weakref = true;
 
+	PY_MOVABLE(forwarded, NULL);
 	struct options_request const refused = options_read(
 		keywords,
 		inherited,
-		facts_of(false, true, false)
+		facts_of(false, true, false),
+		&forwarded
 	);
 
 	TEST_ASSERT_EQUAL_INT(OPTIONS_REJECTED, refused.tag);
@@ -329,28 +380,34 @@ static void test_a_carried_weakref_slot_refuses_the_explicit_drop(void) {
 
 static void test_weakref_false_without_a_carried_slot_still_resolves(void) {
 	PyObject * const keywords = keywords_of("weakref", false);
+	PY_MOVABLE(forwarded, NULL);
 	struct options_request const request = options_read(
 		keywords,
 		options_initial(),
-		facts_of(false, false, false)
+		facts_of(false, false, false),
+		&forwarded
 	);
 
 	TEST_ASSERT_EQUAL_INT(OPTIONS_RESOLVED, request.tag);
 	TEST_ASSERT_FALSE(request.options.weakref);
+	TEST_ASSERT_EQUAL_INT(0, PyDict_Size(forwarded));
 
 	Py_DECREF(keywords);
 }
 
 static void test_frozen_true_resolves_over_the_fielded_promise(void) {
 	PyObject * const keywords = keywords_of("frozen", true);
+	PY_MOVABLE(forwarded, NULL);
 	struct options_request const request = options_read(
 		keywords,
 		options_initial(),
-		facts_of(true, false, false)
+		facts_of(true, false, false),
+		&forwarded
 	);
 
 	TEST_ASSERT_EQUAL_INT(OPTIONS_RESOLVED, request.tag);
 	TEST_ASSERT_TRUE(request.options.frozen);
+	TEST_ASSERT_EQUAL_INT(0, PyDict_Size(forwarded));
 
 	Py_DECREF(keywords);
 }
@@ -360,39 +417,48 @@ static void test_an_unwritten_weakref_over_a_carried_slot_resolves_without_a_ref
 	struct options inherited = options_initial();
 	inherited.weakref = true;
 
+	PY_MOVABLE(forwarded, NULL);
 	struct options_request const request = options_read(
 		keywords,
 		inherited,
-		facts_of(false, true, false)
+		facts_of(false, true, false),
+		&forwarded
 	);
 
 	TEST_ASSERT_EQUAL_INT(OPTIONS_RESOLVED, request.tag);
 	TEST_ASSERT_TRUE(request.options.weakref);
 	TEST_ASSERT_FALSE(request.weakref_written);
+	TEST_ASSERT_EQUAL_INT(0, PyDict_Size(forwarded));
 
 	Py_DECREF(keywords);
 }
 
 static void test_the_request_reports_that_weakref_was_written(void) {
 	PyObject * const keywords = keywords_of("weakref", true);
+	PY_MOVABLE(forwarded, NULL);
 	struct options_request const request = options_read(
 		keywords,
 		options_initial(),
-		facts_of(false, false, false)
+		facts_of(false, false, false),
+		&forwarded
 	);
 
 	TEST_ASSERT_EQUAL_INT(OPTIONS_RESOLVED, request.tag);
 	TEST_ASSERT_TRUE(request.options.weakref);
 	TEST_ASSERT_TRUE(request.weakref_written);
+	TEST_ASSERT_EQUAL_INT(0, PyDict_Size(forwarded));
 
 	Py_DECREF(keywords);
 }
 
 static void test_an_unforced_inherited_record_over_carried_facts_is_an_internal_error(void) {
+	PY_MOVABLE(forwarded, NULL);
+
 	struct options_request const weakref = options_read(
 		NULL,
 		options_initial(),
-		facts_of(false, true, false)
+		facts_of(false, true, false),
+		&forwarded
 	);
 
 	TEST_ASSERT_EQUAL_INT(OPTIONS_REJECTED, weakref.tag);
@@ -405,7 +471,8 @@ static void test_an_unforced_inherited_record_over_carried_facts_is_an_internal_
 	struct options_request const frozen = options_read(
 		NULL,
 		inherited,
-		facts_of(true, false, false)
+		facts_of(true, false, false),
+		&forwarded
 	);
 
 	TEST_ASSERT_EQUAL_INT(OPTIONS_REJECTED, frozen.tag);
@@ -419,7 +486,10 @@ void options_tests(void) {
 
 	RUN_TEST(test_no_keywords_inherit_the_base);
 	RUN_TEST(test_a_keyword_replaces_only_the_flag_it_names);
-	RUN_TEST(test_an_unknown_keyword_is_rejected);
+	RUN_TEST(test_an_unknown_keyword_is_collected_for_forwarding);
+	RUN_TEST(test_only_unowned_keywords_are_forwarded);
+	RUN_TEST(test_the_owned_keywords_leave_nothing_to_forward);
+	RUN_TEST(test_null_keywords_forward_nothing);
 	RUN_TEST(test_ordering_without_equality_is_rejected);
 	RUN_TEST(test_a_fielded_frozen_base_pins_frozen);
 	RUN_TEST(test_a_carried_weakref_slot_refuses_the_explicit_drop);

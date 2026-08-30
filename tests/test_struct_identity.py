@@ -36,6 +36,14 @@ def NeedWeakref(metatype: type) -> type:
     return Requiring
 
 
+def FrozenOnly(metatype: type) -> type:
+    class Only(metatype):
+        def __new__(metacls, name, bases, namespace, *, frozen=None):
+            return super().__new__(metacls, name, bases, namespace, frozen=frozen)
+
+    return Only
+
+
 # Both spellings of each, in one place: two literals drifted apart is a test
 # that silently stops covering a name. The order matches
 # test_metadata_names' SALIX + MSGSPEC concatenation, which is pinned.
@@ -415,6 +423,73 @@ class TestAMetaclassSubclass:
 
         with pytest.raises(TypeError, match="cannot cross"):
             META("Built", (Base,), {"__annotations__": {"y": int}}, weakref=True)
+
+    def test_an_unowned_keyword_cannot_cross_a_delegate_that_rejects_it(self):
+        """Before the refusal the chain machinery handed the build over with no
+        keywords at all, so the typo vanished without a TypeError and any owned
+        option riding along was dropped with it.
+        """
+
+        class Base(Struct, metaclass=Plain):
+            x: int
+
+        with pytest.raises(TypeError, match="cannot reach __init_subclass__"):
+            META("Built", (Base,), {"__annotations__": {"y": int}}, frozn=False)
+
+    def test_an_unowned_keyword_cannot_ride_a_delegate_that_names_only_frozen(self):
+        """frozen=True was silently dropped -- the delegate's frozen=None
+        default rode the re-entry and read as falsy -- so the class built
+        mutable. The unowned keyword now refuses the whole call instead; the
+        match is the salix message, because CPython's own __new__ binding
+        error also names plugin.
+        """
+
+        class Base(Struct, metaclass=FrozenOnly(META)):
+            x: int
+
+        with pytest.raises(TypeError, match="cannot reach __init_subclass__"):
+            META("Built", (Base,), {"__annotations__": {"y": int}}, frozen=True, plugin="x")
+
+    def test_a_forwarding_delegate_delivers_an_unowned_keyword_to_init_subclass(self):
+        class Base(Struct, metaclass=Forwarding):
+            x: int
+
+            def __init_subclass__(cls, plugin=None, **kw):
+                super().__init_subclass__(**kw)
+                cls.plugin = plugin
+
+        built = META("Built", (Base,), {"__annotations__": {"y": int}}, plugin="x")
+
+        assert built.plugin == "x"
+        assert built(1, 2).y == 2
+
+    def test_a_delegate_naming_the_keyword_delivers_it_beside_a_salix_option(self):
+        """The delegate accepts the unowned keyword and not the salix one; the
+        unowned subset rides by itself and the settle restores what the option
+        meant. The claimer lives on a parent: a body __init_subclass__ on the
+        very class a keyword-carrying __new__ is building is refused by CPython
+        itself (measured on a plain Python metaclass too), so the claimer sits
+        where type_new's lookup reaches it.
+        """
+
+        class PluginOnly(META):
+            def __new__(metacls, name, bases, namespace, *, plugin=None):
+                return super().__new__(metacls, name, bases, namespace, plugin=plugin)
+
+        class Claiming(Struct):
+            x: int
+
+            def __init_subclass__(cls, plugin=None, **kw):
+                super().__init_subclass__(**kw)
+                cls.plugin = plugin
+
+        class Base(Claiming, metaclass=PluginOnly):
+            pass
+
+        built = META("Built", (Base,), {"__annotations__": {"y": int}}, order=True, plugin="x")
+
+        assert built.plugin == "x"
+        assert built(1, 2) < built(1, 3)
 
     def test_a_c_slot_delegate_still_builds(self):
         """A __new__ that is a slot wrapper, not a Python function, used to be

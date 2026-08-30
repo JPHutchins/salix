@@ -45,5 +45,6 @@ static inline struct options options_initial(void) {
 struct options_request options_read(
 	PyObject * keywords,
 	struct options inherited,
-	struct base_facts facts
+	struct base_facts facts,
+	PyObject * * forwarded
 );
