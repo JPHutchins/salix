@@ -58,23 +58,20 @@
         lib.filter ({ pythonMinor, ... }: abiIsFrozen matrix.pythons.${pythonMinor}.version) wheelIds
       );
 
-      # Only what a wheel is built from, so editing the README or the tests does
-      # not invalidate every cross build.
+      # Only what a wheel is built from, so editing tests/ does not
+      # invalidate every cross build.
+      buildSourceFiles = lib.fileset.unions [
+        ./src
+        ./salix
+        ./build_config.py
+        ./setup.py
+        ./pyproject.toml
+        ./README.md
+        ./LICENSE
+      ];
       buildSource = lib.fileset.toSource {
         root = ./.;
-        fileset = lib.fileset.unions [
-          ./src
-          ./salix
-          ./build_config.py
-          ./setup.py
-          ./pyproject.toml
-          # Without it the sdist has no build_config.py and no headers, and so
-          # cannot build. A wheel does not care; the sdist is the only thing
-          # that reads it, and it is the only thing that notices.
-          ./MANIFEST.in
-          ./README.md
-          ./LICENSE
-        ];
+        fileset = buildSourceFiles;
       };
 
       # The in-file tests read src/, tests/c/ and the version in pyproject.toml,
@@ -127,7 +124,19 @@
 
           cTests = pkgs.callPackage ./nix/c-tests.nix { src = testSource; };
 
-          sdist = pkgs.callPackage ./nix/sdist.nix { src = buildSource; };
+          # MANIFEST.in and the governance docs ride the sdist alone: without
+          # the manifest the sdist has no build_config.py and no headers, and a
+          # wheel build would only parse it and warn on the misses.
+          sdist = pkgs.callPackage ./nix/sdist.nix {
+            src = lib.fileset.toSource {
+              root = ./.;
+              fileset = lib.fileset.unions [
+                buildSourceFiles
+                ./MANIFEST.in
+                ./CODE_OF_CONDUCT.md
+              ];
+            };
+          };
 
           # What a release uploads: every releasable wheel and the one sdist, in
           # the shape `twine upload` wants. A pre-release interpreter's wheels
