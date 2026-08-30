@@ -132,11 +132,8 @@ class PayloadCommand(Struct):
     payload: int
 
 
-def test_a_struct_satisfies_a_classvar_protocol_structurally():
-    def read(command: Command) -> bytes:
-        return command.COMMAND
-
-    assert read(PayloadCommand(1)) == b"launch"
+def test_a_classvar_protocol_member_is_a_class_variable_at_runtime():
+    assert PayloadCommand(1).COMMAND == b"launch"
     assert PayloadCommand.COMMAND == b"launch"
     assert PayloadCommand._struct_fields_ == ("payload",)
 

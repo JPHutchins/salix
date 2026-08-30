@@ -137,6 +137,24 @@ def test_a_none_binding_means_unset():
     assert list(inspect.signature(Unset).parameters) == ["x"]
 
 
+def test_a_none_binding_does_not_shadow_an_inherited_binding():
+    """None means unset, so the walk continues past it and the inherited
+    binding answers — a subclass may not use None to silence a base's
+    signature; deleting the base's binding is what does that."""
+
+    class Base(Struct):
+        x: int
+        __signature__ = inspect.Signature(
+            [inspect.Parameter("renamed", inspect.Parameter.POSITIONAL_OR_KEYWORD)]
+        )
+
+    class Sub(Base):
+        y: int = 1
+        __signature__ = None
+
+    assert list(inspect.signature(Sub).parameters) == ["renamed"]
+
+
 def test_a_base_signature_binding_is_inherited():
     """The binding lives in the base's class dict, and the getter finds it
     there like any other class attribute."""
