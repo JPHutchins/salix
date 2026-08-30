@@ -51,6 +51,12 @@ def parameters(signature: inspect.Signature) -> list[tuple[str, object, object, 
     ]
 
 
+def renamed_signature() -> inspect.Signature:
+    return inspect.Signature(
+        [inspect.Parameter("renamed", inspect.Parameter.POSITIONAL_OR_KEYWORD)]
+    )
+
+
 def test_inspect_signature_reads_the_fields_and_defaults():
     signature = inspect.signature(Point)
 
@@ -103,9 +109,7 @@ def test_a_body_signature_binding_overrides_the_machinery():
 
     class Custom(Struct):
         x: int
-        __signature__ = inspect.Signature(
-            [inspect.Parameter("renamed", inspect.Parameter.POSITIONAL_OR_KEYWORD)]
-        )
+        __signature__ = renamed_signature()
 
     assert list(inspect.signature(Custom).parameters) == ["renamed"]
     assert Custom(1).__signature__ == Custom.__signature__
@@ -135,24 +139,46 @@ def test_a_none_binding_means_unset():
         __signature__ = None
 
     assert list(inspect.signature(Unset).parameters) == ["x"]
+    assert Unset(1).__signature__ is None
 
 
 def test_a_none_binding_does_not_shadow_an_inherited_binding():
-    """None means unset, so the walk continues past it and the inherited
-    binding answers — a subclass may not use None to silence a base's
-    signature; deleting the base's binding is what does that."""
+    """None means unset on the class path, so inspect.signature walks past
+    it — on every level — and the inherited binding answers; the instance
+    path resolves the class-dict entry directly and answers None, the
+    pinned divergence."""
 
     class Base(Struct):
         x: int
-        __signature__ = inspect.Signature(
-            [inspect.Parameter("renamed", inspect.Parameter.POSITIONAL_OR_KEYWORD)]
-        )
+        __signature__ = renamed_signature()
 
-    class Sub(Base):
+    class Mid(Base):
         y: int = 1
         __signature__ = None
 
+    class Sub(Mid):
+        z: int = 1
+        __signature__ = None
+
     assert list(inspect.signature(Sub).parameters) == ["renamed"]
+    assert Sub(1, 2, 3).__signature__ is None
+
+
+def test_an_own_init_gate_precedes_the_none_walk():
+    """The own-init gate raises before the walk, so a None binding beside
+    a body __init__ answers with the __init__ signature."""
+
+    class Base(Struct):
+        x: int
+        __signature__ = renamed_signature()
+
+    class Sub(Base):
+        __signature__ = None
+
+        def __init__(self, q: int) -> None:
+            pass
+
+    assert list(inspect.signature(Sub).parameters) == ["q"]
 
 
 def test_a_base_signature_binding_is_inherited():
@@ -161,9 +187,7 @@ def test_a_base_signature_binding_is_inherited():
 
     class Custom(Struct):
         x: int
-        __signature__ = inspect.Signature(
-            [inspect.Parameter("renamed", inspect.Parameter.POSITIONAL_OR_KEYWORD)]
-        )
+        __signature__ = renamed_signature()
 
     class Sub(Custom):
         y: int = 1
@@ -177,9 +201,7 @@ def test_a_subclass_own_init_shadows_an_inherited_binding():
 
     class Custom(Struct):
         x: int
-        __signature__ = inspect.Signature(
-            [inspect.Parameter("renamed", inspect.Parameter.POSITIONAL_OR_KEYWORD)]
-        )
+        __signature__ = renamed_signature()
 
     class Sub(Custom):
         def __init__(self, q: int) -> None:
