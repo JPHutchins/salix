@@ -82,6 +82,7 @@ static PyGetSetDef StructMeta_getset[] = {
 	{
 		.name = "__signature__",
 		.get = Struct_get_signature,
+		.set = Struct_set_signature,
 		.doc = "the constructor signature inspect.signature reads",
 	},
 	{.name = NULL},

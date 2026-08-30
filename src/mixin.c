@@ -729,7 +729,31 @@ PyObject * Struct_get_signature(PyObject * const self, void * const closure) {
 		return NULL;
 	}
 
-	for (Py_ssize_t i = 0; i < mixin; i += 1) {
+	PY_OWNED(own_dict, struct_type_dict(cls));
+
+	if (own_dict == NULL) {
+		return NULL;
+	}
+
+	PY_MOVABLE(own_binding, dict_value_ref(own_dict, binding_name));
+
+	if (own_binding != NULL) {
+		return py_move(&own_binding);
+	}
+	if (PyErr_Occurred()) {
+		return NULL;
+	}
+
+	if (defines_own_init(type)) {
+		PyErr_SetString(
+			PyExc_AttributeError,
+			"the class defines its own __init__, whose signature answers instead"
+		);
+
+		return NULL;
+	}
+
+	for (Py_ssize_t i = 1; i < mixin; i += 1) {
 		PyObject * const entry = PyTuple_GET_ITEM(mro, i);
 
 		PY_OWNED(entry_dict, struct_type_dict((PyTypeObject *) entry));
@@ -750,20 +774,17 @@ PyObject * Struct_get_signature(PyObject * const self, void * const closure) {
 
 		PY_MOVABLE(bound, dict_value_ref(entry_dict, binding_name));
 
-		return bound != NULL ? py_move(&bound) : NULL;
+		if (bound != NULL) {
+			return py_move(&bound);
+		}
+
+		if (PyErr_Occurred()) {
+			return NULL;
+		}
 	}
 
 	if (type->struct_signature != NULL) {
 		return Py_NewRef(type->struct_signature);
-	}
-
-	if (defines_own_init(type)) {
-		PyErr_SetString(
-			PyExc_AttributeError,
-			"the class defines its own __init__, whose signature answers instead"
-		);
-
-		return NULL;
 	}
 
 	PY_OWNED(inspect_module, PyImport_ImportModule("inspect"));
@@ -836,6 +857,41 @@ PyObject * Struct_get_signature(PyObject * const self, void * const closure) {
 	STRUCT_END_CRITICAL_SECTION();
 
 	return py_move(&signature);
+}
+
+int Struct_set_signature(PyObject * const self, PyObject * const value, void * const closure) {
+	if (!is_struct_class(self)) {
+		PyErr_Format(
+			PyExc_AttributeError,
+			"__signature__ is defined on structs, and %.200s is not one",
+			Py_TYPE(self)->tp_name
+		);
+
+		return -1;
+	}
+
+	PY_OWNED(dict, struct_type_dict((PyTypeObject *) self));
+
+	if (dict == NULL) {
+		return -1;
+	}
+
+	if (value == NULL) {
+		if (
+			PyDict_DelItemString(dict, "__signature__") < 0 &&
+			!PyErr_ExceptionMatches(PyExc_KeyError)
+		) {
+			return -1;
+		}
+
+		PyErr_Clear();
+	} else if (PyDict_SetItemString(dict, "__signature__", value) < 0) {
+		return -1;
+	}
+
+	PyType_Modified((PyTypeObject *) self);
+
+	return 0;
 }
 
 static int Struct_set_attribute(

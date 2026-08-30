@@ -96,10 +96,10 @@ def test_a_generic_struct_keeps_the_type_variable():
 
 
 def test_a_body_signature_binding_overrides_the_machinery():
-    """The getter walks the MRO's class dicts before it computes, so an
+    """The getter reads the class's own dict before it computes, so an
     unannotated body binding wins over the computed signature on the class
-    and the instance; assigning after creation is refused, because the
-    getset has no setter."""
+    and the instance, and a post-creation patch lands in the same dict and
+    wins the same way."""
 
     class Custom(Struct):
         x: int
@@ -110,8 +110,17 @@ def test_a_body_signature_binding_overrides_the_machinery():
     assert list(inspect.signature(Custom).parameters) == ["renamed"]
     assert Custom(1).__signature__ == Custom.__signature__
 
-    with pytest.raises(AttributeError, match="not writable"):
-        Custom.__signature__ = inspect.Signature()
+    Custom.__signature__ = inspect.Signature(
+        [inspect.Parameter("patched", inspect.Parameter.POSITIONAL_OR_KEYWORD)]
+    )
+
+    assert list(inspect.signature(Custom).parameters) == ["patched"]
+    assert Custom(1).__signature__ == Custom.__signature__
+
+    del Custom.__signature__
+
+    assert list(inspect.signature(Custom).parameters) == ["x"]
+    assert Custom(1).__signature__ == Custom.__signature__
 
 
 def test_a_base_signature_binding_is_inherited():
@@ -128,6 +137,23 @@ def test_a_base_signature_binding_is_inherited():
         y: int = 1
 
     assert list(inspect.signature(Sub).parameters) == ["renamed"]
+
+
+def test_a_subclass_own_init_shadows_an_inherited_binding():
+    """The subclass wrote its own constructor, so its __init__ answers and
+    the base's binding does not describe it."""
+
+    class Custom(Struct):
+        x: int
+        __signature__ = inspect.Signature(
+            [inspect.Parameter("renamed", inspect.Parameter.POSITIONAL_OR_KEYWORD)]
+        )
+
+    class Sub(Custom):
+        def __init__(self, q: int) -> None:
+            pass
+
+    assert list(inspect.signature(Sub).parameters) == ["q"]
 
 
 def test_the_computed_signature_is_cached_per_type():

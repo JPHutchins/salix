@@ -2,23 +2,25 @@ import re
 from pathlib import Path
 from typing import Final, NamedTuple
 
-_project_text = Path(__file__).resolve().with_name("pyproject.toml").read_text(encoding="utf-8")
-_project_header = re.search(r'^\[project\][ \t]*(?:#[^\r\n]*)?$', _project_text, re.MULTILINE)
 
-if _project_header is None:
-    raise SystemExit("build_config.py: no [project] table found in pyproject.toml")
+def _project_version(text: str) -> str:
+    header = re.search(r'^\[project\][^\S\n]*(?:#[^\r\n]*)?$', text, re.MULTILINE)
 
-_project_section = re.split(
-    r'^\[', _project_text[_project_header.end() :], maxsplit=1, flags=re.MULTILINE
-)[0]
-_version_match = re.search(
-    r'^version[ \t]*=[ \t]*["\']([^"\']+)["\']', _project_section, re.MULTILINE
+    if header is None:
+        raise SystemExit("build_config.py: no [project] table found in pyproject.toml")
+
+    section = re.split(r'^\[', text[header.end() :], maxsplit=1, flags=re.MULTILINE)[0]
+    match = re.search(r'^version[ \t]*=[ \t]*["\']([^"\']+)["\']', section, re.MULTILINE)
+
+    if match is None:
+        raise SystemExit("build_config.py: no version found in pyproject.toml")
+
+    return match.group(1)
+
+
+VERSION: Final = _project_version(
+    Path(__file__).resolve().with_name("pyproject.toml").read_text(encoding="utf-8")
 )
-
-if _version_match is None:
-    raise SystemExit("build_config.py: no version found in pyproject.toml")
-
-VERSION: Final = _version_match.group(1)
 
 
 class BuildConfig(NamedTuple):
