@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 from camas import (
@@ -25,6 +26,16 @@ NIX_SOURCES = by_suffix(
 PYTHONS = tuple(Path(".python-version").read_text().split())
 OLDEST = min(PYTHONS, key=lambda python: tuple(map(int, python.split("."))))
 NEWEST = max(PYTHONS, key=lambda python: tuple(map(int, python.split("."))))
+
+# The wheel legs pin what they test to this, so a stale local wheel fails the
+# guard instead of testing the published artifact of another version.
+_PROJECT_VERSION = re.search(
+    r'^version = "([^"]+)"',
+    Path("pyproject.toml").read_text(encoding="utf-8"),
+    re.MULTILINE,
+)
+assert _PROJECT_VERSION is not None
+VERSION = _PROJECT_VERSION.group(1)
 
 # The tests member declares pytest and hypothesis, and supplies them: a
 # per-interpreter project environment is what keeps six of them from fighting
@@ -208,21 +219,23 @@ check = Parallel(test, free_threaded, format_check, lock_check, lint, analyze, c
 # can take.
 #
 # salix must come from the local tree, and once it is published the index
-# offers the same name and version. wheel_guard resolves salix with --no-index,
-# so a leg whose local wheel is missing fails there instead of passing against
-# the published artifact; the leg then resolves with the index, where
-# --find-links wins for salix (measured: uv selects the flat-index wheel for
-# an identical name and version) and the index serves the test dependencies.
+# offers the same name. Both leaves pin the version, so the guard fails on a
+# local wheel that is missing or stale rather than passing against the
+# published artifact; the leg then resolves with the index, where the same
+# pin wins the local wheel (uv selects the flat-index wheel for an identical
+# name and version -- measured, and setup-uv pins the resolver that measured
+# it) while the index serves the test dependencies.
+WHEEL_RUN = "uv run --no-cache --no-project --managed-python --python {PY}"
 wheel_guard = Task(
-    "uv run --no-cache --no-project --managed-python --python {PY}"
-    " --no-index --find-links ../result-wheels --with salix"
+    WHEEL_RUN + " --no-index --find-links ../result-wheels"
+    f' --with "salix=={VERSION}"'
     ' python -c "import salix"',
     cwd=Path("tests"),
 )
 wheel_test = Task(
-    "uv run --no-cache --no-project --managed-python --python {PY}"
-    " --find-links ../result-wheels"
-    " --with salix --with pytest --with hypothesis python -m pytest .",
+    WHEEL_RUN + " --find-links ../result-wheels"
+    f' --with "salix=={VERSION}" --with pytest --with hypothesis'
+    " python -m pytest .",
     cwd=Path("tests"),
     env={"SALIX_REQUIRE_INSTALLED": "1"},
 )

@@ -32,7 +32,7 @@ jobs:
           purge-prefixes: nix-${{ runner.os }}-
           purge-created: 0
           purge-primary-key: never
-      - run: nix develop --command uv sync --no-install-workspace --only-group ci
+      - run: nix develop --command uv sync --locked --no-install-workspace --only-group ci
       - run: nix develop --command uv run --no-sync camas ci
       - run: nix build .#default --out-link result-wheels
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -54,9 +54,11 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: 0.11.32 # the flake's pkgs.uv; the wheel leg's measured precedence is this resolver's
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: wheels
           path: result-wheels
-      - run: uv sync --no-install-workspace --only-group ci
+      - run: uv sync --locked --no-install-workspace --only-group ci
       - run: uv run --no-sync camas coverage --OS ${{ matrix.OS }} --PY ${{ matrix.PY }}
