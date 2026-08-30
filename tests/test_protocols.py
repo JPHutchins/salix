@@ -1,3 +1,5 @@
+from typing import ClassVar, Protocol
+
 import pytest
 
 from salix import Struct, set_field
@@ -119,3 +121,26 @@ def test_instances_carry_no_dict_or_weakref_slot():
         import weakref
 
         weakref.ref(point)
+
+
+class Command(Protocol):
+    COMMAND: ClassVar[bytes]
+
+
+class PayloadCommand(Struct):
+    COMMAND: ClassVar[bytes] = b"launch"
+    payload: int
+
+
+def test_a_struct_satisfies_a_classvar_protocol_structurally():
+    def read(command: Command) -> bytes:
+        return command.COMMAND
+
+    assert read(PayloadCommand(1)) == b"launch"
+    assert PayloadCommand.COMMAND == b"launch"
+    assert PayloadCommand._struct_fields_ == ("payload",)
+
+
+def test_a_struct_class_cannot_inherit_a_protocol():
+    with pytest.raises(TypeError, match="metaclass conflict"):
+        type(Struct)("Inheriting", (Struct, Command), {"__annotations__": {"payload": int}})
