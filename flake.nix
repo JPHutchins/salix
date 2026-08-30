@@ -60,22 +60,22 @@
 
       # Only what a wheel is built from, so editing the README or the tests does
       # not invalidate every cross build.
+      buildSourceFiles = lib.fileset.unions [
+        ./src
+        ./salix
+        ./build_config.py
+        ./setup.py
+        ./pyproject.toml
+        # Without it the sdist has no build_config.py and no headers, and so
+        # cannot build. A wheel does not care; the sdist is the only thing
+        # that reads it, and it is the only thing that notices.
+        ./MANIFEST.in
+        ./README.md
+        ./LICENSE
+      ];
       buildSource = lib.fileset.toSource {
         root = ./.;
-        fileset = lib.fileset.unions [
-          ./src
-          ./salix
-          ./build_config.py
-          ./setup.py
-          ./pyproject.toml
-          # Without it the sdist has no build_config.py and no headers, and so
-          # cannot build. A wheel does not care; the sdist is the only thing
-          # that reads it, and it is the only thing that notices.
-          ./MANIFEST.in
-          ./README.md
-          ./LICENSE
-          ./CODE_OF_CONDUCT.md
-        ];
+        fileset = buildSourceFiles;
       };
 
       # The in-file tests read src/, tests/c/ and the version in pyproject.toml,
@@ -128,7 +128,17 @@
 
           cTests = pkgs.callPackage ./nix/c-tests.nix { src = testSource; };
 
-          sdist = pkgs.callPackage ./nix/sdist.nix { src = buildSource; };
+          # Governance docs ride the sdist alone: no wheel build reads them, and
+          # buildSourceFiles is what the wheels are built from.
+          sdist = pkgs.callPackage ./nix/sdist.nix {
+            src = lib.fileset.toSource {
+              root = ./.;
+              fileset = lib.fileset.unions [
+                buildSourceFiles
+                ./CODE_OF_CONDUCT.md
+              ];
+            };
+          };
 
           # What a release uploads: every releasable wheel and the one sdist, in
           # the shape `twine upload` wants. A pre-release interpreter's wheels
