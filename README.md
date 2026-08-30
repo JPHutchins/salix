@@ -15,6 +15,93 @@ Point(x=1.0, y=2.0)
 
 ```
 
+## Install
+
+```sh
+pip install salix
+```
+
+`nix/python-targets.nix` is the wheel matrix — Windows, macOS, and glibc
+Linux on x86_64 and arm64, across the supported CPythons — and wheels are
+published for its cells once the interpreter's ABI is frozen. A pre-release
+interpreter's wheels are built and tested but held back until its rc, and a
+configuration missing from the matrix has no wheel. salix supports CPython
+3.10 through 3.15, including the free-threaded builds. On a machine PyPI has
+no wheel for, pip compiles the sdist — which needs setuptools and a C
+compiler — except on Windows, where MSVC cannot compile this source. PyPy
+and GraalPy satisfy the version floor and have no wheels, and whether the
+sdist builds there is untested.
+
+## What salix is and is not
+
+A struct's fields are the annotated names of its class body, and the
+constructor takes them in that order. Instances are frozen by default: reads,
+value equality, hashing, and a repr come with the class; writes do not.
+A body-written `__init__` — inherited or not — replaces the field
+constructor, unless the body writes `object.__init__` back, which restores
+the generated one; and on a frozen struct the body fills fields with
+`set_field` (see Caching a computed value — the example there runs in
+`__post_init__`), since assignment raises. Inheritance extends the field list
+— a subclass adds its fields after its base's — and the metadata reads back:
+`_struct_fields_`,
+`_struct_defaults_`, `_struct_annotations_`, and `_struct_metadata_`, with
+`__`-prefixed spellings of the same four names answering the same values.
+
+The keywords opt out of the defaults. `frozen=False` opens the record for
+writes and drops the hashing — under the default `eq=True` a writable struct
+is unhashable, and a body `__hash__` still stands. `eq=False` drops the value
+equality and hashing, leaving identity — the exceptions are named in Caching
+a computed value. `order=True` adds the field-order comparisons and requires
+`eq=True`. `repr`, `match_args`, and `weakref` default to `True`, `True`, and
+`False` and stand in for the `__repr__`, the pattern-matching signature, and
+the `__weakref__` slot.
+
+salix is not the libraries that do more. `dataclasses` builds the same record
+in pure Python. `attrs` layers converters, validators, and a plugin ecosystem
+on top. `NamedTuple` is the tuple-shaped predecessor. `msgspec` is a
+serialization library whose `Struct` validates. salix does the record and
+nothing else — no serialization, no field-value validation, no coercion — in
+C, which is where its import and type-creation times come from. Programs that
+need those features need those libraries; salix is for the ones that only
+need the record. `salix/__init__.pyi` is the whole of the API.
+
+## Defaults
+
+An empty default of `list`, `dict`, `set`, or `bytearray` is copied per
+instance, not shared:
+
+```python
+>>> from salix import Struct
+
+>>> class Box(Struct):
+...     items: list = []
+
+>>> left, right = Box(), Box()
+>>> left.items.append("left")
+>>> right.items
+[]
+
+```
+
+The copy preserves the exact type or it is not a copy — a `defaultdict` copy
+would be a plain `dict` — so the rule stops at the four, and a subclass of one
+of them is stored as the class body's object itself, shared. A non-empty
+default of the four is refused at class creation, because a copy can only be
+shallow and the contents would still be shared: default it empty and fill it
+in `__post_init__` with `set_field` — unless the body writes its own
+`__init__`, which replaces the constructor that runs `__post_init__` (see
+What salix is and is not). A default whose type hashes but whose value cannot
+is refused the same way — `x: tuple = (1, [])` dies at class creation —
+because every instance would share it while its hash raises; a hash that
+fails by recursing slips through and is shared, and so does a type outside
+the four that declares `__hash__ = None`. A field without a default cannot
+follow one that has it: append defaulted fields, or default the new field
+too. For the four, `__struct_defaults__` holds the
+class's own copy, severed from whatever the class body named: appending to
+the module-level object afterwards does not reach the class. The getters hand
+the stored objects out, not copies: do not mutate what `__struct_defaults__`
+returns.
+
 ## ClassVar and InitVar
 
 A name annotated `ClassVar[...]` at the top level is a class variable:
@@ -92,15 +179,10 @@ constructor that runs `__post_init__`, so the field answer only works
 without one. The table and the caching behaviors above are pinned in
 `tests/test_classvar_paths.py`.
 
-`salix/__init__.pyi` is the API. `src/salix.c` says what this is and is
-not. `tasks.py` is what runs. `uv run camas benchmark` says what it costs.
-
 ## Working in the repo
 
-```sh
-nix develop
-uv run camas check
-```
+The contributor loop is documented in `CONTRIBUTING.md`. `uv run camas
+benchmark` says what it costs.
 
 ## License
 
