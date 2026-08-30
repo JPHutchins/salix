@@ -21,7 +21,12 @@ struct chain_verdict {
 };
 static int code_accepts_keyword(PyCodeObject * code, PyObject * varnames, char const * keyword);
 static PyObject * metaclass_chain(PyTypeObject * winner);
-static struct chain_verdict chain_probe(PyObject * chain, PyObject * keywords, bool weakref_column);
+static struct chain_verdict chain_probe(
+	PyObject * chain,
+	PyObject * keywords,
+	bool weakref_column,
+	PyObject * * declined
+);
 static StructType * create_class(
 	PyTypeObject * metatype,
 	PyTypeObject * handoff,
@@ -89,7 +94,7 @@ PyObject * build_struct_class(
 			return NULL;
 		}
 
-		verdict = chain_probe(chain, keywords, weakref_keyword_rides);
+		verdict = chain_probe(chain, keywords, weakref_keyword_rides, NULL);
 
 		if (verdict.accepts_all < 0) {
 			return NULL;
@@ -139,18 +144,42 @@ PyObject * build_struct_class(
 		PyDict_GET_SIZE(forwarded_options) > 0 &&
 		verdict.accepts_all == 0
 	) {
-		PyObject * unowned = NULL;
-		PyObject * unowned_value = NULL;
-		Py_ssize_t unowned_position = 0;
-		PyDict_Next(forwarded_options, &unowned_position, &unowned, &unowned_value);
-		PyErr_Format(
-			PyExc_TypeError,
-			"'%U' cannot reach __init_subclass__ through %.200s.__new__",
-			unowned,
-			handoff->tp_name
+		PyObject * declined = NULL;
+		struct chain_verdict const unowned_verdict = chain_probe(
+			chain,
+			forwarded_options,
+			false,
+			&declined
 		);
 
-		return NULL;
+		if (unowned_verdict.accepts_all < 0) {
+			return NULL;
+		}
+
+		if (unowned_verdict.accepts_all == 0) {
+			if (declined == NULL) {
+				PyObject * unowned_value = NULL;
+				Py_ssize_t unowned_position = 0;
+				PyDict_Next(forwarded_options, &unowned_position, &declined, &unowned_value);
+			}
+
+			PyErr_Format(
+				PyExc_TypeError,
+				"'%U' cannot reach __init_subclass__ through %.200s.__new__",
+				declined,
+				handoff->tp_name
+			);
+
+			return NULL;
+		}
+
+		if (forwarded_keywords == NULL) {
+			forwarded_keywords = forwarded_options;
+		} else {
+			if (PyDict_Update(forwarded_keywords, forwarded_options) < 0) {
+				return NULL;
+			}
+		}
 	}
 
 	if (
@@ -352,7 +381,8 @@ static int code_accepts_keyword(
 static struct chain_verdict chain_probe(
 	PyObject * const chain,
 	PyObject * const keywords,
-	bool const weakref_column
+	bool const weakref_column,
+	PyObject * * const declined
 ) {
 	struct chain_verdict verdict = {.accepts_all = 1, .accepts_weakref = 1, .readable = true};
 
@@ -407,6 +437,11 @@ static struct chain_verdict chain_probe(
 
 			if (accepts == 0) {
 				verdict.accepts_all = 0;
+
+				if (declined != NULL) {
+					*declined = key;
+				}
+
 				break;
 			}
 		}
