@@ -2,7 +2,7 @@
 #include <Python.h>
 
 #ifndef SALIX_VERSION
-#	define SALIX_VERSION 0.0.0
+#	error "SALIX_VERSION must be defined at build time (build_config.py provides it)"
 #endif
 
 #define SALIX_STRINGIZE_INNER(version) #version

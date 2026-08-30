@@ -712,13 +712,31 @@ PyObject * Struct_get_signature(PyObject * const self, void * const closure) {
 		return NULL;
 	}
 
-	PyObject * const bound = dict_get_string(((PyTypeObject *) type)->tp_dict, "__signature__");
+	PyObject * const mro = ((PyTypeObject *) type)->tp_mro;
 
-	if (bound != NULL) {
-		return Py_NewRef(bound);
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); i += 1) {
+		PY_OWNED(entry_dict, struct_type_dict((PyTypeObject *) PyTuple_GET_ITEM(mro, i)));
+
+		if (entry_dict == NULL) {
+			return NULL;
+		}
+
+		PyObject * const bound = dict_get_string(entry_dict, "__signature__");
+
+		if (bound != NULL) {
+			if (Py_TYPE(bound) == &PyGetSetDescr_Type) {
+				continue;
+			}
+
+			return Py_NewRef(bound);
+		}
+		if (PyErr_Occurred()) {
+			return NULL;
+		}
 	}
-	if (PyErr_Occurred()) {
-		return NULL;
+
+	if (type->struct_signature != NULL) {
+		return Py_NewRef(type->struct_signature);
 	}
 
 	if (defines_own_init(type)) {
@@ -786,6 +804,18 @@ PyObject * Struct_get_signature(PyObject * const self, void * const closure) {
 	}
 
 	PY_MOVABLE(signature, PyObject_CallOneArg(signature_type, parameters));
+
+	if (signature == NULL) {
+		return NULL;
+	}
+
+	STRUCT_BEGIN_CRITICAL_SECTION(type);
+
+	if (type->struct_signature == NULL) {
+		type->struct_signature = Py_NewRef(signature);
+	}
+
+	STRUCT_END_CRITICAL_SECTION();
 
 	return py_move(&signature);
 }

@@ -1,7 +1,6 @@
 import importlib.metadata
 import inspect
 import os
-import sys
 from pathlib import Path
 from typing import Generic, TypeVar
 
@@ -9,9 +8,9 @@ import pytest
 
 from salix import Struct
 
-if sys.version_info >= (3, 11):
+try:
     import tomllib
-else:
+except ImportError:
     import tomli as tomllib
 
 T = TypeVar("T")
@@ -97,9 +96,10 @@ def test_a_generic_struct_keeps_the_type_variable():
 
 
 def test_a_body_signature_binding_overrides_the_machinery():
-    """The getter consults the class dict first, so an unannotated body
-    binding wins over the computed signature on the class and the instance;
-    assigning after creation is refused, because the getset has no setter."""
+    """The getter walks the MRO's class dicts before it computes, so an
+    unannotated body binding wins over the computed signature on the class
+    and the instance; assigning after creation is refused, because the
+    getset has no setter."""
 
     class Custom(Struct):
         x: int
@@ -114,6 +114,29 @@ def test_a_body_signature_binding_overrides_the_machinery():
         Custom.__signature__ = inspect.Signature()
 
 
+def test_a_base_signature_binding_is_inherited():
+    """The binding lives in the base's class dict, and the getter finds it
+    there like any other class attribute."""
+
+    class Custom(Struct):
+        x: int
+        __signature__ = inspect.Signature(
+            [inspect.Parameter("renamed", inspect.Parameter.POSITIONAL_OR_KEYWORD)]
+        )
+
+    class Sub(Custom):
+        y: int = 1
+
+    assert list(inspect.signature(Sub).parameters) == ["renamed"]
+
+
+def test_the_computed_signature_is_cached_per_type():
+    """Built once on first access and stashed on the type, so repeat
+    accesses return the same object and never re-import inspect."""
+
+    assert Point.__signature__ is Point.__signature__
+
+
 def test_a_field_named_signature_is_refused():
     with pytest.raises(TypeError, match="signature machinery"):
         type(Struct)("Blocked", (Struct,), {"__annotations__": {"__signature__": int, "x": int}})
@@ -125,7 +148,9 @@ def test_the_module_version_matches_its_declaration():
     if os.environ.get("SALIX_REQUIRE_INSTALLED") == "1":
         declared = importlib.metadata.version("salix")
     else:
-        declared = tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"]
+        declared = tomllib.loads(
+            (Path(__file__).resolve().parent.parent / "pyproject.toml").read_text()
+        )["project"]["version"]
 
     assert salix.__version__ == declared
 
