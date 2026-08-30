@@ -4,7 +4,7 @@ from typing import Final, NamedTuple
 
 _version_match = re.search(
     r'^version\s*=\s*["\']([^"\']+)["\']',
-    Path("pyproject.toml").read_text(),
+    Path(__file__).resolve().with_name("pyproject.toml").read_text(),
     re.MULTILINE,
 )
 
