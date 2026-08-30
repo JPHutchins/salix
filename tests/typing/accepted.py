@@ -147,8 +147,8 @@ class CarriesCommand(Struct):
     payload: int
 
 
-def a_struct_satisfies_a_classvar_protocol_structurally(command: CommandProtocol) -> bytes:
-    return command.COMMAND
+def a_struct_satisfies_a_classvar_protocol_structurally() -> None:
+    def reads(command: CommandProtocol) -> bytes:
+        return command.COMMAND
 
-
-a_struct_satisfies_a_classvar_protocol_structurally(CarriesCommand(1))
+    assert_type(reads(CarriesCommand(1)), bytes)

@@ -111,6 +111,8 @@ it is refused, because a class variable is a constant. An inherited
 field name stays a field: the inheritance rule outranks the ClassVar
 annotation, so re-annotating one re-declares the field. `InitVar[...]`
 is refused, and so is a `ClassVar` nested inside another annotation.
+A protocol is satisfied structurally, never inherited: a struct may not
+list a Protocol among its bases, because the two metaclasses conflict.
 The check walks the annotation's forms when it arrives as an object;
 when it arrives as source text — a quoted string, or a
 future-annotations string — the check is a spelling match, and the two

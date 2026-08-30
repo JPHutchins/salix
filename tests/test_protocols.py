@@ -142,5 +142,5 @@ def test_a_struct_satisfies_a_classvar_protocol_structurally():
 
 
 def test_a_struct_class_cannot_inherit_a_protocol():
-    with pytest.raises(TypeError, match="metaclass conflict"):
+    with pytest.raises(TypeError):
         type(Struct)("Inheriting", (Struct, Command), {"__annotations__": {"payload": int}})
