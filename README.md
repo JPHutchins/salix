@@ -29,24 +29,25 @@ builds. The full matrix is `nix/python-targets.nix`; a configuration missing
 from it has no wheel. On a machine PyPI has no wheel for, pip compiles the
 sdist — which needs setuptools and a C compiler — except on Windows, where
 MSVC cannot compile this source. PyPy and GraalPy satisfy the version floor
-but cannot compile the C source, and have no wheels.
+and have no wheels, and whether the sdist builds there is untested.
 
 ## What salix is and is not
 
 A struct's fields are the annotated names of its class body, and the
 constructor takes them in that order. Instances are frozen by default: reads,
 value equality, hashing, and a repr come with the class; writes do not.
-Inheritance extends the field list — a subclass adds its fields after its
-base's — and the metadata reads back: `_struct_fields_`, `_struct_defaults_`,
-`_struct_annotations_`, and `_struct_metadata_`, with `__`-prefixed spellings
-of the same four names answering the same values.
+A body-written `__init__` — inherited or not — replaces the field
+constructor. Inheritance extends the field list — a subclass adds its fields
+after its base's — and the metadata reads back: `_struct_fields_`,
+`_struct_defaults_`, `_struct_annotations_`, and `_struct_metadata_`, with
+`__`-prefixed spellings of the same four names answering the same values.
 
 The keywords opt out of the defaults. `frozen=False` opens the record for
-writes. `eq=False` drops the value equality and hashing, leaving identity.
-`order=True` adds the field-order comparisons and requires `eq=True`.
-`repr`, `match_args`, and `weakref` default to `True`, `True`, and `False`
-and stand in for the `__repr__`, the pattern-matching signature, and the
-`__weakref__` slot.
+writes and drops the hashing — a writable struct is unhashable. `eq=False`
+drops the value equality and hashing, leaving identity. `order=True` adds
+the field-order comparisons and requires `eq=True`. `repr`, `match_args`,
+and `weakref` default to `True`, `True`, and `False` and stand in for the
+`__repr__`, the pattern-matching signature, and the `__weakref__` slot.
 
 salix is not the libraries that do more. `dataclasses` builds the same record
 in pure Python. `attrs` layers converters, validators, and a plugin ecosystem
@@ -78,9 +79,13 @@ would be a plain `dict` — so the rule stops at the four, and a subclass of one
 of them is stored as the class body's object itself, shared. A non-empty
 default of the four is refused at class creation, because a copy can only be
 shallow and the contents would still be shared: default it empty and fill it
-in `__post_init__` with `set_field`. A default whose value cannot be hashed
-is refused the same way — `x: tuple = (1, [])` dies at class creation —
-because every instance would share it while its hash raises. For the four,
+in `__post_init__` with `set_field` — unless the body writes its own
+`__init__`, which replaces the constructor that runs `__post_init__`.
+A default whose type hashes but whose value cannot is refused the same way —
+`x: tuple = (1, [])` dies at class creation — because every instance would
+share it while its hash raises; a type that declares `__hash__ = None` is
+left alone and shared. A field without a default cannot follow one that has
+it: append defaulted fields, or default the new field too. For the four,
 `__struct_defaults__` holds the class's own copy, severed from whatever the
 class body named: appending to the module-level object afterwards does not
 reach the class. The getters hand the stored objects out, not copies: do not
@@ -168,6 +173,7 @@ without one. The table and the caching behaviors above are pinned in
 ```sh
 nix develop
 uv run camas check
+uv run camas benchmark
 ```
 
 ## License
