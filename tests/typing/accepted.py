@@ -1,4 +1,4 @@
-from typing import Any, ClassVar, Generic, Literal, TypeVar
+from typing import Any, ClassVar, Generic, Literal, Protocol, TypeVar
 
 from typing_extensions import assert_type
 
@@ -136,3 +136,19 @@ def __copy___returns_the_concrete_struct_type() -> None:
 
 def __deepcopy___returns_the_concrete_struct_type() -> None:
     assert_type(Point(1, "two").__deepcopy__({}), Point)
+
+
+class CommandProtocol(Protocol):
+    COMMAND: ClassVar[bytes]
+
+
+class CarriesCommand(Struct):
+    COMMAND: ClassVar[bytes] = b"carried"
+    payload: int
+
+
+def a_struct_satisfies_a_classvar_protocol_structurally() -> None:
+    def reads(command: CommandProtocol) -> bytes:
+        return command.COMMAND
+
+    assert_type(reads(CarriesCommand(1)), bytes)
