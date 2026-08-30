@@ -142,11 +142,11 @@ def test_a_none_binding_means_unset():
     assert Unset(1).__signature__ is None
 
 
-def test_a_none_binding_does_not_shadow_an_inherited_binding():
-    """None means unset on the class path, so inspect.signature walks past
-    it — on every level — and the inherited binding answers; the instance
-    path resolves the class-dict entry directly and answers None, the
-    pinned divergence."""
+def test_a_none_binding_does_not_shadow_an_inherited_binding_on_the_class_path():
+    """None means unset, so the class-path walk continues past it — on
+    every level — and the inherited binding answers. The instance path is
+    declaration, not mechanism: plain lookup answers the class-dict entry
+    before the mixin's non-data getset, so an instance answers None."""
 
     class Base(Struct):
         x: int
@@ -177,6 +177,9 @@ def test_an_own_init_gate_precedes_the_none_walk():
 
         def __init__(self, q: int) -> None:
             pass
+
+    with pytest.raises(AttributeError, match="own __init__"):
+        _ = Sub.__signature__
 
     assert list(inspect.signature(Sub).parameters) == ["q"]
 
