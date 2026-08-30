@@ -24,8 +24,8 @@ keywords = [
 # No "License :: OSI Approved :: MIT License": PyPI rejects a distribution that
 # carries it alongside License-Expression.
 #
-# PyPy and GraalPy satisfy requires-python, find no wheel, and cannot compile
-# this source; the CPython classifier is the declared signal for that.
+# PyPy and GraalPy satisfy requires-python, find no wheel, and have no tested
+# build of this source; the CPython classifier is the declared signal for that.
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",

@@ -51,6 +51,12 @@ def parameters(signature: inspect.Signature) -> list[tuple[str, object, object, 
     ]
 
 
+def renamed_signature() -> inspect.Signature:
+    return inspect.Signature(
+        [inspect.Parameter("renamed", inspect.Parameter.POSITIONAL_OR_KEYWORD)]
+    )
+
+
 def test_inspect_signature_reads_the_fields_and_defaults():
     signature = inspect.signature(Point)
 
@@ -103,9 +109,7 @@ def test_a_body_signature_binding_overrides_the_machinery():
 
     class Custom(Struct):
         x: int
-        __signature__ = inspect.Signature(
-            [inspect.Parameter("renamed", inspect.Parameter.POSITIONAL_OR_KEYWORD)]
-        )
+        __signature__ = renamed_signature()
 
     assert list(inspect.signature(Custom).parameters) == ["renamed"]
     assert Custom(1).__signature__ == Custom.__signature__
@@ -125,6 +129,14 @@ def test_a_body_signature_binding_overrides_the_machinery():
     with pytest.raises(AttributeError, match="__signature__"):
         del Custom.__signature__
 
+    Custom.__signature__ = inspect.Signature(
+        [inspect.Parameter("patched", inspect.Parameter.POSITIONAL_OR_KEYWORD)]
+    )
+    Custom.__signature__ = None
+
+    assert list(inspect.signature(Custom).parameters) == ["x"]
+    assert Custom(1).__signature__ == Custom.__signature__
+
 
 def test_a_none_binding_means_unset():
     """inspect's own protocol reads __signature__ = None as absent, so the
@@ -135,6 +147,56 @@ def test_a_none_binding_means_unset():
         __signature__ = None
 
     assert list(inspect.signature(Unset).parameters) == ["x"]
+    assert Unset(1).__signature__ == Unset.__signature__
+
+
+def test_a_none_binding_does_not_shadow_an_inherited_binding():
+    """None means unset on struct classes: the class statement drops a None
+    binding, so the walk continues past nothing on every struct level and
+    both paths answer the inherited binding. A None on a plain co-base is
+    that class's own attribute and answers on the instance path."""
+
+    class Base(Struct):
+        x: int
+        __signature__ = renamed_signature()
+
+    class Mid(Base):
+        y: int = 1
+        __signature__ = None
+
+    class Sub(Mid):
+        z: int = 1
+        __signature__ = None
+
+    assert list(inspect.signature(Sub).parameters) == ["renamed"]
+    assert Sub(1, 2, 3).__signature__ == Sub.__signature__
+
+
+def test_a_real_binding_on_a_plain_co_base_agrees_on_both_paths():
+    class PlainBase:
+        __signature__ = inspect.Signature(
+            [inspect.Parameter("plain", inspect.Parameter.POSITIONAL_OR_KEYWORD)]
+        )
+
+    class Sub(PlainBase, Struct):
+        x: int
+
+    assert list(inspect.signature(Sub).parameters) == ["plain"]
+    assert Sub(1).__signature__ == Sub.__signature__
+
+
+def test_the_own_init_gate_raises_before_the_walk():
+    """The own-init gate raises AttributeError on direct access, and
+    inspect falls back to the __init__ signature."""
+
+    class Sub(Struct):
+        def __init__(self, q: int) -> None:
+            pass
+
+    with pytest.raises(AttributeError, match="own __init__"):
+        _ = Sub.__signature__
+
+    assert list(inspect.signature(Sub).parameters) == ["q"]
 
 
 def test_a_base_signature_binding_is_inherited():
@@ -143,9 +205,7 @@ def test_a_base_signature_binding_is_inherited():
 
     class Custom(Struct):
         x: int
-        __signature__ = inspect.Signature(
-            [inspect.Parameter("renamed", inspect.Parameter.POSITIONAL_OR_KEYWORD)]
-        )
+        __signature__ = renamed_signature()
 
     class Sub(Custom):
         y: int = 1
@@ -159,9 +219,7 @@ def test_a_subclass_own_init_shadows_an_inherited_binding():
 
     class Custom(Struct):
         x: int
-        __signature__ = inspect.Signature(
-            [inspect.Parameter("renamed", inspect.Parameter.POSITIONAL_OR_KEYWORD)]
-        )
+        __signature__ = renamed_signature()
 
     class Sub(Custom):
         def __init__(self, q: int) -> None:

@@ -37,11 +37,11 @@ sdist builds there is untested.
 A struct's fields are the annotated names of its class body, and the
 constructor takes them in that order. Instances are frozen by default: reads,
 value equality, hashing, and a repr come with the class; writes do not.
-A body-written `__init__` — inherited or not — replaces the field
-constructor, unless the body writes `object.__init__` back, which restores
-the generated one; and on a frozen struct the body fills fields with
-`set_field` (see Caching a computed value — the example there runs in
-`__post_init__`), since assignment raises. Inheritance extends the field list
+A body-written `__init__` — inherited or not, and not `object.__init__` —
+replaces the field constructor; writing `object.__init__` back restores the
+generated one, and on a frozen struct the body fills fields with `set_field`
+(see Caching a computed value — the example there runs in `__post_init__`),
+since assignment raises. Inheritance extends the field list
 — a subclass adds its fields after its base's — and the metadata reads back:
 `_struct_fields_`,
 `_struct_defaults_`, `_struct_annotations_`, and `_struct_metadata_`, with
