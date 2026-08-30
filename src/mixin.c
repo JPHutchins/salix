@@ -738,7 +738,11 @@ PyObject * Struct_get_signature(PyObject * const self, void * const closure) {
 	PY_MOVABLE(own_binding, dict_value_ref(own_dict, binding_name));
 
 	if (own_binding != NULL) {
-		return py_move(&own_binding);
+		if (own_binding != Py_None) {
+			return py_move(&own_binding);
+		}
+
+		Py_DECREF(own_binding);
 	}
 	if (PyErr_Occurred()) {
 		return NULL;
@@ -775,7 +779,11 @@ PyObject * Struct_get_signature(PyObject * const self, void * const closure) {
 		PY_MOVABLE(bound, dict_value_ref(entry_dict, binding_name));
 
 		if (bound != NULL) {
-			return py_move(&bound);
+			if (bound != Py_None) {
+				return py_move(&bound);
+			}
+
+			Py_DECREF(bound);
 		}
 
 		if (PyErr_Occurred()) {
@@ -877,14 +885,14 @@ int Struct_set_signature(PyObject * const self, PyObject * const value, void * c
 	}
 
 	if (value == NULL) {
-		if (
-			PyDict_DelItemString(dict, "__signature__") < 0 &&
-			!PyErr_ExceptionMatches(PyExc_KeyError)
-		) {
+		if (PyDict_DelItemString(dict, "__signature__") < 0) {
+			if (PyErr_ExceptionMatches(PyExc_KeyError)) {
+				PyErr_Clear();
+				PyErr_Format(PyExc_AttributeError, "__signature__");
+			}
+
 			return -1;
 		}
-
-		PyErr_Clear();
 	} else if (PyDict_SetItemString(dict, "__signature__", value) < 0) {
 		return -1;
 	}

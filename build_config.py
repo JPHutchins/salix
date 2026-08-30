@@ -1,26 +1,15 @@
-import re
+import sys
 from pathlib import Path
 from typing import Final, NamedTuple
 
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib
 
-def _project_version(text: str) -> str:
-    header = re.search(r'^\[project\][^\S\n]*(?:#[^\r\n]*)?$', text, re.MULTILINE)
-
-    if header is None:
-        raise SystemExit("build_config.py: no [project] table found in pyproject.toml")
-
-    section = re.split(r'^\[', text[header.end() :], maxsplit=1, flags=re.MULTILINE)[0]
-    match = re.search(r'^version[ \t]*=[ \t]*["\']([^"\']+)["\']', section, re.MULTILINE)
-
-    if match is None:
-        raise SystemExit("build_config.py: no version found in pyproject.toml")
-
-    return match.group(1)
-
-
-VERSION: Final = _project_version(
+VERSION: Final = tomllib.loads(
     Path(__file__).resolve().with_name("pyproject.toml").read_text(encoding="utf-8")
-)
+)["project"]["version"]
 
 
 class BuildConfig(NamedTuple):

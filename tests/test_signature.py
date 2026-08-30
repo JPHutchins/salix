@@ -122,6 +122,20 @@ def test_a_body_signature_binding_overrides_the_machinery():
     assert list(inspect.signature(Custom).parameters) == ["x"]
     assert Custom(1).__signature__ == Custom.__signature__
 
+    with pytest.raises(AttributeError, match="__signature__"):
+        del Custom.__signature__
+
+
+def test_a_none_binding_means_unset():
+    """inspect's own protocol reads __signature__ = None as absent, so the
+    computed field signature answers instead of a degraded derivation."""
+
+    class Unset(Struct):
+        x: int
+        __signature__ = None
+
+    assert list(inspect.signature(Unset).parameters) == ["x"]
+
 
 def test_a_base_signature_binding_is_inherited():
     """The binding lives in the base's class dict, and the getter finds it
