@@ -207,12 +207,21 @@ check = Parallel(test, free_threaded, format_check, lock_check, lint, analyze, c
 # dislodges it, and `uv cache clean` wants a lock no leaf in a parallel tree
 # can take.
 #
-# --no-index, so the leg can only ever test the locally built wheel: with
-# salix published, PyPI offers the same name and version, and --find-links
-# adds to the resolver rather than replacing it.
+# salix must come from the local tree, and once it is published the index
+# offers the same name and version. wheel_guard resolves salix with --no-index,
+# so a leg whose local wheel is missing fails there instead of passing against
+# the published artifact; the leg then resolves with the index, where
+# --find-links wins for salix (measured: uv selects the flat-index wheel for
+# an identical name and version) and the index serves the test dependencies.
+wheel_guard = Task(
+    "uv run --no-cache --no-project --managed-python --python {PY}"
+    " --no-index --find-links ../result-wheels --with salix"
+    ' python -c "import salix"',
+    cwd=Path("tests"),
+)
 wheel_test = Task(
     "uv run --no-cache --no-project --managed-python --python {PY}"
-    " --find-links ../result-wheels --no-index"
+    " --find-links ../result-wheels"
     " --with salix --with pytest --with hypothesis python -m pytest .",
     cwd=Path("tests"),
     env={"SALIX_REQUIRE_INSTALLED": "1"},
@@ -237,7 +246,7 @@ WINDOWS_ARM_PYTHON = "cpython-{}-windows-aarch64"
 # check_wheel.py and imported by nothing (#37). Both are cross-compiled by zig,
 # which is the half of the build with nobody standing behind it.
 coverage = Parallel(
-    wheel_test,
+    Sequential(wheel_guard, wheel_test),
     variants=(
         *({"OS": "ubuntu-latest", "PY": python} for python in PYTHONS),
         {"OS": "macos-latest", "PY": OLDEST},
