@@ -126,13 +126,16 @@ def test_a_body_signature_binding_overrides_the_machinery():
     assert list(inspect.signature(Custom).parameters) == ["x"]
     assert Custom(1).__signature__ == Custom.__signature__
 
+    with pytest.raises(AttributeError, match="__signature__"):
+        del Custom.__signature__
+
+    Custom.__signature__ = inspect.Signature(
+        [inspect.Parameter("patched", inspect.Parameter.POSITIONAL_OR_KEYWORD)]
+    )
     Custom.__signature__ = None
 
     assert list(inspect.signature(Custom).parameters) == ["x"]
     assert Custom(1).__signature__ == Custom.__signature__
-
-    with pytest.raises(AttributeError, match="__signature__"):
-        del Custom.__signature__
 
 
 def test_a_none_binding_means_unset():
@@ -148,9 +151,10 @@ def test_a_none_binding_means_unset():
 
 
 def test_a_none_binding_does_not_shadow_an_inherited_binding():
-    """None means unset: the class statement drops a None binding, so the
-    walk continues past nothing on every level and every path answers the
-    inherited binding."""
+    """None means unset on struct classes: the class statement drops a None
+    binding, so the walk continues past nothing on every struct level and
+    both paths answer the inherited binding. A None on a plain co-base is
+    that class's own attribute and answers on the instance path."""
 
     class Base(Struct):
         x: int
@@ -168,13 +172,24 @@ def test_a_none_binding_does_not_shadow_an_inherited_binding():
     assert Sub(1, 2, 3).__signature__ == Sub.__signature__
 
 
-def test_an_own_init_gate_precedes_the_none_walk():
-    """The own-init gate raises before the walk, so a None binding beside
-    a body __init__ answers with the __init__ signature."""
+def test_a_real_binding_on_a_plain_co_base_agrees_on_both_paths():
+    class PlainBase:
+        __signature__ = inspect.Signature(
+            [inspect.Parameter("plain", inspect.Parameter.POSITIONAL_OR_KEYWORD)]
+        )
+
+    class Sub(PlainBase, Struct):
+        x: int
+
+    assert list(inspect.signature(Sub).parameters) == ["plain"]
+    assert Sub(1).__signature__ == Sub.__signature__
+
+
+def test_the_own_init_gate_raises_before_the_walk():
+    """The own-init gate raises AttributeError on direct access, and
+    inspect falls back to the __init__ signature."""
 
     class Sub(Struct):
-        __signature__ = None
-
         def __init__(self, q: int) -> None:
             pass
 
