@@ -49,15 +49,15 @@ PyObject * build_struct_class(
 ) {
 	struct base_survey const survey = survey_bases(bases);
 	struct options const inherited = inherited_options(survey.behaviour, survey.facts);
-	struct options_request request = options_read(keywords, inherited, survey.facts);
+	PY_MOVABLE(forwarded_options, NULL);
+	struct options_request request = options_read(
+		keywords,
+		inherited,
+		survey.facts,
+		&forwarded_options
+	);
 
 	if (request.tag == OPTIONS_REJECTED) {
-		return NULL;
-	}
-
-	PY_MOVABLE(forwarded_options, options_forwarded(keywords));
-
-	if (keywords != NULL && forwarded_options == NULL) {
 		return NULL;
 	}
 
@@ -132,6 +132,25 @@ PyObject * build_struct_class(
 				keyword_rung_count = 2;
 			}
 		}
+	}
+
+	if (
+		forwarded_options != NULL &&
+		PyDict_GET_SIZE(forwarded_options) > 0 &&
+		verdict.accepts_all == 0
+	) {
+		PyObject * unowned = NULL;
+		PyObject * unowned_value = NULL;
+		Py_ssize_t unowned_position = 0;
+		PyDict_Next(forwarded_options, &unowned_position, &unowned, &unowned_value);
+		PyErr_Format(
+			PyExc_TypeError,
+			"'%U' cannot reach __init_subclass__ through %.200s.__new__",
+			unowned,
+			handoff->tp_name
+		);
+
+		return NULL;
 	}
 
 	if (
