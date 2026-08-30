@@ -5,6 +5,7 @@
 # this is a nix derivation and not a bare camas command -- it needs libpython
 # and unity on the link line, and nix is where those paths come from.
 {
+  lib,
   stdenv,
   python3,
   unity-test,
@@ -13,7 +14,7 @@
 
 stdenv.mkDerivation {
   pname = "salix-c-tests";
-  version = "0.0.0";
+  version = (lib.importTOML (src + "/pyproject.toml")).project.version;
   inherit src;
 
   nativeBuildInputs = [ python3 ];

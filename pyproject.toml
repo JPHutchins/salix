@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "salix"
-version = "0.0.0"
+version = "0.1.0"
 description = "A C-backed, inheritable Struct base class for Python — fast import, fast type creation"
 readme = "README.md"
 requires-python = ">=3.10"

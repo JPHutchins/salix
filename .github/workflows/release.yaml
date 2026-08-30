@@ -30,7 +30,7 @@ jobs:
           gc-max-store-size-linux: 5G
           save: false
 
-      - run: nix develop --command uv sync --no-install-workspace --only-group ci
+      - run: nix develop --command uv sync --locked --no-install-workspace --only-group ci
 
       - env:
           TAG: ${{ github.ref_name }}

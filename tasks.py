@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 from camas import (
@@ -25,6 +26,16 @@ NIX_SOURCES = by_suffix(
 PYTHONS = tuple(Path(".python-version").read_text().split())
 OLDEST = min(PYTHONS, key=lambda python: tuple(map(int, python.split("."))))
 NEWEST = max(PYTHONS, key=lambda python: tuple(map(int, python.split("."))))
+
+# The wheel legs pin what they test to this, so a stale local wheel fails the
+# guard instead of testing the published artifact of another version.
+_PROJECT_VERSION = re.search(
+    r'^version = "([^"]+)"',
+    Path("pyproject.toml").read_text(encoding="utf-8"),
+    re.MULTILINE,
+)
+assert _PROJECT_VERSION is not None
+VERSION = _PROJECT_VERSION.group(1)
 
 # The tests member declares pytest and hypothesis, and supplies them: a
 # per-interpreter project environment is what keeps six of them from fighting
@@ -75,6 +86,7 @@ nix_format = Task("nixfmt {paths}", paths=NIX_SOURCES, mutates=True)
 nix_format_check = Task("nixfmt --check {paths}", paths=NIX_SOURCES)
 format = Parallel(c_format, nix_format)
 format_check = Parallel(c_format_check, nix_format_check)
+lock_check = Task("uv lock --check")
 
 # Two engines rather than one: they are independent implementations, and the
 # flags carry -Werror, so gcc also holds the build to a second compiler.
@@ -189,7 +201,7 @@ free_threaded = Sequential(free_threaded_build, free_threaded_pytest)
 benchmark = Sequential(
     Task("uv run python setup.py build_ext --inplace", mutates=True, env=STRICT_BUILD), bench
 )
-check = Parallel(test, free_threaded, format_check, lint, analyze, c_test, type_check)
+check = Parallel(test, free_threaded, format_check, lock_check, lint, analyze, c_test, type_check)
 
 # Installed, not compiled: MSVC has no __attribute__((cleanup)), so the Windows
 # leg cannot build this source at all.
@@ -200,15 +212,30 @@ check = Parallel(test, free_threaded, format_check, lint, analyze, c_test, type_
 # dependencies is the cost -- uv run takes neither a pyproject.toml for
 # --with-requirements nor a member whose sources it is told to ignore.
 #
-# --no-cache, because the version is permanently 0.0.0: uv keys its cache on
-# name and version, so a rebuilt wheel is indistinguishable from one built
-# months ago and it serves the old archive. Neither --refresh-package nor
-# --reinstall-package dislodges it, and `uv cache clean` wants a lock no leaf
-# in a parallel tree can take. A real version would retire this flag.
+# --no-cache: uv keys its cache on name and version, so a rebuilt wheel of the
+# same released version is indistinguishable from one built before and it
+# serves the old archive. Neither --refresh-package nor --reinstall-package
+# dislodges it, and `uv cache clean` wants a lock no leaf in a parallel tree
+# can take.
+#
+# salix must come from the local tree, and once it is published the index
+# offers the same name. Both leaves pin the version, so the guard fails on a
+# local wheel that is missing or stale rather than passing against the
+# published artifact; the leg then resolves with the index, where the same
+# pin wins the local wheel (uv selects the flat-index wheel for an identical
+# name and version -- measured, and setup-uv pins the resolver that measured
+# it) while the index serves the test dependencies.
+WHEEL_RUN = "uv run --no-cache --no-project --managed-python --python {PY}"
+wheel_guard = Task(
+    WHEEL_RUN + " --no-index --find-links ../result-wheels"
+    f' --with "salix=={VERSION}"'
+    ' python -c "import salix"',
+    cwd=Path("tests"),
+)
 wheel_test = Task(
-    "uv run --no-cache --no-project --managed-python --python {PY}"
-    " --find-links ../result-wheels"
-    " --with salix --with pytest --with hypothesis python -m pytest .",
+    WHEEL_RUN + " --find-links ../result-wheels"
+    f' --with "salix=={VERSION}" --with pytest --with hypothesis'
+    " python -m pytest .",
     cwd=Path("tests"),
     env={"SALIX_REQUIRE_INSTALLED": "1"},
 )
@@ -232,7 +259,7 @@ WINDOWS_ARM_PYTHON = "cpython-{}-windows-aarch64"
 # check_wheel.py and imported by nothing (#37). Both are cross-compiled by zig,
 # which is the half of the build with nobody standing behind it.
 coverage = Parallel(
-    wheel_test,
+    Sequential(wheel_guard, wheel_test),
     variants=(
         *({"OS": "ubuntu-latest", "PY": python} for python in PYTHONS),
         {"OS": "macos-latest", "PY": OLDEST},
@@ -246,6 +273,6 @@ coverage = Parallel(
     ),
 )
 
-ci = Parallel(flake_check, free_threaded, format_check, lint, analyze, type_check)
+ci = Parallel(flake_check, free_threaded, format_check, lock_check, lint, analyze, type_check)
 
 _ = Config(default_task=check, github_task=ci, agent=Claude(fix=format, check=check))
