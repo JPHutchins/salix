@@ -75,6 +75,7 @@ nix_format = Task("nixfmt {paths}", paths=NIX_SOURCES, mutates=True)
 nix_format_check = Task("nixfmt --check {paths}", paths=NIX_SOURCES)
 format = Parallel(c_format, nix_format)
 format_check = Parallel(c_format_check, nix_format_check)
+lock_check = Task("uv lock --check")
 
 # Two engines rather than one: they are independent implementations, and the
 # flags carry -Werror, so gcc also holds the build to a second compiler.
@@ -189,7 +190,7 @@ free_threaded = Sequential(free_threaded_build, free_threaded_pytest)
 benchmark = Sequential(
     Task("uv run python setup.py build_ext --inplace", mutates=True, env=STRICT_BUILD), bench
 )
-check = Parallel(test, free_threaded, format_check, lint, analyze, c_test, type_check)
+check = Parallel(test, free_threaded, format_check, lock_check, lint, analyze, c_test, type_check)
 
 # Installed, not compiled: MSVC has no __attribute__((cleanup)), so the Windows
 # leg cannot build this source at all.
@@ -200,14 +201,18 @@ check = Parallel(test, free_threaded, format_check, lint, analyze, c_test, type_
 # dependencies is the cost -- uv run takes neither a pyproject.toml for
 # --with-requirements nor a member whose sources it is told to ignore.
 #
-# --no-cache, because the version is permanently 0.0.0: uv keys its cache on
-# name and version, so a rebuilt wheel is indistinguishable from one built
-# months ago and it serves the old archive. Neither --refresh-package nor
-# --reinstall-package dislodges it, and `uv cache clean` wants a lock no leaf
-# in a parallel tree can take. A real version would retire this flag.
+# --no-cache: uv keys its cache on name and version, so a rebuilt wheel of the
+# same released version is indistinguishable from one built before and it
+# serves the old archive. Neither --refresh-package nor --reinstall-package
+# dislodges it, and `uv cache clean` wants a lock no leaf in a parallel tree
+# can take.
+#
+# --no-index, so the leg can only ever test the locally built wheel: with
+# salix published, PyPI offers the same name and version, and --find-links
+# adds to the resolver rather than replacing it.
 wheel_test = Task(
     "uv run --no-cache --no-project --managed-python --python {PY}"
-    " --find-links ../result-wheels"
+    " --find-links ../result-wheels --no-index"
     " --with salix --with pytest --with hypothesis python -m pytest .",
     cwd=Path("tests"),
     env={"SALIX_REQUIRE_INSTALLED": "1"},
@@ -246,6 +251,6 @@ coverage = Parallel(
     ),
 )
 
-ci = Parallel(flake_check, free_threaded, format_check, lint, analyze, type_check)
+ci = Parallel(flake_check, free_threaded, format_check, lock_check, lint, analyze, type_check)
 
 _ = Config(default_task=check, github_task=ci, agent=Claude(fix=format, check=check))
