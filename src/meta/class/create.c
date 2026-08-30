@@ -31,6 +31,7 @@ static StructType * create_class(
 	PyObject * const * keyword_rungs,
 	Py_ssize_t keyword_rung_count,
 	PyObject * forwarded_keywords,
+	PyObject * forwarded_options,
 	bool laddered,
 	PyObject * handoff_attempt,
 	PyObject * handoff_declined,
@@ -51,6 +52,12 @@ PyObject * build_struct_class(
 	struct options_request request = options_read(keywords, inherited, survey.facts);
 
 	if (request.tag == OPTIONS_REJECTED) {
+		return NULL;
+	}
+
+	PY_MOVABLE(forwarded_options, options_forwarded(keywords));
+
+	if (keywords != NULL && forwarded_options == NULL) {
 		return NULL;
 	}
 
@@ -220,6 +227,7 @@ struct field_plan plan = field_plan_build(base, original_namespace);
 			keyword_rungs,
 			keyword_rung_count,
 			forwarded_keywords,
+			forwarded_options,
 			laddered,
 			state->handoff_attempt,
 			state->handoff_declined,
@@ -445,6 +453,7 @@ static StructType * create_class(
 	PyObject * const * const keyword_rungs,
 	Py_ssize_t const keyword_rung_count,
 	PyObject * forwarded_keywords,
+	PyObject * forwarded_options,
 	bool const laddered,
 	PyObject * const handoff_attempt,
 	PyObject * const handoff_declined,
@@ -463,7 +472,7 @@ static StructType * create_class(
 		created = PyType_Type.tp_new(
 			builder,
 			type_args,
-			builder == handoff ? NULL : forwarded_keywords
+			builder == handoff ? forwarded_options : forwarded_keywords
 		);
 	}
 

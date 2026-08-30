@@ -110,6 +110,19 @@ def the_options_a_checker_cannot_see_are_still_accepted() -> None:
     assert_type(Options(1).value, int)
 
 
+def a_struct_hierarchy_declares_its_own_class_keyword() -> None:
+    class Base(Struct):
+        def __init_subclass__(
+            cls, plugin: str | None = None, **keywords: Any
+        ) -> None:
+            super().__init_subclass__(**keywords)
+
+    class Child(Base, plugin="x"):
+        value: int
+
+    assert_type(Child(1).value, int)
+
+
 def set_field_takes_a_struct_a_name_and_any_value() -> None:
     assert_type(set_field(Point(1, "two"), "x", 9), None)
     set_field(Point(1, "two"), "y", object())

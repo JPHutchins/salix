@@ -47,3 +47,4 @@ struct options_request options_read(
 	struct options inherited,
 	struct base_facts facts
 );
+PyObject * options_forwarded(PyObject * keywords);

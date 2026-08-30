@@ -30,8 +30,6 @@ static struct options_request checked(
 	struct base_facts facts,
 	bool weakref_written
 );
-static struct options_request reject_unknown(PyObject * keyword);
-static PyObject * accepted_keywords(void);
 
 struct options_request options_read(
 	PyObject * const keywords,
@@ -71,11 +69,8 @@ struct options_request options_read(
 	while (PyDict_Next(keywords, &position, &keyword, &value)) {
 		struct option_lookup const found = find_option(keyword);
 
-		switch (found.tag) {
-			case OPTION_LOOKUP_UNKNOWN:
-				return reject_unknown(keyword);
-			case OPTION_LOOKUP_FOUND:
-				break;
+		if (found.tag == OPTION_LOOKUP_UNKNOWN) {
+			continue;
 		}
 
 		int const truth = PyObject_IsTrue(value);
@@ -162,40 +157,30 @@ static struct options_request checked(
 	};
 }
 
-static struct options_request reject_unknown(PyObject * const keyword) {
-	PY_OWNED(accepted, accepted_keywords());
-
-	if (accepted != NULL) {
-		PyErr_Format(
-			PyExc_TypeError,
-			"'%U' is not a struct class keyword; expected one of %U",
-			keyword,
-			accepted
-		);
-	}
-
-	return (struct options_request){.tag = OPTIONS_REJECTED};
-}
-
-/* Listed from the table rather than spelled out, so a new option cannot leave
- * the message behind. */
-static PyObject * accepted_keywords(void) {
-	PY_OWNED(names, PyList_New(0));
-	PY_OWNED(separator, PyUnicode_FromString(", "));
-
-	if (names == NULL || separator == NULL) {
+PyObject * options_forwarded(PyObject * const keywords) {
+	if (keywords == NULL) {
 		return NULL;
 	}
 
-	for (Py_ssize_t i = 0; i < OPTION_COUNT; ++i) {
-		PY_OWNED(name, PyUnicode_FromString(option_keywords[i]));
+	PY_MOVABLE(forwarded, PyDict_New());
 
-		if (name == NULL || PyList_Append(names, name) < 0) {
-			return NULL;
+	if (forwarded == NULL) {
+		return NULL;
+	}
+
+	Py_ssize_t position = 0;
+	PyObject * keyword;
+	PyObject * value;
+
+	while (PyDict_Next(keywords, &position, &keyword, &value)) {
+		if (find_option(keyword).tag == OPTION_LOOKUP_UNKNOWN) {
+			if (PyDict_SetItem(forwarded, keyword, value) < 0) {
+				return NULL;
+			}
 		}
 	}
 
-	return PyUnicode_Join(separator, names);
+	return py_move(&forwarded);
 }
 
 #ifdef TESTING
@@ -253,7 +238,7 @@ static void test_a_keyword_replaces_only_the_flag_it_names(void) {
 	Py_DECREF(keywords);
 }
 
-static void test_an_unknown_keyword_is_rejected(void) {
+static void test_an_unknown_keyword_is_skipped(void) {
 	PyObject * const keywords = keywords_of("frozn", true);
 	struct options_request const request = options_read(
 		keywords,
@@ -261,11 +246,42 @@ static void test_an_unknown_keyword_is_rejected(void) {
 		facts_of(false, false, false)
 	);
 
-	TEST_ASSERT_EQUAL_INT(OPTIONS_REJECTED, request.tag);
-	TEST_ASSERT_TRUE(PyErr_ExceptionMatches(PyExc_TypeError));
+	TEST_ASSERT_EQUAL_INT(OPTIONS_RESOLVED, request.tag);
+	TEST_ASSERT_TRUE(request.options.frozen);
+	TEST_ASSERT_FALSE(PyErr_Occurred());
 
-	PyErr_Clear();
 	Py_DECREF(keywords);
+}
+
+static void test_only_unowned_keywords_are_forwarded(void) {
+	PyObject * const keywords = PyDict_New();
+
+	PyDict_SetItemString(keywords, "frozn", Py_True);
+	PyDict_SetItemString(keywords, option_keywords[OPTION_FROZEN], Py_False);
+
+	PY_OWNED(forwarded, options_forwarded(keywords));
+
+	TEST_ASSERT_NOT_NULL(forwarded);
+	TEST_ASSERT_EQUAL_INT(1, PyDict_Size(forwarded));
+	TEST_ASSERT_EQUAL_INT(1, PyObject_IsTrue(PyDict_GetItemString(forwarded, "frozn")));
+
+	Py_DECREF(keywords);
+}
+
+static void test_the_owned_keywords_leave_nothing_to_forward(void) {
+	PyObject * const keywords = keywords_of("frozen", false);
+
+	PY_OWNED(forwarded, options_forwarded(keywords));
+
+	TEST_ASSERT_NOT_NULL(forwarded);
+	TEST_ASSERT_EQUAL_INT(0, PyDict_Size(forwarded));
+
+	Py_DECREF(keywords);
+}
+
+static void test_null_keywords_forward_nothing(void) {
+	TEST_ASSERT_NULL(options_forwarded(NULL));
+	TEST_ASSERT_FALSE(PyErr_Occurred());
 }
 
 static void test_ordering_without_equality_is_rejected(void) {
@@ -419,7 +435,10 @@ void options_tests(void) {
 
 	RUN_TEST(test_no_keywords_inherit_the_base);
 	RUN_TEST(test_a_keyword_replaces_only_the_flag_it_names);
-	RUN_TEST(test_an_unknown_keyword_is_rejected);
+	RUN_TEST(test_an_unknown_keyword_is_skipped);
+	RUN_TEST(test_only_unowned_keywords_are_forwarded);
+	RUN_TEST(test_the_owned_keywords_leave_nothing_to_forward);
+	RUN_TEST(test_null_keywords_forward_nothing);
 	RUN_TEST(test_ordering_without_equality_is_rejected);
 	RUN_TEST(test_a_fielded_frozen_base_pins_frozen);
 	RUN_TEST(test_a_carried_weakref_slot_refuses_the_explicit_drop);
