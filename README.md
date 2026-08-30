@@ -15,6 +15,68 @@ Point(x=1.0, y=2.0)
 
 ```
 
+## Install
+
+```sh
+pip install salix
+```
+
+Wheels are published for every supported CPython — including the
+free-threaded builds — on every platform PyPI carries. salix supports CPython
+3.10 through 3.15. A machine PyPI has no wheel for compiles the sdist, which
+needs setuptools and a C compiler. PyPy and GraalPy satisfy the version floor
+but cannot compile the C source, and have no wheels.
+
+## What salix is and is not
+
+A struct's fields are the annotated names of its class body, and the
+constructor takes them in that order. Instances are frozen by default: reads,
+value equality, hashing, and a repr come with the class; writes do not.
+Inheritance extends the plan — a subclass adds its fields after its base's —
+and the metadata reads back: `_struct_fields_`, `_struct_defaults_`,
+`_struct_annotations_`, and `_struct_metadata_`, with `__`-prefixed spellings
+of the same four names answering the same values.
+
+The keywords select out of the default. `frozen=False` opens the record for
+writes. `eq=False` drops the value equality and hashing, leaving identity.
+`order=True` adds the field-order comparisons and requires `eq=True`.
+`repr=False`, `match_args`, and `weakref` stand in for the `__repr__`, the
+pattern-matching signature, and the `__weakref__` slot.
+
+salix is not the libraries that do more. `dataclasses` builds the same record
+in pure Python. `attrs` layers converters, validators, and a plugin ecosystem
+on top. `NamedTuple` is the tuple-shaped ancestor. `msgspec` is a
+serialization library whose `Struct` validates. salix does the record and
+nothing else — no serialization, no validation, no coercion — in C, which is
+where its import and type-creation times come from. Programs that need those
+features need those libraries; salix is for the ones that only need the
+record.
+
+## Defaults
+
+An empty default of `list`, `dict`, `set`, or `bytearray` is copied per
+instance, not shared:
+
+```python
+>>> class Box(Struct):
+...     items: list = []
+
+>>> left, right = Box(), Box()
+>>> left.items.append("left")
+>>> right.items
+[]
+
+```
+
+The copy preserves the exact type or it is not a copy — a `defaultdict` copy
+would be a plain `dict` — so the rule stops at the four, and a subclass of one
+of them is shared. A non-empty default of the four is refused at class
+creation, because a copy can only be shallow and the contents would still be
+shared: default it empty and fill it in `__post_init__` with `set_field`.
+`__struct_defaults__` holds the class's own copy, severed from whatever the
+class body named: appending to the module-level object afterwards does not
+reach the class.
+
 ## ClassVar and InitVar
 
 A name annotated `ClassVar[...]` at the top level is a class variable:
@@ -91,9 +153,6 @@ from a struct base that defines `__eq__`. An `__init__` that is not
 constructor that runs `__post_init__`, so the field answer only works
 without one. The table and the caching behaviors above are pinned in
 `tests/test_classvar_paths.py`.
-
-`salix/__init__.pyi` is the API. `src/salix.c` says what this is and is
-not. `tasks.py` is what runs. `uv run camas benchmark` says what it costs.
 
 ## Working in the repo
 
