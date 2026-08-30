@@ -37,19 +37,21 @@ A struct's fields are the annotated names of its class body, and the
 constructor takes them in that order. Instances are frozen by default: reads,
 value equality, hashing, and a repr come with the class; writes do not.
 A body-written `__init__` — inherited or not — replaces the field
-constructor, and on a frozen struct the body fills fields with `set_field`,
-since assignment raises. Inheritance extends the field list — a subclass adds
-its fields after its base's — and the metadata reads back: `_struct_fields_`,
+constructor, and on a frozen struct the body fills fields with `set_field`
+(the Caching section shows the pattern), since assignment raises. Inheritance
+extends the field list — a subclass adds its fields after its base's — and
+the metadata reads back: `_struct_fields_`,
 `_struct_defaults_`, `_struct_annotations_`, and `_struct_metadata_`, with
 `__`-prefixed spellings of the same four names answering the same values.
 
 The keywords opt out of the defaults. `frozen=False` opens the record for
 writes and drops the hashing — under the default `eq=True` a writable struct
 is unhashable, and a body `__hash__` still stands. `eq=False` drops the value
-equality and hashing, leaving identity. `order=True` adds the field-order
-comparisons and requires `eq=True`. `repr`, `match_args`, and `weakref`
-default to `True`, `True`, and `False` and stand in for the `__repr__`, the
-pattern-matching signature, and the `__weakref__` slot.
+equality and hashing, leaving identity — unless the body defines its own
+`__eq__` without a `__hash__`, which makes the struct unhashable. `order=True`
+adds the field-order comparisons and requires `eq=True`. `repr`, `match_args`,
+and `weakref` default to `True`, `True`, and `False` and stand in for the
+`__repr__`, the pattern-matching signature, and the `__weakref__` slot.
 
 salix is not the libraries that do more. `dataclasses` builds the same record
 in pure Python. `attrs` layers converters, validators, and a plugin ecosystem
@@ -173,8 +175,8 @@ without one. The table and the caching behaviors above are pinned in
 
 ## Working in the repo
 
-The contributor loop is `CONTRIBUTING.md`. `uv run camas benchmark` says what
-it costs.
+The contributor loop is documented in `CONTRIBUTING.md`. `uv run camas
+benchmark` says what it costs.
 
 ## License
 
