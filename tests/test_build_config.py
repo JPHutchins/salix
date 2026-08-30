@@ -1,6 +1,14 @@
+import os
+
 import pytest
 
-from build_config import _project_version
+pytestmark = pytest.mark.skipif(
+    os.environ.get("SALIX_REQUIRE_INSTALLED") == "1",
+    reason="the wheel-smoke env installs the wheel and carries no repo root",
+)
+
+if os.environ.get("SALIX_REQUIRE_INSTALLED") != "1":
+    from build_config import _project_version
 
 
 def test_the_version_reads_from_the_project_table():
