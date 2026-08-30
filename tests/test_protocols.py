@@ -133,6 +133,7 @@ class PayloadCommand(Struct):
 
 
 def test_a_classvar_protocol_member_is_a_class_variable_at_runtime():
+    assert PayloadCommand(1).COMMAND == b"launch"
     assert PayloadCommand.COMMAND == b"launch"
     assert PayloadCommand._struct_fields_ == ("payload",)
 

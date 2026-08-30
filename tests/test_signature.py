@@ -126,6 +126,11 @@ def test_a_body_signature_binding_overrides_the_machinery():
     assert list(inspect.signature(Custom).parameters) == ["x"]
     assert Custom(1).__signature__ == Custom.__signature__
 
+    Custom.__signature__ = None
+
+    assert list(inspect.signature(Custom).parameters) == ["x"]
+    assert Custom(1).__signature__ == Custom.__signature__
+
     with pytest.raises(AttributeError, match="__signature__"):
         del Custom.__signature__
 
@@ -139,14 +144,13 @@ def test_a_none_binding_means_unset():
         __signature__ = None
 
     assert list(inspect.signature(Unset).parameters) == ["x"]
-    assert Unset(1).__signature__ is None
+    assert Unset(1).__signature__ == Unset.__signature__
 
 
-def test_a_none_binding_does_not_shadow_an_inherited_binding_on_the_class_path():
-    """None means unset, so the class-path walk continues past it — on
-    every level — and the inherited binding answers. The instance path is
-    declaration, not mechanism: plain lookup answers the class-dict entry
-    before the mixin's non-data getset, so an instance answers None."""
+def test_a_none_binding_does_not_shadow_an_inherited_binding():
+    """None means unset: the class statement drops a None binding, so the
+    walk continues past nothing on every level and every path answers the
+    inherited binding."""
 
     class Base(Struct):
         x: int
@@ -161,18 +165,14 @@ def test_a_none_binding_does_not_shadow_an_inherited_binding_on_the_class_path()
         __signature__ = None
 
     assert list(inspect.signature(Sub).parameters) == ["renamed"]
-    assert Sub(1, 2, 3).__signature__ is None
+    assert Sub(1, 2, 3).__signature__ == Sub.__signature__
 
 
 def test_an_own_init_gate_precedes_the_none_walk():
     """The own-init gate raises before the walk, so a None binding beside
     a body __init__ answers with the __init__ signature."""
 
-    class Base(Struct):
-        x: int
-        __signature__ = renamed_signature()
-
-    class Sub(Base):
+    class Sub(Struct):
         __signature__ = None
 
         def __init__(self, q: int) -> None:

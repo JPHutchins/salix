@@ -46,6 +46,7 @@ static enum result apply_options(
 );
 static enum result rebind(PyObject * namespace, char const * const * names, bool from_mixin);
 static enum result drop_class_variables(PyObject * namespace, PyObject * all_names);
+static enum result drop_none_signature(PyObject * namespace);
 static int binding_belongs_to_body(
 	PyObject * namespace,
 	PyObject * name,
@@ -82,6 +83,7 @@ PyObject * build_class_namespace(
 		slots != NULL &&
 		namespace != NULL &&
 		drop_class_variables(namespace, all_names) == RESULT_OK &&
+		drop_none_signature(namespace) == RESULT_OK &&
 		PyDict_SetItemString(namespace, "__slots__", slots) == 0 &&
 		set_match_args(namespace, all_names, options.match_args) == RESULT_OK &&
 		apply_options(
@@ -475,6 +477,20 @@ static enum result drop_class_variables(PyObject * const namespace, PyObject * c
 	}
 
 	return RESULT_OK;
+}
+
+static enum result drop_none_signature(PyObject * const namespace) {
+	PyObject * const bound = dict_get_string(namespace, "__signature__");
+
+	if (bound == NULL) {
+		return PyErr_Occurred() ? RESULT_ERROR : RESULT_OK;
+	}
+
+	if (bound != Py_None) {
+		return RESULT_OK;
+	}
+
+	return PyDict_DelItemString(namespace, "__signature__") < 0 ? RESULT_ERROR : RESULT_OK;
 }
 
 enum result refuse_mixin_method_fields(PyObject * const all_names) {

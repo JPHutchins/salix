@@ -884,7 +884,16 @@ int Struct_set_signature(PyObject * const self, PyObject * const value, void * c
 		return -1;
 	}
 
-	if (value == NULL) {
+	if (value == Py_None) {
+		if (
+			PyDict_DelItemString(dict, "__signature__") < 0 &&
+			!PyErr_ExceptionMatches(PyExc_KeyError)
+		) {
+			return -1;
+		}
+
+		PyErr_Clear();
+	} else if (value == NULL) {
 		if (PyDict_DelItemString(dict, "__signature__") < 0) {
 			if (PyErr_ExceptionMatches(PyExc_KeyError)) {
 				PyErr_Clear();
