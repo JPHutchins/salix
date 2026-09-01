@@ -19,8 +19,9 @@ a8bcf1f): 8473 passed, 40 failed, 1 module excluded.
    Stock non-slots dataclasses accept arbitrary instance attributes
    (`obj.extra = 1`); structs are closed. Omegaconf's `to_container` sets
    non-init fields via `setattr`, which fails for fields not in the struct.
-   The patch injects a `set_field`-backed `__setattr__`, so declared fields
-   assign correctly; undeclared ones cannot exist.
+   Salix core's builder injects a plain-assignment `__setattr__` divert into
+   the class dict (not set_field-backed); declared fields assign correctly
+   through it, undeclared ones cannot exist.
 
 ## Tyro tier (patch, zero source changes)
 

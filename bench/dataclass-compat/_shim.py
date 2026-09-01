@@ -79,8 +79,10 @@ def _is_initvar(annotation: Any) -> bool:
     if isinstance(annotation, str):
         head = re.split(r"[\s\[\],]+", annotation, maxsplit=1)[0]
         return head == "InitVar" or head.endswith(".InitVar")
-    return isinstance(annotation, dataclasses.InitVar) or (
-        getattr(annotation, "__origin__", None) is dataclasses.InitVar
+    return (
+        annotation is dataclasses.InitVar
+        or isinstance(annotation, dataclasses.InitVar)
+        or getattr(annotation, "__origin__", None) is dataclasses.InitVar
     )
 
 
@@ -97,10 +99,18 @@ def _is_non_field_annotation(annotation: Any) -> bool:
     return _is_initvar(annotation) or _is_classvar(annotation)
 
 
+_merged_flags_cache: weakref.WeakKeyDictionary[
+    type[Any], dict[str, tuple[bool, bool, bool | None]]
+] = weakref.WeakKeyDictionary()
+
+
 def _merged_field_flags(struct_cls: type[Struct]) -> dict[str, tuple[bool, bool, bool | None]]:
-    merged: dict[str, tuple[bool, bool, bool | None]] = {}
-    for base in reversed(struct_cls.__mro__):
-        merged.update(_field_flags.get(base, {}))
+    merged = _merged_flags_cache.get(struct_cls)
+    if merged is None:
+        merged = {}
+        for base in reversed(struct_cls.__mro__):
+            merged.update(_field_flags.get(base, {}))
+        _merged_flags_cache[struct_cls] = merged
     return merged
 
 
@@ -235,8 +245,6 @@ _SALIX_MEMBERS = frozenset(
         "__slots__",
         "__static_attributes__",
         "__classcell__",
-        "__setattr__",
-        "__delattr__",
     }
 )
 
@@ -361,6 +369,14 @@ def _deepcopy_factory(default: Any) -> Callable[[], Any]:
     return lambda: copy.deepcopy(default)
 
 
+def _mutable_default_or_raise(name: str, value: Any, *, raw: bool) -> Callable[[], Any]:
+    if not raw or sys.version_info >= (3, 14):
+        raise ValueError(
+            f"mutable default {type(value)} for field {name} is not allowed: use default_factory"
+        )
+    return _deepcopy_factory(value)
+
+
 def _translate_field(
     cls_name: str,
     name: str,
@@ -371,11 +387,7 @@ def _translate_field(
     metadata = dict(value.metadata)
     if value.default is not dataclasses.MISSING:
         if _needs_factory_default(value.default):
-            try:
-                copy.deepcopy(value.default)
-            except TypeError:
-                return _Translated(value.default, value.init, None, metadata, kw_only, *flags)
-            return _Translated(_PLACEHOLDER, value.init, _deepcopy_factory(value.default), metadata, kw_only, *flags)
+            return _Translated(_PLACEHOLDER, value.init, _mutable_default_or_raise(name, value.default, raw=False), metadata, kw_only, *flags)
         return _Translated(value.default, value.init, None, metadata, kw_only, *flags)
     if value.default_factory is not dataclasses.MISSING:
         return _Translated(_PLACEHOLDER, value.init, value.default_factory, metadata, kw_only, *flags)
@@ -478,42 +490,44 @@ def _rebind_class_cells(built: type[Any], old_cls: type[Any]) -> None:
 # salix's C setattro, and frozen structs refuse it (AttributeError instead of
 # stock's FrozenInstanceError — a message-parity gap only).
 def _make_init(params: list[tuple[str, Any, bool, bool]]) -> Callable[[Struct], None]:
-    from salix import set_field as _set_field
+    from salix import set_field as _shim_set_field
 
-    receiver = "__dataclass_self__" if any(name == "self" for name, _, _, _ in params) else "self"
+    receiver = "_shim_receiver" if any(name == "self" for name, _, _, _ in params) else "self"
     arg_list = [receiver]
     for name, default, kw_only, _ in params:
         if kw_only and "*" not in arg_list:
             arg_list.append("*")
-        arg_list.append(name if default is dataclasses.MISSING else f"{name}=_INIT_UNSET")
+        arg_list.append(name if default is dataclasses.MISSING else f"{name}=_shim_unset")
     body = [f"def __init__({', '.join(arg_list)}):"]
     for name, default, _, is_initvar in params:
         if is_initvar:
             if default is not dataclasses.MISSING and default is not _PLACEHOLDER:
-                body.append(f"    if {name} is _INIT_UNSET: {name} = _fresh(_defaults[{name!r}])")
+                body.append(f"    if {name} is _shim_unset: {name} = _shim_fresh(_shim_defaults[{name!r}])")
             continue
         if default is dataclasses.MISSING:
-            body.append(f"    _set_field({receiver}, {name!r}, {name})")
+            body.append(f"    _shim_set_field({receiver}, {name!r}, {name})")
             continue
-        body.append(f"    if {name} is not _INIT_UNSET:")
-        body.append(f"        _set_field({receiver}, {name!r}, {name})")
+        body.append(f"    if {name} is not _shim_unset:")
+        body.append(f"        _shim_set_field({receiver}, {name!r}, {name})")
         if default is _PLACEHOLDER:
             continue
         body.append("    else:")
-        body.append(f"        _set_field({receiver}, {name!r}, _fresh(_defaults[{name!r}]))")
+        body.append(f"        _shim_set_field({receiver}, {name!r}, _shim_fresh(_shim_defaults[{name!r}]))")
     initvar_names = [name for name, _, _, is_initvar in params if is_initvar]
     initvar_args = "" if not initvar_names else ", " + ", ".join(initvar_names)
-    body.append(f'    _post = getattr(type({receiver}), "__post_init__", None)')
-    body.append("    if _post is not None:")
-    body.append(f"        _post({receiver}{initvar_args})")
+    body.append(f'    _shim_post = getattr(type({receiver}), "__post_init__", None)')
+    body.append("    if _shim_post is not None:")
+    body.append(f"        _shim_post({receiver}{initvar_args})")
     namespace: dict[str, Any] = {
-        "_set_field": _set_field,
-        "_INIT_UNSET": _INIT_UNSET,
-        "_defaults": {name: default for name, default, _, _ in params if default is not dataclasses.MISSING},
-        "_fresh": _fresh_default,
+        "_shim_set_field": _shim_set_field,
+        "_shim_unset": _INIT_UNSET,
+        "_shim_defaults": {name: default for name, default, _, _ in params if default is not dataclasses.MISSING},
+        "_shim_fresh": _fresh_default,
     }
     exec(compile("\n".join(body), "<shim __init__>", "exec"), namespace)
-    return cast(Callable[[Struct], None], namespace["__init__"])
+    synthesized = cast(Callable[[Struct], None], namespace["__init__"])
+    synthesized._shim_synthesized = True  # type: ignore[attr-defined]
+    return synthesized
 
 
 def _rebuild_struct_subclass(
@@ -533,7 +547,7 @@ def _rebuild_struct_subclass(
     inherited_factories: dict[str, Callable[[], Any]] = {}
     no_init: set[str] = set()
     kw_only_names: set[str] = set()
-    for base in struct.__mro__:
+    for base in struct.__mro__[1:]:
         inherited_factories.update(_factories.get(base, {}))
         no_init.update(_no_init.get(base, frozenset()))
         kw_only_names.update(_kw_only.get(base, frozenset()))
@@ -577,12 +591,14 @@ def _rebuild_struct_subclass(
             field_flags_map[name] = (translated.compare, translated.repr, translated.hash)
             continue
         if _needs_factory_default(value):
-            factories.append((name, _deepcopy_factory(value)))
+            factories.append((name, _mutable_default_or_raise(name, value, raw=True)))
             namespace[name] = _PLACEHOLDER
             continue
         namespace[name] = value
     for key, value in cls.__dict__.items():
         if key in names or key in _SALIX_MEMBERS:
+            continue
+        if key in ("__setattr__", "__delattr__") and value is getattr(object, key):
             continue
         if key == "__hash__" and value is None and eq:
             continue
@@ -592,7 +608,14 @@ def _rebuild_struct_subclass(
     merged = {**inherited_factories, **dict(factories)}
     if merged:
         namespace["__post_init__"] = _make_post_init(list(merged.items()), getattr(cls, "__post_init__", None))
-    if (no_init or kw_only_names or kw_only) and "__init__" not in cls.__dict__:
+    stored_params = cls.__dict__.get("__dataclass_params__")
+    kw_only_changed = stored_params is not None and bool(getattr(stored_params, "kw_only", False)) != kw_only
+    if (
+        no_init or kw_only_names or kw_only or kw_only_changed
+    ) and (
+        "__init__" not in cls.__dict__
+        or getattr(cls.__dict__.get("__init__"), "_shim_synthesized", False)
+    ):
         namespace["__init__"] = _make_init(
             [
                 (
@@ -670,6 +693,7 @@ def _rebuild_struct_subclass(
     if field_metadata:
         _field_metadata[built] = field_metadata
     if merged_flags:
+        _merged_flags_cache.pop(built, None)
         _field_flags[built] = merged_flags
     _rebind_class_cells(cast(type[Any], built), cls)
     return cast(type[_T], built)
@@ -749,7 +773,7 @@ def dataclass(
                     kw_only_names.add(name)
                 field_flags_map[name] = (translated.compare, translated.repr, translated.hash)
             elif name in body_annotations and _needs_factory_default(value):
-                factories.append((name, _deepcopy_factory(value)))
+                factories.append((name, _mutable_default_or_raise(name, value, raw=True)))
                 namespace[name] = _PLACEHOLDER
                 field_flags_map[name] = (True, True, None)
             else:
@@ -842,6 +866,7 @@ def dataclass(
         if field_metadata:
             _field_metadata[built] = field_metadata
         if field_flags_map:
+            _merged_flags_cache.pop(built, None)
             _field_flags[built] = field_flags_map
         _rebind_class_cells(cast(type[Any], built), cls)
         return cast(type[_T], built)
