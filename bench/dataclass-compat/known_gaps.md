@@ -66,12 +66,12 @@ The InitVar story the tyro tier opened (passing InitVars to
 
 
 
-- `kw_only=True` and decorator-level `init=False` raise `NotImplementedError`.
-- `init=False` fields with `default_factory` keep `_PLACEHOLDER` as a class
-  attribute instead of stock's factory-on-class quirk.
+- Decorator-level `init=False` raises `NotImplementedError` (field-level
+  `init=False` is shimmed).
+- `init=False` fields with `default_factory`: the class attribute is a salix
+  member descriptor, not the factory result stock stores on the class (the
+  instance value is correct).
 - `__match_args__` includes `init=False` fields (stock excludes them).
-- `inspect.signature` of generated init is `(self, /, *args, **kwargs)`
-  (salix's C signature), not the per-field stock signature.
 - `asdict`/`replace` for structs are dict-comprehension/`salix.replace`
   equivalents; `asdict` deep-copies but does not recurse through nested
   dataclasses with `dict_factory` options.
@@ -82,3 +82,8 @@ The InitVar story the tyro tier opened (passing InitVars to
   degenerate state stock dataclasses produce (its `init` parameter is ignored
   when the body defines `__init__`, and the generated init that would call
   `__post_init__` is never created).
+
+Frozen structs hash by content even with eq=False: salix's tp_hash slot is
+content-based and a body `__hash__` only changes the attribute view, not
+hash() — so `@dataclass(frozen=True, eq=False)` classes get a content hash
+where stock keeps identity hashing. Salix-level, documented.

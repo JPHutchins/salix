@@ -32,6 +32,7 @@ _stock_dataclass = dataclasses.dataclass
 _combined_metaclasses: dict[type[Any], type[Any]] = {}
 _PY_TPFLAGS_HEAPTYPE = 1 << 9
 _excluded_prefixes: list[str] = []
+_field_doc_required = "doc" in inspect.signature(dataclasses.Field.__init__).parameters
 
 
 def _caller_excluded() -> bool:
@@ -130,6 +131,26 @@ def _make_repr() -> Callable[[Struct], str]:
         return f"{type(self).__qualname__}({inner})"
 
     return __repr__
+
+
+def _make_ordering(op: str) -> Callable[[Struct, object], Any]:
+    def compare(self: Struct, other: object) -> Any:
+        if other.__class__ is self.__class__:
+            flags = _merged_field_flags(type(self))
+            compared = [
+                name
+                for name in type(self).__struct_fields__
+                if flags.get(name, (True, True, None))[0]
+            ]
+            return cast(
+                bool,
+                getattr(
+                    tuple(getattr(self, name) for name in compared), op
+                )(tuple(getattr(other, name) for name in compared)),
+            )
+        return NotImplemented
+
+    return compare
 
 
 def _make_hash() -> Callable[[Struct], int]:
@@ -251,6 +272,7 @@ def _build_fields(
             "compare": compare,
             "metadata": metadata_map.get(name) or ({} if not extras[position] else {"extras": extras[position]}),
             "kw_only": name in kw_only_names,
+            **({"doc": None} if _field_doc_required else {}),
         }
         field = dataclasses.Field(**field_kwargs)
         field.name = name
@@ -354,6 +376,24 @@ def _translate_field(
     if value.default_factory is not dataclasses.MISSING:
         return _Translated(_PLACEHOLDER, value.init, value.default_factory, metadata, kw_only, *flags)
     return _Translated(dataclasses.MISSING, value.init, None, metadata, kw_only, *flags)
+
+
+def _params_equal(a: Any, b: Any) -> bool:
+    if a is None or b is None:
+        return False
+    return all(
+        getattr(a, attr) == getattr(b, attr)
+        for attr in (
+            "init",
+            "repr",
+            "eq",
+            "order",
+            "unsafe_hash",
+            "frozen",
+            "match_args",
+            "kw_only",
+        )
+    )
 
 
 def _dataclass_params(
@@ -502,17 +542,9 @@ def _rebuild_struct_subclass(
     own_names = [name for name in names if name not in inherited]
     defaulted = names[len(names) - len(defaults) :] if defaults else ()
     default_map = dict(zip(defaulted, defaults, strict=True))
-    if (
-        not own_names
-        and not any(
-            isinstance(value, dataclasses.Field) or _needs_factory_default(value)
-            for value in default_map.values()
-        )
-        and not inherited_factories
-        and not no_init
-        and not kw_only_names
-        and cls.__dict__.get("__dataclass_params__")
-        == _dataclass_params(init, repr, eq, order, unsafe_hash, frozen, match_args, kw_only)
+    if _params_equal(
+        cls.__dict__.get("__dataclass_params__"),
+        _dataclass_params(init, repr, eq, order, unsafe_hash, frozen, match_args, kw_only),
     ):
         return cls
     namespace: dict[str, Any] = {}
@@ -548,7 +580,7 @@ def _rebuild_struct_subclass(
     for key, value in cls.__dict__.items():
         if key in names or key in _SALIX_MEMBERS:
             continue
-        if key == "__hash__" and value is None:
+        if key == "__hash__" and value is None and eq:
             continue
         if key.startswith("__struct_") or key.startswith("_struct_"):
             continue
@@ -559,7 +591,12 @@ def _rebuild_struct_subclass(
     if (no_init or kw_only_names or kw_only) and "__init__" not in cls.__dict__:
         namespace["__init__"] = _make_init(
             [
-                (name, namespace.get(name, dataclasses.MISSING), name in kw_only_names or kw_only, False)
+                (
+                    name,
+                    namespace.get(name, dataclasses.MISSING),
+                    name in kw_only_names or (kw_only and name in own_names),
+                    False,
+                )
                 for name in names
                 if name not in no_init
             ]
@@ -579,11 +616,17 @@ def _rebuild_struct_subclass(
     hash_restricted = any(
         flags[2] is False or not flags[0] for flags in merged_flags.values()
     )
-    if eq and any(not flags[0] for flags in merged_flags.values()):
+    compare_restricted = any(not flags[0] for flags in merged_flags.values())
+    if eq and compare_restricted:
         namespace["__eq__"] = _make_eq()
+    if order and compare_restricted:
+        namespace["__lt__"] = _make_ordering("__lt__")
+        namespace["__le__"] = _make_ordering("__le__")
+        namespace["__gt__"] = _make_ordering("__gt__")
+        namespace["__ge__"] = _make_ordering("__ge__")
     if repr and any(not flags[1] for flags in merged_flags.values()):
         namespace["__repr__"] = _make_repr()
-    if unsafe_hash or (frozen and hash_restricted):
+    if unsafe_hash or (eq and frozen and hash_restricted):
         namespace["__hash__"] = _make_hash()
     namespace["__dataclass_fields__"] = _build_fields(
         names,
@@ -685,6 +728,8 @@ def dataclass(
                 namespace[name] = value
                 continue
             if isinstance(value, dataclasses.Field):
+                if name not in body_annotations:
+                    raise TypeError(f"'{name}' is a field but has no type annotation")
                 translated = _translate_field(cls.__name__, name, value)
                 if translated.factory is not None:
                     factories.append((name, translated.factory))
@@ -748,11 +793,17 @@ def dataclass(
         hash_restricted = any(
             flags[2] is False or not flags[0] for flags in field_flags_map.values()
         )
-        if eq and any(not flags[0] for flags in field_flags_map.values()):
+        compare_restricted = any(not flags[0] for flags in field_flags_map.values())
+        if eq and compare_restricted:
             namespace["__eq__"] = _make_eq()
+        if order and compare_restricted:
+            namespace["__lt__"] = _make_ordering("__lt__")
+            namespace["__le__"] = _make_ordering("__le__")
+            namespace["__gt__"] = _make_ordering("__gt__")
+            namespace["__ge__"] = _make_ordering("__ge__")
         if repr and any(not flags[1] for flags in field_flags_map.values()):
             namespace["__repr__"] = _make_repr()
-        if unsafe_hash or (frozen and hash_restricted):
+        if unsafe_hash or (eq and frozen and hash_restricted):
             namespace["__hash__"] = _make_hash()
         namespace["__dataclass_fields__"] = _build_fields(
             field_names,

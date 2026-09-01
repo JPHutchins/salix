@@ -81,5 +81,12 @@ internals stay stock.
 
 ## Source tier
 
-Planned: a fork of omegaconf rewritten to salix-native idioms (no `@dataclass`
-decorators), per the discussion in #160. Not started yet.
+Fork [JPHutchins/omegaconf-salix](https://github.com/JPHutchins/omegaconf-salix)
+(branch `salix-native`, draft PR), rewriting omegaconf to salix-native idioms:
+`Metadata`/`ContainerMetadata` are salix `Struct`s with `__reduce__`
+reconstruction, struct input is recognized in `_utils`, and pickle works
+through `__getstate__`/`__setstate__` resolving the class by module+qualname.
+
+Measured (2026-09-01): 8553 passed / 2 failed — the 2 are legacy-pickle
+artifact tests. `benchmarks/salix_vs_stock.py` A/B: deepcopy −22%,
+pickle +47%, the rest parity.
