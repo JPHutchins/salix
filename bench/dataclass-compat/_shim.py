@@ -1,6 +1,7 @@
 import copy
 import dataclasses
 import inspect
+import re
 import sys
 import typing
 import weakref
@@ -44,6 +45,15 @@ def _caller_excluded() -> bool:
     )
 
 
+def _called_from_init_subclass(cls: type[Any]) -> bool:
+    frame: FrameType | None = sys._getframe(1)
+    while frame is not None:
+        if frame.f_code.co_name == "__init_subclass__" and frame.f_locals.get("cls") is cls:
+            return True
+        frame = frame.f_back
+    return False
+
+
 def _needs_stock_fallback(bases: tuple[type[Any], ...]) -> bool:
     return any(
         (
@@ -66,7 +76,8 @@ def _has_descriptor_field_collision(cls: type[Any], field_names: tuple[str, ...]
 
 def _is_initvar(annotation: Any) -> bool:
     if isinstance(annotation, str):
-        return "InitVar[" in annotation or annotation.endswith("InitVar")
+        head = re.split(r"[\s\[\],]+", annotation, maxsplit=1)[0]
+        return head == "InitVar" or head.endswith(".InitVar")
     return isinstance(annotation, dataclasses.InitVar) or (
         getattr(annotation, "__origin__", None) is dataclasses.InitVar
     )
@@ -74,7 +85,8 @@ def _is_initvar(annotation: Any) -> bool:
 
 def _is_classvar(annotation: Any) -> bool:
     if isinstance(annotation, str):
-        return "ClassVar[" in annotation or annotation.endswith("ClassVar")
+        head = re.split(r"[\s\[\],]+", annotation, maxsplit=1)[0]
+        return head == "ClassVar" or head.endswith(".ClassVar")
     return annotation is typing.ClassVar or (
         getattr(annotation, "__origin__", None) is typing.ClassVar
     )
@@ -94,10 +106,11 @@ def _merged_field_flags(struct_cls: type[Struct]) -> dict[str, tuple[bool, bool,
 def _make_eq() -> Callable[[Struct, object], bool]:
     def __eq__(self: Struct, other: object) -> bool:
         if other.__class__ is self.__class__:
+            flags = _merged_field_flags(type(self))
             compared = [
                 name
-                for name, flags in _merged_field_flags(type(self)).items()
-                if flags[0]
+                for name in type(self).__struct_fields__
+                if flags.get(name, (True, True, None))[0]
             ]
             return all(getattr(self, name) == getattr(other, name) for name in compared)
         return NotImplemented
@@ -107,10 +120,11 @@ def _make_eq() -> Callable[[Struct, object], bool]:
 
 def _make_repr() -> Callable[[Struct], str]:
     def __repr__(self: Struct) -> str:
+        flags = _merged_field_flags(type(self))
         shown = [
             name
-            for name, flags in _merged_field_flags(type(self)).items()
-            if flags[1]
+            for name in type(self).__struct_fields__
+            if flags.get(name, (True, True, None))[1]
         ]
         inner = ", ".join(f"{name}={getattr(self, name)!r}" for name in shown)
         return f"{type(self).__qualname__}({inner})"
@@ -120,10 +134,13 @@ def _make_repr() -> Callable[[Struct], str]:
 
 def _make_hash() -> Callable[[Struct], int]:
     def __hash__(self: Struct) -> int:
+        flags = _merged_field_flags(type(self))
         hashed = [
             name
-            for name, flags in _merged_field_flags(type(self)).items()
-            if flags[0] and flags[2] is not False
+            for name in type(self).__struct_fields__
+            if (flags.get(name, (True, True, None))[2]
+                if flags.get(name, (True, True, None))[2] is not None
+                else flags.get(name, (True, True, None))[0])
         ]
         return hash(tuple(getattr(self, name) for name in hashed))
 
@@ -328,6 +345,10 @@ def _translate_field(
     metadata = dict(value.metadata)
     if value.default is not dataclasses.MISSING:
         if _needs_factory_default(value.default):
+            try:
+                copy.deepcopy(value.default)
+            except TypeError:
+                return _Translated(value.default, value.init, None, metadata, kw_only, *flags)
             return _Translated(_PLACEHOLDER, value.init, _deepcopy_factory(value.default), metadata, kw_only, *flags)
         return _Translated(value.default, value.init, None, metadata, kw_only, *flags)
     if value.default_factory is not dataclasses.MISSING:
@@ -400,7 +421,11 @@ def _rebind_class_cells(built: type[Any], old_cls: type[Any]) -> None:
         closure = getattr(func, "__closure__", None)
         if closure:
             for cell in closure:
-                if cell.cell_contents is old_cls:
+                try:
+                    contents = cell.cell_contents
+                except ValueError:
+                    continue
+                if contents is old_cls:
                     cell.cell_contents = built
 
 
@@ -461,12 +486,6 @@ def _rebuild_struct_subclass(
     struct = cast(type[Struct], cls)
     names = struct.__struct_fields__
     defaults = struct.__struct_defaults__
-    if not names:
-        # __init_subclass__ sees the class before salix finalizes its struct
-        # metadata; a post-creation struct subclass always has the aligned
-        # field tuple, so empty means mid-creation — defer to the decorator
-        # that runs after the class statement completes.
-        return cls
     inherited_factories: dict[str, Callable[[], Any]] = {}
     no_init: set[str] = set()
     kw_only_names: set[str] = set()
@@ -529,6 +548,8 @@ def _rebuild_struct_subclass(
     for key, value in cls.__dict__.items():
         if key in names or key in _SALIX_MEMBERS:
             continue
+        if key == "__hash__" and value is None:
+            continue
         if key.startswith("__struct_") or key.startswith("_struct_"):
             continue
         namespace[key] = value
@@ -550,18 +571,19 @@ def _rebuild_struct_subclass(
         metadata_map.update(_field_metadata.get(base, {}))
     metadata_map.update(field_metadata)
     if kw_only:
-        kw_only_names.update(names)
+        kw_only_names.update(own_names)
     merged_flags = {
         **_merged_field_flags(struct),
         **field_flags_map,
     }
-    if any(not flags[0] for flags in merged_flags.values()):
+    hash_restricted = any(
+        flags[2] is False or not flags[0] for flags in merged_flags.values()
+    )
+    if eq and any(not flags[0] for flags in merged_flags.values()):
         namespace["__eq__"] = _make_eq()
-    if any(not flags[1] for flags in merged_flags.values()):
+    if repr and any(not flags[1] for flags in merged_flags.values()):
         namespace["__repr__"] = _make_repr()
-    if any(flags[2] is False for flags in merged_flags.values()):
-        namespace["__hash__"] = _make_hash()
-    if unsafe_hash:
+    if unsafe_hash or (frozen and hash_restricted):
         namespace["__hash__"] = _make_hash()
     namespace["__dataclass_fields__"] = _build_fields(
         names,
@@ -576,6 +598,11 @@ def _rebuild_struct_subclass(
         merged_flags,
     )
     namespace["__dataclass_params__"] = _dataclass_params(init, repr, eq, order, unsafe_hash, frozen, match_args, kw_only)
+    if not names and _called_from_init_subclass(cls):
+        # Mid-__init_subclass__: salix has not finalized the struct metadata,
+        # and rebuilding here would re-trigger __init_subclass__ recursively.
+        # Defer to the decorator that runs after the class statement.
+        return cls
     built = cast(Any, type(cls))(
         cls.__name__,
         cls.__bases__,
@@ -643,6 +670,11 @@ def dataclass(
         initvars: dict[str, Any] = {}
         for name, value in cls.__dict__.items():
             if name in body_annotations and _is_initvar(body_annotations[name]):
+                if (
+                    isinstance(value, dataclasses.Field)
+                    and value.default_factory is not dataclasses.MISSING
+                ):
+                    raise TypeError(f"field {name} cannot have a default factory")
                 initvars[name] = (
                     _translate_field(cls.__name__, name, value).default
                     if isinstance(value, dataclasses.Field)
@@ -713,13 +745,14 @@ def dataclass(
         field_names = tuple(name for name in body_annotations if not _is_non_field_annotation(body_annotations[name]))
         if kw_only:
             kw_only_names.update(field_names)
-        if any(not flags[0] for flags in field_flags_map.values()):
+        hash_restricted = any(
+            flags[2] is False or not flags[0] for flags in field_flags_map.values()
+        )
+        if eq and any(not flags[0] for flags in field_flags_map.values()):
             namespace["__eq__"] = _make_eq()
-        if any(not flags[1] for flags in field_flags_map.values()):
+        if repr and any(not flags[1] for flags in field_flags_map.values()):
             namespace["__repr__"] = _make_repr()
-        if any(flags[2] is False for flags in field_flags_map.values()):
-            namespace["__hash__"] = _make_hash()
-        if unsafe_hash:
+        if unsafe_hash or (frozen and hash_restricted):
             namespace["__hash__"] = _make_hash()
         namespace["__dataclass_fields__"] = _build_fields(
             field_names,
