@@ -35,6 +35,19 @@ objects fall through to them. Classes with static-type bases (e.g. `dict`)
 fall back to stock dataclasses entirely — salix's C layout cannot coexist
 with them.
 
+## Patch tier: tyro, zero source changes
+
+`run_tyro.sh` does the same against tyro's suite (pinned `d0c9877f`), with
+`install(exclude_prefixes=("tyro",))` — tyro's own internal dataclasses stay
+stock, every user-facing dataclass in the tests is shimmed.
+
+### Measured result (tyro d0c9877f, 2026-09-01)
+
+- 5062 passed
+- 30 failed, in four documented families: pickle (16), InitVar (8),
+  empty-struct field equality (2), functools.partial resolution (4)
+  — see `known_gaps.md`
+
 ## Source tier
 
 Planned: a fork of omegaconf rewritten to salix-native idioms (no `@dataclass`

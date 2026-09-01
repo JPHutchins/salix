@@ -22,7 +22,33 @@ a8bcf1f): 8473 passed, 40 failed, 1 module excluded.
    The patch injects a `set_field`-backed `__setattr__`, so declared fields
    assign correctly; undeclared ones cannot exist.
 
+## Tyro tier (patch, zero source changes)
+
+`run_tyro.sh` runs tyro's suite (pinned `d0c9877f`, frozen deps in
+`requirements-tyro.txt`) with the patch installed as
+`install(exclude_prefixes=("tyro",))`: tyro's own internal dataclasses stay
+stock (its source caches on the instance `__dict__`, which structs do not
+have), while every user-facing dataclass in the tests is shimmed.
+
+Measured 2026-09-01: 5062 passed, 30 failed, 288 skipped. Failure families:
+
+- pickle (16, incl. `test_generics_and_serialization`) — salix refuses pickle.
+- InitVar (8) — salix refuses `InitVar` annotations at class creation, so
+  the shim strips them (constructor + `fields()` parity), but tyro's spec
+  reader needs the names in `__annotations__` (impossible to restore: salix
+  blocks post-build class mutation) and its constructor setattrs InitVars
+  onto instances (no instance `__dict__`).
+- empty-struct field equality (2), functools.partial resolution (4) —
+  tyro-internal subtleties, documented as patch-tier limits.
+
+Also documented: a namespace `__setattr__` flips salix's hash plan to
+unhashable, so the shim injects none (unfrozen structs accept plain
+assignment natively; frozen ones refuse with AttributeError instead of
+stock's FrozenInstanceError).
+
 ## Not yet shimmed (patch-level, no suite hits)
+
+
 
 - `kw_only=True` and decorator-level `init=False` raise `NotImplementedError`.
 - `init=False` fields with `default_factory` keep `_PLACEHOLDER` as a class
