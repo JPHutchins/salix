@@ -46,7 +46,15 @@ def _caller_excluded() -> bool:
 
 def _needs_stock_fallback(bases: tuple[type[Any], ...]) -> bool:
     return any(
-        base is not object and not base.__flags__ & _PY_TPFLAGS_HEAPTYPE for base in bases
+        (
+            base is not object
+            and not base.__flags__ & _PY_TPFLAGS_HEAPTYPE
+        )
+        or (
+            not is_struct(base)
+            and hasattr(base, "__dataclass_fields__")
+        )
+        for base in bases
     )
 
 
@@ -58,7 +66,7 @@ def _has_descriptor_field_collision(cls: type[Any], field_names: tuple[str, ...]
 
 def _is_initvar(annotation: Any) -> bool:
     if isinstance(annotation, str):
-        return annotation == "InitVar" or annotation.startswith("InitVar[")
+        return "InitVar[" in annotation or annotation.endswith("InitVar")
     return isinstance(annotation, dataclasses.InitVar) or (
         getattr(annotation, "__origin__", None) is dataclasses.InitVar
     )
@@ -66,7 +74,7 @@ def _is_initvar(annotation: Any) -> bool:
 
 def _is_classvar(annotation: Any) -> bool:
     if isinstance(annotation, str):
-        return annotation == "ClassVar" or annotation.startswith("ClassVar[")
+        return "ClassVar[" in annotation or annotation.endswith("ClassVar")
     return annotation is typing.ClassVar or (
         getattr(annotation, "__origin__", None) is typing.ClassVar
     )
@@ -282,11 +290,13 @@ def replace(obj: _T, /, **changes: Any) -> _T:
             _T,
             struct(
                 **{
-                    field.name: getattr(obj, field.name)
-                    for field in fields(struct)
-                    if field.init
-                },
-                **changes,
+                    **{
+                        field.name: getattr(obj, field.name)
+                        for field in fields(struct)
+                        if field.init
+                    },
+                    **changes,
+                }
             ),
         )
     return cast(_T, _stock_replace(cast(Any, obj), **changes))
@@ -295,10 +305,12 @@ def replace(obj: _T, /, **changes: Any) -> _T:
 def _needs_factory_default(value: Any) -> bool:
     if isinstance(value, (list, dict, set, bytearray)):
         return True
+    if type(value).__hash__ is None:
+        return True
     try:
         hash(value)
     except TypeError:
-        return type(value).__hash__ is not None
+        return True
     return False
 
 
@@ -408,6 +420,8 @@ def _make_init(params: list[tuple[str, Any, bool, bool]]) -> Callable[[Struct], 
     body = [f"def __init__({', '.join(arg_list)}):"]
     for name, default, _, is_initvar in params:
         if is_initvar:
+            if default is not dataclasses.MISSING and default is not _PLACEHOLDER:
+                body.append(f"    if {name} is _INIT_UNSET: {name} = _fresh(_defaults[{name!r}])")
             continue
         if default is dataclasses.MISSING:
             body.append(f"    _set_field({receiver}, {name!r}, {name})")
@@ -535,6 +549,8 @@ def _rebuild_struct_subclass(
         annotation_map.update(inspect.get_annotations(base))
         metadata_map.update(_field_metadata.get(base, {}))
     metadata_map.update(field_metadata)
+    if kw_only:
+        kw_only_names.update(names)
     merged_flags = {
         **_merged_field_flags(struct),
         **field_flags_map,
@@ -545,10 +561,12 @@ def _rebuild_struct_subclass(
         namespace["__repr__"] = _make_repr()
     if any(flags[2] is False for flags in merged_flags.values()):
         namespace["__hash__"] = _make_hash()
+    if unsafe_hash:
+        namespace["__hash__"] = _make_hash()
     namespace["__dataclass_fields__"] = _build_fields(
         names,
         struct.__struct_annotations__,
-        defaults,
+        tuple(namespace.get(name, dataclasses.MISSING) for name in names),
         struct.__struct_metadata__,
         merged,
         annotation_map,
@@ -693,11 +711,15 @@ def dataclass(
                 ]
             )
         field_names = tuple(name for name in body_annotations if not _is_non_field_annotation(body_annotations[name]))
+        if kw_only:
+            kw_only_names.update(field_names)
         if any(not flags[0] for flags in field_flags_map.values()):
             namespace["__eq__"] = _make_eq()
         if any(not flags[1] for flags in field_flags_map.values()):
             namespace["__repr__"] = _make_repr()
         if any(flags[2] is False for flags in field_flags_map.values()):
+            namespace["__hash__"] = _make_hash()
+        if unsafe_hash:
             namespace["__hash__"] = _make_hash()
         namespace["__dataclass_fields__"] = _build_fields(
             field_names,
