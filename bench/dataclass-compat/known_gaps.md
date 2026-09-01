@@ -68,6 +68,9 @@ The InitVar story the tyro tier opened (passing InitVars to
 
 - Decorator-level `init=False` raises `NotImplementedError` (field-level
   `init=False` is shimmed).
+- `inspect.signature` of the synthesized `__init__` shows the `_INIT_UNSET`
+  sentinel as parameter defaults instead of the real values (stock shows
+  real defaults; mutable/factory defaults have no real value to show).
 - `init=False` fields with `default_factory`: the class attribute is a salix
   member descriptor, not the factory result stock stores on the class (the
   instance value is correct).

@@ -106,6 +106,8 @@ def _merged_field_flags(struct_cls: type[Struct]) -> dict[str, tuple[bool, bool,
 
 def _make_eq() -> Callable[[Struct, object], bool]:
     def __eq__(self: Struct, other: object) -> bool:
+        if self is other:
+            return True
         if other.__class__ is self.__class__:
             flags = _merged_field_flags(type(self))
             compared = [
@@ -233,6 +235,8 @@ _SALIX_MEMBERS = frozenset(
         "__slots__",
         "__static_attributes__",
         "__classcell__",
+        "__setattr__",
+        "__delattr__",
     }
 )
 
