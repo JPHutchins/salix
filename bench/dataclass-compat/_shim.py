@@ -20,6 +20,9 @@ _factories: weakref.WeakKeyDictionary[type[Any], dict[str, Callable[[], Any]]] =
 _no_init: weakref.WeakKeyDictionary[type[Any], frozenset[str]] = weakref.WeakKeyDictionary()
 _kw_only: weakref.WeakKeyDictionary[type[Any], frozenset[str]] = weakref.WeakKeyDictionary()
 _field_metadata: weakref.WeakKeyDictionary[type[Any], dict[str, Any]] = weakref.WeakKeyDictionary()
+_field_flags: weakref.WeakKeyDictionary[
+    type[Any], dict[str, tuple[bool, bool, bool | None]]
+] = weakref.WeakKeyDictionary()
 _stock_is_dataclass = dataclasses.is_dataclass
 _stock_fields = dataclasses.fields
 _stock_asdict = dataclasses.asdict
@@ -73,6 +76,52 @@ def _is_non_field_annotation(annotation: Any) -> bool:
     return _is_initvar(annotation) or _is_classvar(annotation)
 
 
+def _merged_field_flags(struct_cls: type[Struct]) -> dict[str, tuple[bool, bool, bool | None]]:
+    merged: dict[str, tuple[bool, bool, bool | None]] = {}
+    for base in reversed(struct_cls.__mro__):
+        merged.update(_field_flags.get(base, {}))
+    return merged
+
+
+def _make_eq() -> Callable[[Struct, object], bool]:
+    def __eq__(self: Struct, other: object) -> bool:
+        if other.__class__ is self.__class__:
+            compared = [
+                name
+                for name, flags in _merged_field_flags(type(self)).items()
+                if flags[0]
+            ]
+            return all(getattr(self, name) == getattr(other, name) for name in compared)
+        return NotImplemented
+
+    return __eq__
+
+
+def _make_repr() -> Callable[[Struct], str]:
+    def __repr__(self: Struct) -> str:
+        shown = [
+            name
+            for name, flags in _merged_field_flags(type(self)).items()
+            if flags[1]
+        ]
+        inner = ", ".join(f"{name}={getattr(self, name)!r}" for name in shown)
+        return f"{type(self).__qualname__}({inner})"
+
+    return __repr__
+
+
+def _make_hash() -> Callable[[Struct], int]:
+    def __hash__(self: Struct) -> int:
+        hashed = [
+            name
+            for name, flags in _merged_field_flags(type(self)).items()
+            if flags[0] and flags[2] is not False
+        ]
+        return hash(tuple(getattr(self, name) for name in hashed))
+
+    return __hash__
+
+
 def _to_stock(
     cls: type[_T],
     init: bool,
@@ -107,6 +156,9 @@ class _Translated(NamedTuple):
     factory: Callable[[], Any] | None
     metadata: dict[str, Any]
     kw_only: bool
+    compare: bool
+    repr: bool
+    hash: bool | None
 
 
 def _builder_for(metaclass: type[Any]) -> type[Any]:
@@ -158,18 +210,20 @@ def _build_fields(
     metadata_map: dict[str, Any],
     no_init_names: set[str],
     kw_only_names: set[str],
+    flags_map: dict[str, tuple[bool, bool, bool | None]],
 ) -> dict[str, dataclasses.Field[Any]]:
     missing = len(names) - len(defaults)
     result: dict[str, dataclasses.Field[Any]] = {}
     for position, name in enumerate(names):
         factory = factory_map.get(name)
+        compare, repr_flag, hash_flag = flags_map.get(name, (True, True, None))
         field_kwargs: dict[str, Any] = {
             "default": dataclasses.MISSING if (factory is not None or position < missing) else defaults[position - missing],
             "default_factory": factory if factory is not None else dataclasses.MISSING,
             "init": name not in no_init_names,
-            "repr": True,
-            "hash": None,
-            "compare": True,
+            "repr": repr_flag,
+            "hash": hash_flag,
+            "compare": compare,
             "metadata": metadata_map.get(name) or ({} if not extras[position] else {"extras": extras[position]}),
             "kw_only": name in kw_only_names,
         }
@@ -206,6 +260,7 @@ def fields(cls: Any) -> tuple[dataclasses.Field[Any], ...]:
             metadata_map,
             no_init_names,
             kw_only_names,
+            _merged_field_flags(struct),
         ).values()
     )
 
@@ -257,16 +312,15 @@ def _translate_field(
     value: dataclasses.Field[Any],
 ) -> _Translated:
     kw_only = value.kw_only is True
-    if value.repr is False or value.compare is False or value.hash is False:
-        raise NotImplementedError(f"per-field repr/compare/hash flags are not shimmed yet: {cls_name}.{name}")
+    flags = (value.compare, value.repr, value.hash)
     metadata = dict(value.metadata)
     if value.default is not dataclasses.MISSING:
         if _needs_factory_default(value.default):
-            return _Translated(_PLACEHOLDER, value.init, _deepcopy_factory(value.default), metadata, kw_only)
-        return _Translated(value.default, value.init, None, metadata, kw_only)
+            return _Translated(_PLACEHOLDER, value.init, _deepcopy_factory(value.default), metadata, kw_only, *flags)
+        return _Translated(value.default, value.init, None, metadata, kw_only, *flags)
     if value.default_factory is not dataclasses.MISSING:
-        return _Translated(_PLACEHOLDER, value.init, value.default_factory, metadata, kw_only)
-    return _Translated(dataclasses.MISSING, value.init, None, metadata, kw_only)
+        return _Translated(_PLACEHOLDER, value.init, value.default_factory, metadata, kw_only, *flags)
+    return _Translated(dataclasses.MISSING, value.init, None, metadata, kw_only, *flags)
 
 
 def _dataclass_params(
@@ -325,6 +379,19 @@ def _fresh_default(value: Any) -> Any:
     return copy.deepcopy(value) if isinstance(value, (list, dict, set)) else value
 
 
+def _rebind_class_cells(built: type[Any], old_cls: type[Any]) -> None:
+    # Body functions close over the statement-time class via their
+    # __class__ cell; the build replaces the class, so zero-arg super()
+    # and __class__ references would target the wrong object.
+    for value in vars(built).values():
+        func = getattr(value, "__func__", value)
+        closure = getattr(func, "__closure__", None)
+        if closure:
+            for cell in closure:
+                if cell.cell_contents is old_cls:
+                    cell.cell_contents = built
+
+
 # A namespace __setattr__ flips salix's hash plan to unhashable, so the shim
 # does not inject one: unfrozen structs already accept plain assignment via
 # salix's C setattro, and frozen structs refuse it (AttributeError instead of
@@ -380,6 +447,12 @@ def _rebuild_struct_subclass(
     struct = cast(type[Struct], cls)
     names = struct.__struct_fields__
     defaults = struct.__struct_defaults__
+    if not names:
+        # __init_subclass__ sees the class before salix finalizes its struct
+        # metadata; a post-creation struct subclass always has the aligned
+        # field tuple, so empty means mid-creation — defer to the decorator
+        # that runs after the class statement completes.
+        return cls
     inherited_factories: dict[str, Callable[[], Any]] = {}
     no_init: set[str] = set()
     kw_only_names: set[str] = set()
@@ -412,6 +485,7 @@ def _rebuild_struct_subclass(
     namespace: dict[str, Any] = {}
     factories: list[tuple[str, Callable[[], Any]]] = []
     field_metadata: dict[str, Any] = {}
+    field_flags_map: dict[str, tuple[bool, bool, bool | None]] = {}
     for name, value in default_map.items():
         if value is _PLACEHOLDER and name in inherited_factories:
             factories.append((name, inherited_factories[name]))
@@ -431,6 +505,7 @@ def _rebuild_struct_subclass(
                 no_init.add(name)
             if translated.kw_only:
                 kw_only_names.add(name)
+            field_flags_map[name] = (translated.compare, translated.repr, translated.hash)
             continue
         if _needs_factory_default(value):
             factories.append((name, _deepcopy_factory(value)))
@@ -460,6 +535,16 @@ def _rebuild_struct_subclass(
         annotation_map.update(inspect.get_annotations(base))
         metadata_map.update(_field_metadata.get(base, {}))
     metadata_map.update(field_metadata)
+    merged_flags = {
+        **_merged_field_flags(struct),
+        **field_flags_map,
+    }
+    if any(not flags[0] for flags in merged_flags.values()):
+        namespace["__eq__"] = _make_eq()
+    if any(not flags[1] for flags in merged_flags.values()):
+        namespace["__repr__"] = _make_repr()
+    if any(flags[2] is False for flags in merged_flags.values()):
+        namespace["__hash__"] = _make_hash()
     namespace["__dataclass_fields__"] = _build_fields(
         names,
         struct.__struct_annotations__,
@@ -470,6 +555,7 @@ def _rebuild_struct_subclass(
         metadata_map,
         no_init,
         kw_only_names,
+        merged_flags,
     )
     namespace["__dataclass_params__"] = _dataclass_params(init, repr, eq, order, unsafe_hash, frozen, match_args, kw_only)
     built = cast(Any, type(cls))(
@@ -491,6 +577,9 @@ def _rebuild_struct_subclass(
         _kw_only[built] = frozenset(kw_only_names)
     if field_metadata:
         _field_metadata[built] = field_metadata
+    if merged_flags:
+        _field_flags[built] = merged_flags
+    _rebind_class_cells(cast(type[Any], built), cls)
     return cast(type[_T], built)
 
 
@@ -531,6 +620,7 @@ def dataclass(
         no_init: set[str] = set()
         kw_only_names: set[str] = set()
         field_metadata: dict[str, Any] = {}
+        field_flags_map: dict[str, tuple[bool, bool, bool | None]] = {}
         body_annotations = inspect.get_annotations(cls)
         initvars: dict[str, Any] = {}
         for name, value in cls.__dict__.items():
@@ -558,11 +648,15 @@ def dataclass(
                     no_init.add(name)
                 if translated.kw_only:
                     kw_only_names.add(name)
+                field_flags_map[name] = (translated.compare, translated.repr, translated.hash)
             elif name in body_annotations and _needs_factory_default(value):
                 factories.append((name, _deepcopy_factory(value)))
                 namespace[name] = _PLACEHOLDER
+                field_flags_map[name] = (True, True, None)
             else:
                 namespace[name] = value
+                if name in body_annotations:
+                    field_flags_map[name] = (True, True, None)
         for name, annotation in body_annotations.items():
             if _is_initvar(annotation) and name not in initvars:
                 initvars[name] = dataclasses.MISSING
@@ -599,6 +693,12 @@ def dataclass(
                 ]
             )
         field_names = tuple(name for name in body_annotations if not _is_non_field_annotation(body_annotations[name]))
+        if any(not flags[0] for flags in field_flags_map.values()):
+            namespace["__eq__"] = _make_eq()
+        if any(not flags[1] for flags in field_flags_map.values()):
+            namespace["__repr__"] = _make_repr()
+        if any(flags[2] is False for flags in field_flags_map.values()):
+            namespace["__hash__"] = _make_hash()
         namespace["__dataclass_fields__"] = _build_fields(
             field_names,
             tuple(body_annotations[name] for name in field_names),
@@ -609,6 +709,7 @@ def dataclass(
             field_metadata,
             no_init,
             kw_only_names,
+            field_flags_map,
         )
         namespace["__dataclass_params__"] = _dataclass_params(init, repr, eq, order, unsafe_hash, frozen, match_args, kw_only)
         built = _builder_for(type(cls))(
@@ -630,6 +731,9 @@ def dataclass(
             _kw_only[built] = frozenset(kw_only_names)
         if field_metadata:
             _field_metadata[built] = field_metadata
+        if field_flags_map:
+            _field_flags[built] = field_flags_map
+        _rebind_class_cells(cast(type[Any], built), cls)
         return cast(type[_T], built)
 
     if _cls is None:

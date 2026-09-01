@@ -60,6 +60,25 @@ unconditionally — hydra's own internals are shimmed too, no exclusions.
   scripts in this environment), so the patch is at full stock parity
 - 219 skipped, 1 xfailed
 
+## Measured startup deltas, per library (real workloads, 2026-09-01)
+
+Fresh interpreter per run, median of 5; the libraries' own workloads —
+omegaconf runs its suite's structured-config corpus, hydra composes its
+own example config, tyro parses a real CLI module, transformers is a
+plain import. Reproduced by the `startup_bench.py` script in this
+directory (paths are machine-specific; the numbers below are this
+repo's measured run).
+
+| library | pre | post | delta |
+|---|---|---|---|
+| omegaconf (fork migration) | 134.5 ms | 129.7 ms | −4.8 ms (−3.6%) |
+| transformers (fork migration) | 588.9 ms | 577.4 ms | −11.5 ms (−2.0%) |
+| hydra (patch tier, internals excluded) | 156.5 ms | 157.6 ms | +0.7% |
+| tyro (patch tier, internals excluded) | 55.2 ms | 57.9 ms | +4.9% |
+
+Real migrations start faster; patch-only tiers don't, because their own
+internals stay stock.
+
 ## Source tier
 
 Planned: a fork of omegaconf rewritten to salix-native idioms (no `@dataclass`

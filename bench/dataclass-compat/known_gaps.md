@@ -46,6 +46,13 @@ unhashable, so the shim injects none (unfrozen structs accept plain
 assignment natively; frozen ones refuse with AttributeError instead of
 stock's FrozenInstanceError).
 
+Hydra's real startup path (composing its example config) hits an
+instance-`__dict__` cache in its own internals that the suite never
+exercises, so production use of the patch with hydra wants
+`install(exclude_prefixes=("hydra",))` — the runner's suite scope uses
+the unconditional install because the suite passes that way. The
+per-library startup measurements are in README.md.
+
 ## Hydra tier (patch, zero source changes)
 
 `run_hydra.sh` pins hydra `d1e07c8f` and installs the patch unconditionally.
