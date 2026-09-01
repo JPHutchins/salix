@@ -1,0 +1,38 @@
+# Known gaps
+
+Failures against omegaconf's suite that the patch cannot close without salix
+core changes. Counts are from the 2026-09-01 run (salix 0.1.0, omegaconf
+a8bcf1f): 8473 passed, 40 failed, 1 module excluded.
+
+## Blockers (salix-level)
+
+1. **Two unrelated Struct bases fail at class creation.**
+   `class Child(Left, Right)` where Left and Right are both Structs raises
+   `TypeError: multiple bases have instance lay-out conflict` from CPython,
+   at statement time — before any decorator can intercept. Excluded module:
+   `tests/test_structured_config_unions.py`.
+
+2. **Pickle is refused** (37 tests, mostly `tests/test_serialization.py`).
+   Salix deliberately refuses pickle (salix #13, lowest priority per JPH).
+
+3. **No instance `__dict__`** (3 tests in `tests/test_to_container.py`).
+   Stock non-slots dataclasses accept arbitrary instance attributes
+   (`obj.extra = 1`); structs are closed. Omegaconf's `to_container` sets
+   non-init fields via `setattr`, which fails for fields not in the struct.
+   The patch injects a `set_field`-backed `__setattr__`, so declared fields
+   assign correctly; undeclared ones cannot exist.
+
+## Not yet shimmed (patch-level, no suite hits)
+
+- `kw_only=True` and decorator-level `init=False` raise `NotImplementedError`.
+- `init=False` fields with `default_factory` keep `_PLACEHOLDER` as a class
+  attribute instead of stock's factory-on-class quirk.
+- `__match_args__` includes `init=False` fields (stock excludes them).
+- `inspect.signature` of generated init is `(self, /, *args, **kwargs)`
+  (salix's C signature), not the per-field stock signature.
+- `asdict`/`replace` for structs are dict-comprehension/`salix.replace`
+  equivalents; `asdict` deep-copies but does not recurse through nested
+  dataclasses with `dict_factory` options.
+- Ordering rule is stricter than stock for inherited defaults followed by
+  required fields (salix refuses; pytest's own dataclasses exhibit this when
+  the patch is installed before pytest imports).
