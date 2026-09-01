@@ -36,3 +36,7 @@ a8bcf1f): 8473 passed, 40 failed, 1 module excluded.
 - Ordering rule is stricter than stock for inherited defaults followed by
   required fields (salix refuses; pytest's own dataclasses exhibit this when
   the patch is installed before pytest imports).
+- A body `__init__` suppresses `__post_init__` and factory fills — the same
+  degenerate state stock dataclasses produce (its `init` parameter is ignored
+  when the body defines `__init__`, and the generated init that would call
+  `__post_init__` is never created).

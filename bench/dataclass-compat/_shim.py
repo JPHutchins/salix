@@ -54,6 +54,8 @@ def _builder_for(metaclass: type[Any]) -> type[Any]:
     return cached
 
 # Members the metatype owns and that must not ride a rebuild namespace.
+# __hash__ rides: salix honors a body-defined hash, and the fresh path
+# passes it through, so the rebuild must not drop it.
 _SALIX_MEMBERS = frozenset(
     {
         "__dict__",
@@ -62,7 +64,6 @@ _SALIX_MEMBERS = frozenset(
         "__match_args__",
         "__static_attributes__",
         "__firstlineno__",
-        "__hash__",
         "__classcell__",
     }
 )

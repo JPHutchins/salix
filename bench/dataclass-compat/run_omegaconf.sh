@@ -51,11 +51,14 @@ else
     ( cd "$CHECKOUT" && nix shell nixpkgs#jdk17 --command "$VENV/bin/python" setup.py antlr )
 fi
 
-cat > "$CHECKOUT/conftest.py" <<'EOF'
-from _shim import install
+INSTALL_STANZA='from _shim import install
 
-install()
-EOF
+install()'
+if [[ -f "$CHECKOUT/conftest.py" ]]; then
+    printf '\n%s\n' "$INSTALL_STANZA" >> "$CHECKOUT/conftest.py"
+else
+    printf '%s\n' "$INSTALL_STANZA" > "$CHECKOUT/conftest.py"
+fi
 
 (
     cd "$CHECKOUT"
