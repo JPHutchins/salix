@@ -48,6 +48,18 @@ stock, every user-facing dataclass in the tests is shimmed.
   empty-struct field equality (2), functools.partial resolution (4)
   — see `known_gaps.md`
 
+## Patch tier: hydra, zero source changes
+
+`run_hydra.sh` runs hydra's suite (pinned `d1e07c8f`) with the patch installed
+unconditionally — hydra's own internals are shimmed too, no exclusions.
+
+### Measured result (hydra d1e07c8f, 2026-09-01)
+
+- 3264 passed
+- 2 failed — both fail identically on a stock checkout (bash completion
+  scripts in this environment), so the patch is at full stock parity
+- 219 skipped, 1 xfailed
+
 ## Source tier
 
 Planned: a fork of omegaconf rewritten to salix-native idioms (no `@dataclass`

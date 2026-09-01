@@ -46,6 +46,15 @@ unhashable, so the shim injects none (unfrozen structs accept plain
 assignment natively; frozen ones refuse with AttributeError instead of
 stock's FrozenInstanceError).
 
+## Hydra tier (patch, zero source changes)
+
+`run_hydra.sh` pins hydra `d1e07c8f` and installs the patch unconditionally.
+Measured 2026-09-01: 3264 passed, 2 failed — the 2 fail identically on a
+stock checkout (bash completion scripts), so the patch is at stock parity.
+The InitVar story the tyro tier opened (passing InitVars to
+`__post_init__` instead of storing them) is what hydra's
+`RuntimeValue` tests needed; it is implemented in the shim now.
+
 ## Not yet shimmed (patch-level, no suite hits)
 
 

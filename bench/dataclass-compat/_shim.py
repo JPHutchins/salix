@@ -297,15 +297,26 @@ def _dataclass_params(
 def _make_post_init(
     factories: list[tuple[str, Callable[[], Any]]],
     user: Any,
+    initvar_names: tuple[str, ...] = (),
 ) -> Callable[[Struct], None]:
     from salix import set_field
 
-    def __post_init__(self: Struct) -> None:
+    pass_initvars = False
+    if user is not None and initvar_names:
+        try:
+            pass_initvars = len(inspect.signature(user).parameters) > 0
+        except (TypeError, ValueError):
+            pass_initvars = False
+
+    def __post_init__(self: Struct, *initvar_values: Any) -> None:
         for name, factory in factories:
             if getattr(self, name) is _PLACEHOLDER:
                 set_field(self, name, factory())
         if user is not None:
-            user(self)
+            if pass_initvars:
+                user(self, *initvar_values)
+            else:
+                user(self)
 
     return __post_init__
 
@@ -318,17 +329,19 @@ def _fresh_default(value: Any) -> Any:
 # does not inject one: unfrozen structs already accept plain assignment via
 # salix's C setattro, and frozen structs refuse it (AttributeError instead of
 # stock's FrozenInstanceError — a message-parity gap only).
-def _make_init(params: list[tuple[str, Any, bool]]) -> Callable[[Struct], None]:
+def _make_init(params: list[tuple[str, Any, bool, bool]]) -> Callable[[Struct], None]:
     from salix import set_field as _set_field
 
-    receiver = "__dataclass_self__" if any(name == "self" for name, _, _ in params) else "self"
+    receiver = "__dataclass_self__" if any(name == "self" for name, _, _, _ in params) else "self"
     arg_list = [receiver]
-    for name, default, kw_only in params:
+    for name, default, kw_only, _ in params:
         if kw_only and "*" not in arg_list:
             arg_list.append("*")
         arg_list.append(name if default is dataclasses.MISSING else f"{name}=_INIT_UNSET")
     body = [f"def __init__({', '.join(arg_list)}):"]
-    for name, default, _ in params:
+    for name, default, _, is_initvar in params:
+        if is_initvar:
+            continue
         if default is dataclasses.MISSING:
             body.append(f"    _set_field({receiver}, {name!r}, {name})")
             continue
@@ -338,13 +351,15 @@ def _make_init(params: list[tuple[str, Any, bool]]) -> Callable[[Struct], None]:
             continue
         body.append("    else:")
         body.append(f"        _set_field({receiver}, {name!r}, _fresh(_defaults[{name!r}]))")
+    initvar_names = [name for name, _, _, is_initvar in params if is_initvar]
+    initvar_args = "" if not initvar_names else ", " + ", ".join(initvar_names)
     body.append(f'    _post = getattr(type({receiver}), "__post_init__", None)')
     body.append("    if _post is not None:")
-    body.append(f"        _post({receiver})")
+    body.append(f"        _post({receiver}{initvar_args})")
     namespace: dict[str, Any] = {
         "_set_field": _set_field,
         "_INIT_UNSET": _INIT_UNSET,
-        "_defaults": {name: default for name, default, _ in params if default is not dataclasses.MISSING},
+        "_defaults": {name: default for name, default, _, _ in params if default is not dataclasses.MISSING},
         "_fresh": _fresh_default,
     }
     exec(compile("\n".join(body), "<shim __init__>", "exec"), namespace)
@@ -434,7 +449,7 @@ def _rebuild_struct_subclass(
     if (no_init or kw_only_names or kw_only) and "__init__" not in cls.__dict__:
         namespace["__init__"] = _make_init(
             [
-                (name, namespace.get(name, dataclasses.MISSING), name in kw_only_names or kw_only)
+                (name, namespace.get(name, dataclasses.MISSING), name in kw_only_names or kw_only, False)
                 for name in names
                 if name not in no_init
             ]
@@ -557,7 +572,11 @@ def dataclass(
             if not _is_non_field_annotation(annotation)
         }
         if factories:
-            namespace["__post_init__"] = _make_post_init(factories, getattr(cls, "__post_init__", None))
+            namespace["__post_init__"] = _make_post_init(
+                factories,
+                getattr(cls, "__post_init__", None),
+                tuple(name for name in body_annotations if name in initvars),
+            )
         if (
             no_init
             or kw_only_names
@@ -573,6 +592,7 @@ def dataclass(
                         if name in initvars
                         else namespace.get(name, dataclasses.MISSING),
                         False if name in initvars else name in kw_only_names or kw_only,
+                        name in initvars,
                     )
                     for name in body_annotations
                     if name not in no_init and not _is_classvar(body_annotations[name])
