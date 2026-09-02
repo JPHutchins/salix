@@ -6,7 +6,7 @@ a8bcf1f): 8473 passed, 40 failed, 1 module excluded.
 
 ## Blockers (salix-level)
 
-1. **Two unrelated Struct bases fail at class creation.**
+1. **Two unrelated Struct bases fail at class creation** (salix #164).
    `class Child(Left, Right)` where Left and Right are both Structs raises
    `TypeError: multiple bases have instance lay-out conflict` from CPython,
    at statement time — before any decorator can intercept. Excluded module:
@@ -72,7 +72,7 @@ The InitVar story the tyro tier opened (passing InitVars to
 - InitVar fields declared in a subclass of a shimmed struct fail at the
   class statement: salix refuses the InitVar annotation before the
   decorator runs (the fresh path strips it from plain classes; a struct
-  subclass never reaches that code). Salix-level.
+  subclass never reaches that code). Salix-level (salix #168).
 - `inspect.signature` of the synthesized `__init__` shows the `_INIT_UNSET`
   sentinel as parameter defaults instead of the real values (stock shows
   real defaults; mutable/factory defaults have no real value to show).
@@ -83,7 +83,7 @@ The InitVar story the tyro tier opened (passing InitVars to
 - Hashable-class defaults with unhashable content (a tuple containing a
   list) become per-instance deepcopy factories where stock shares one
   plain default: salix core refuses such defaults at the builder, and
-  `fields()` reports the factory instead of the shared value.
+  `fields()` reports the factory instead of the shared value — salix #167.
 - Annotation-only redeclarations keep non-factory base defaults
   (matching stock's class-attribute inheritance), while factory-backed
   base fields become required; the flags/init/kw_only resets are the
@@ -93,7 +93,7 @@ The InitVar story the tyro tier opened (passing InitVars to
   dict-comprehension `salix.replace` equivalent.
 - Ordering rule is stricter than stock for inherited defaults followed by
   required fields (salix refuses; pytest's own dataclasses exhibit this when
-  the patch is installed before pytest imports).
+  the patch is installed before pytest imports) — salix #166.
 - A body `__init__` suppresses `__post_init__` and factory fills — the same
   degenerate state stock dataclasses produce (its `init` parameter is ignored
   when the body defines `__init__`, and the generated init that would call
@@ -110,4 +110,4 @@ The InitVar story the tyro tier opened (passing InitVars to
 Frozen structs hash by content even with eq=False: salix's tp_hash slot is
 content-based and a body `__hash__` only changes the attribute view, not
 hash() — so `@dataclass(frozen=True, eq=False)` classes get a content hash
-where stock keeps identity hashing. Salix-level, documented.
+where stock keeps identity hashing. Salix-level (salix #165).
