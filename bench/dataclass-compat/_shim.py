@@ -99,6 +99,20 @@ def _is_non_field_annotation(annotation: Any) -> bool:
     return _is_initvar(annotation) or _is_classvar(annotation)
 
 
+_redeclared: weakref.WeakKeyDictionary[type[Any], frozenset[str]] = weakref.WeakKeyDictionary()
+
+
+def _redeclared_names(struct: type[Struct]) -> frozenset[str]:
+    base_annotations: dict[str, Any] = {}
+    for base in struct.__mro__[1:]:
+        base_annotations.update(inspect.get_annotations(base))
+    return frozenset(
+        name
+        for name in struct.__struct_fields__
+        if name in base_annotations and name in getattr(struct, "__annotations__", {})
+    )
+
+
 _merged_flags_cache: weakref.WeakKeyDictionary[
     type[Any], dict[str, tuple[bool, bool, bool | None]]
 ] = weakref.WeakKeyDictionary()
@@ -325,16 +339,11 @@ def fields(cls: Any) -> tuple[dataclasses.Field[Any], ...]:
             strict=True,
         )
     )
-    base_annotations: dict[str, Any] = {}
-    for base in struct.__mro__[1:]:
-        base_annotations.update(inspect.get_annotations(base))
-    redeclared = {
-        name
-        for name in struct.__struct_fields__
-        if name in base_annotations and name in getattr(struct, "__annotations__", {})
-    }
-    no_init_names -= redeclared
-    kw_only_names -= redeclared
+    redeclared = _redeclared.get(struct)
+    if redeclared is None:
+        redeclared = _redeclared_names(struct)
+    no_init_names -= redeclared - _no_init.get(struct, frozenset())
+    kw_only_names -= redeclared - _kw_only.get(struct, frozenset())
     own_factories = _factories.get(struct, {})
     factory_map = {
         name: factory
@@ -640,14 +649,7 @@ def _rebuild_struct_subclass(
         for name in cast(type[Struct], base).__struct_fields__
     }
     own_names = [name for name in names if name not in inherited]
-    base_annotations: dict[str, Any] = {}
-    for base in struct.__mro__[1:]:
-        base_annotations.update(inspect.get_annotations(base))
-    redeclared = {
-        name
-        for name in names
-        if name in base_annotations and name in getattr(struct, "__annotations__", {})
-    }
+    redeclared = _redeclared_names(struct)
     no_init -= redeclared
     kw_only_names -= redeclared
     inherited_factories = {
@@ -666,11 +668,12 @@ def _rebuild_struct_subclass(
     factories: list[tuple[str, Callable[[], Any]]] = []
     field_metadata: dict[str, Any] = {}
     field_flags_map: dict[str, tuple[bool, bool, bool | None]] = {}
-    for name, value in default_map.items():
-        if name in redeclared and not isinstance(value, dataclasses.Field):
+    for name in redeclared:
+        if not isinstance(default_map.get(name), dataclasses.Field):
             field_flags_map[name] = (True, True, None)
-            if value is _PLACEHOLDER:
-                continue
+    for name, value in default_map.items():
+        if value is _PLACEHOLDER and name in redeclared:
+            continue
         if (
             value is _PLACEHOLDER
             and name in inherited_factories
@@ -741,7 +744,8 @@ def _rebuild_struct_subclass(
                     dataclasses.MISSING
                     if name in required_kw_only
                     else namespace.get(name, dataclasses.MISSING),
-                    name in kw_only_names or (kw_only and name in own_names),
+                    name in kw_only_names
+                    or (kw_only and (name in own_names or name in redeclared)),
                     False,
                 )
                 for name in names
@@ -756,6 +760,7 @@ def _rebuild_struct_subclass(
     metadata_map.update(field_metadata)
     if kw_only:
         kw_only_names.update(own_names)
+        kw_only_names.update(redeclared)
     namespace.update({name: _PLACEHOLDER for name in required_kw_only})
     merged_flags = {
         **_merged_field_flags(struct),
@@ -821,6 +826,7 @@ def _rebuild_struct_subclass(
     if merged_flags:
         _merged_flags_cache.pop(built, None)
         _field_flags[built] = merged_flags
+    _redeclared[built] = redeclared
     _rebind_class_cells(cast(type[Any], built), cls)
     return cast(type[_T], built)
 
