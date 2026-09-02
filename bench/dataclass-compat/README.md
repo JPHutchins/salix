@@ -66,8 +66,9 @@ Fresh interpreter per run, median of 5; the libraries' own workloads —
 omegaconf runs its suite's structured-config corpus, hydra composes its
 own example config, tyro parses a real CLI module, transformers is a
 plain import. Reproduced by the `startup_bench.py` script in this
-directory (paths are machine-specific; the numbers below are this
-repo's measured run).
+directory; `startup_bench.py` and `typebench.py` both hard-code
+machine-specific interpreter paths and `/tmp` fixtures (the numbers
+below are this repo's measured run).
 
 | library | pre | post | delta |
 |---|---|---|---|

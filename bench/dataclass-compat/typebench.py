@@ -35,6 +35,6 @@ for label, code in [
     ).stderr
     for line in out.splitlines():
         parts = line.split("|")
-        if (len(parts) == 3 and parts[2].strip().endswith("salix")) or (label == "dataclasses" and len(parts) == 3 and parts[2].strip() == "dataclasses"):
+        if (len(parts) == 3 and (parts[2].strip() == "_shim" or parts[2].strip().endswith("salix"))) or (label == "dataclasses" and len(parts) == 3 and parts[2].strip() == "dataclasses"):
             print(f"{label} one-time import: {parts[0].split()[-1]} us self")
             break

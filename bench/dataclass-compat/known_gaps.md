@@ -76,9 +76,9 @@ The InitVar story the tyro tier opened (passing InitVars to
   member descriptor, not the factory result stock stores on the class (the
   instance value is correct).
 - `__match_args__` includes `init=False` fields (stock excludes them).
-- `asdict`/`replace` for structs are dict-comprehension/`salix.replace`
-  equivalents; `asdict` deep-copies but does not recurse through nested
-  dataclasses with `dict_factory` options.
+- `asdict` recurses through list/dict/tuple containers of structs like
+  stock but does not honor `dict_factory` options; `replace` is a
+  dict-comprehension `salix.replace` equivalent.
 - Ordering rule is stricter than stock for inherited defaults followed by
   required fields (salix refuses; pytest's own dataclasses exhibit this when
   the patch is installed before pytest imports).

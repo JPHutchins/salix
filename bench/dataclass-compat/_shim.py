@@ -7,7 +7,7 @@ import typing
 import weakref
 from collections.abc import Callable
 from types import FrameType
-from typing import Any, NamedTuple, TypeVar, cast
+from typing import Any, NamedTuple, NoReturn, TypeVar, cast
 
 from salix import Struct
 
@@ -324,19 +324,36 @@ def fields(cls: Any) -> tuple[dataclasses.Field[Any], ...]:
     )
 
 
+def _asdict_value(value: Any) -> Any:
+    if is_struct(value):
+        return asdict(value)
+    if isinstance(value, list):
+        return [_asdict_value(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_asdict_value(item) for item in value)
+    if isinstance(value, dict):
+        return {_asdict_value(key): _asdict_value(item) for key, item in value.items()}
+    return copy.deepcopy(value)
+
+
 def asdict(obj: object) -> dict[str, Any]:
     if not is_struct(obj):
         return _stock_asdict(cast(Any, obj))
-    result = {}
-    for name in cast(type[Struct], type(obj)).__struct_fields__:
-        value = getattr(obj, name)
-        result[name] = asdict(value) if is_struct(value) else copy.deepcopy(value)
-    return result
+    return {
+        name: _asdict_value(getattr(obj, name))
+        for name in cast(type[Struct], type(obj)).__struct_fields__
+    }
 
 
 def replace(obj: _T, /, **changes: Any) -> _T:
     if is_struct(obj):
         struct = cast(type[Struct], type(obj))
+        init_false = {field.name for field in fields(struct) if not field.init}
+        for name in changes:
+            if name in init_false:
+                raise TypeError(
+                    f"field {name} is declared with init=False, it cannot be specified with replace()"
+                )
         return cast(
             _T,
             struct(
@@ -369,12 +386,10 @@ def _deepcopy_factory(default: Any) -> Callable[[], Any]:
     return lambda: copy.deepcopy(default)
 
 
-def _mutable_default_or_raise(name: str, value: Any, *, raw: bool) -> Callable[[], Any]:
-    if not raw or sys.version_info >= (3, 14):
-        raise ValueError(
-            f"mutable default {type(value)} for field {name} is not allowed: use default_factory"
-        )
-    return _deepcopy_factory(value)
+def _mutable_default_or_raise(name: str, value: Any) -> NoReturn:
+    raise ValueError(
+        f"mutable default {type(value)} for field {name} is not allowed: use default_factory"
+    )
 
 
 def _translate_field(
@@ -387,7 +402,7 @@ def _translate_field(
     metadata = dict(value.metadata)
     if value.default is not dataclasses.MISSING:
         if _needs_factory_default(value.default):
-            return _Translated(_PLACEHOLDER, value.init, _mutable_default_or_raise(name, value.default, raw=False), metadata, kw_only, *flags)
+            _mutable_default_or_raise(name, value.default)
         return _Translated(value.default, value.init, None, metadata, kw_only, *flags)
     if value.default_factory is not dataclasses.MISSING:
         return _Translated(_PLACEHOLDER, value.init, value.default_factory, metadata, kw_only, *flags)
@@ -489,40 +504,66 @@ def _rebind_class_cells(built: type[Any], old_cls: type[Any]) -> None:
 # does not inject one: unfrozen structs already accept plain assignment via
 # salix's C setattro, and frozen structs refuse it (AttributeError instead of
 # stock's FrozenInstanceError — a message-parity gap only).
-def _make_init(params: list[tuple[str, Any, bool, bool]]) -> Callable[[Struct], None]:
-    from salix import set_field as _shim_set_field
+def _exec_name(base: str, taken: set[str]) -> str:
+    candidate = base
+    counter = 0
+    while candidate in taken:
+        counter += 1
+        candidate = f"{base}_{counter}"
+    taken.add(candidate)
+    return candidate
 
-    receiver = "_shim_receiver" if any(name == "self" for name, _, _, _ in params) else "self"
+
+def _make_init(params: list[tuple[str, Any, bool, bool]]) -> Callable[[Struct], None]:
+    from salix import set_field
+
+    taken = {name for name, _, _, _ in params}
+    receiver = "self" if "self" not in taken else _exec_name("_shim_receiver", taken)
+    role_bases = {
+        "set_field": "_shim_set_field",
+        "unset": "_shim_unset",
+        "defaults": "_shim_defaults",
+        "fresh": "_shim_fresh",
+        "post": "_shim_post",
+        "type": "_shim_type",
+        "getattr": "_shim_getattr",
+    }
+    roles = {role: _exec_name(base, taken) for role, base in role_bases.items()}
+    ordered = sorted(params, key=lambda item: item[2])
     arg_list = [receiver]
-    for name, default, kw_only, _ in params:
+    for name, default, kw_only, _ in ordered:
         if kw_only and "*" not in arg_list:
             arg_list.append("*")
-        arg_list.append(name if default is dataclasses.MISSING else f"{name}=_shim_unset")
+        arg_list.append(name if default is dataclasses.MISSING else f"{name}={roles['unset']}")
     body = [f"def __init__({', '.join(arg_list)}):"]
     for name, default, _, is_initvar in params:
         if is_initvar:
             if default is not dataclasses.MISSING and default is not _PLACEHOLDER:
-                body.append(f"    if {name} is _shim_unset: {name} = _shim_fresh(_shim_defaults[{name!r}])")
+                body.append(
+                    f"    if {name} is {roles['unset']}: {name} = {roles['fresh']}({roles['defaults']}[{name!r}])"
+                )
             continue
         if default is dataclasses.MISSING:
-            body.append(f"    _shim_set_field({receiver}, {name!r}, {name})")
+            body.append(f"    {roles['set_field']}({receiver}, {name!r}, {name})")
             continue
-        body.append(f"    if {name} is not _shim_unset:")
-        body.append(f"        _shim_set_field({receiver}, {name!r}, {name})")
+        body.append(f"    if {name} is not {roles['unset']}:")
+        body.append(f"        {roles['set_field']}({receiver}, {name!r}, {name})")
         if default is _PLACEHOLDER:
             continue
         body.append("    else:")
-        body.append(f"        _shim_set_field({receiver}, {name!r}, _shim_fresh(_shim_defaults[{name!r}]))")
+        body.append(f"        {roles['set_field']}({receiver}, {name!r}, {roles['fresh']}({roles['defaults']}[{name!r}]))")
     initvar_names = [name for name, _, _, is_initvar in params if is_initvar]
     initvar_args = "" if not initvar_names else ", " + ", ".join(initvar_names)
-    body.append(f'    _shim_post = getattr(type({receiver}), "__post_init__", None)')
-    body.append("    if _shim_post is not None:")
-    body.append(f"        _shim_post({receiver}{initvar_args})")
+    body.append(f'    {roles["post"]} = {roles["getattr"]}({roles["type"]}({receiver}), "__post_init__", None)')
+    body.append(f"    if {roles['post']} is not None:")
+    body.append(f"        {roles['post']}({receiver}{initvar_args})")
     namespace: dict[str, Any] = {
-        "_shim_set_field": _shim_set_field,
-        "_shim_unset": _INIT_UNSET,
-        "_shim_defaults": {name: default for name, default, _, _ in params if default is not dataclasses.MISSING},
-        "_shim_fresh": _fresh_default,
+        roles["set_field"]: set_field,
+        roles["unset"]: _INIT_UNSET,
+        roles["defaults"]: {name: default for name, default, _, _ in params if default is not dataclasses.MISSING},
+        roles["fresh"]: _fresh_default,
+        roles["type"]: type,
+        roles["getattr"]: getattr,
     }
     exec(compile("\n".join(body), "<shim __init__>", "exec"), namespace)
     synthesized = cast(Callable[[Struct], None], namespace["__init__"])
@@ -544,13 +585,14 @@ def _rebuild_struct_subclass(
     struct = cast(type[Struct], cls)
     names = struct.__struct_fields__
     defaults = struct.__struct_defaults__
-    inherited_factories = dict(_factories.get(struct, {}))
+    inherited_factories: dict[str, Callable[[], Any]] = {}
     no_init: set[str] = set()
     kw_only_names: set[str] = set()
     for base in struct.__mro__[1:]:
-        inherited_factories.update(_factories.get(base, {}))
         no_init.update(_no_init.get(base, frozenset()))
         kw_only_names.update(_kw_only.get(base, frozenset()))
+    for base in reversed(struct.__mro__):
+        inherited_factories.update(_factories.get(base, {}))
     inherited = {
         name
         for base in cls.__bases__
@@ -590,8 +632,11 @@ def _rebuild_struct_subclass(
                 kw_only_names.add(name)
             field_flags_map[name] = (translated.compare, translated.repr, translated.hash)
             continue
+        if isinstance(value, (list, dict, set)):
+            _mutable_default_or_raise(name, value)
+            continue
         if _needs_factory_default(value):
-            factories.append((name, _mutable_default_or_raise(name, value, raw=True)))
+            factories.append((name, _deepcopy_factory(value)))
             namespace[name] = _PLACEHOLDER
             continue
         namespace[name] = value
@@ -605,11 +650,21 @@ def _rebuild_struct_subclass(
         if key.startswith("__struct_") or key.startswith("_struct_"):
             continue
         namespace[key] = value
-    merged = {**inherited_factories, **dict(factories)}
+    merged = {
+        name: factory
+        for name, factory in {**inherited_factories, **dict(factories)}.items()
+        if namespace.get(name) is _PLACEHOLDER
+    }
     if merged:
         namespace["__post_init__"] = _make_post_init(list(merged.items()), getattr(cls, "__post_init__", None))
     stored_params = cls.__dict__.get("__dataclass_params__")
     kw_only_changed = stored_params is not None and bool(getattr(stored_params, "kw_only", False)) != kw_only
+    required_kw_only = {
+        name
+        for name in names
+        if (name in kw_only_names or (kw_only and name in own_names))
+        and namespace.get(name, dataclasses.MISSING) is dataclasses.MISSING
+    }
     if (
         no_init or kw_only_names or kw_only or kw_only_changed
     ) and (
@@ -620,7 +675,9 @@ def _rebuild_struct_subclass(
             [
                 (
                     name,
-                    namespace.get(name, dataclasses.MISSING),
+                    dataclasses.MISSING
+                    if name in required_kw_only
+                    else namespace.get(name, dataclasses.MISSING),
                     name in kw_only_names or (kw_only and name in own_names),
                     False,
                 )
@@ -636,6 +693,7 @@ def _rebuild_struct_subclass(
     metadata_map.update(field_metadata)
     if kw_only:
         kw_only_names.update(own_names)
+    namespace.update({name: _PLACEHOLDER for name in required_kw_only})
     merged_flags = {
         **_merged_field_flags(struct),
         **field_flags_map,
@@ -658,7 +716,12 @@ def _rebuild_struct_subclass(
     namespace["__dataclass_fields__"] = _build_fields(
         names,
         struct.__struct_annotations__,
-        tuple(namespace.get(name, dataclasses.MISSING) for name in names),
+        tuple(
+            dataclasses.MISSING
+            if name in required_kw_only
+            else namespace.get(name, dataclasses.MISSING)
+            for name in names
+        ),
         struct.__struct_metadata__,
         merged,
         annotation_map,
@@ -753,6 +816,11 @@ def dataclass(
                 )
                 continue
             if name in body_annotations and _is_classvar(body_annotations[name]):
+                if isinstance(value, dataclasses.Field):
+                    if value.default_factory is not dataclasses.MISSING:
+                        raise TypeError(f"field {name} cannot have a default factory")
+                    namespace[name] = value.default
+                    continue
                 namespace[name] = value
                 continue
             if isinstance(value, dataclasses.Field):
@@ -772,8 +840,10 @@ def dataclass(
                 if translated.kw_only:
                     kw_only_names.add(name)
                 field_flags_map[name] = (translated.compare, translated.repr, translated.hash)
+            elif name in body_annotations and isinstance(value, (list, dict, set)):
+                _mutable_default_or_raise(name, value)
             elif name in body_annotations and _needs_factory_default(value):
-                factories.append((name, _mutable_default_or_raise(name, value, raw=True)))
+                factories.append((name, _deepcopy_factory(value)))
                 namespace[name] = _PLACEHOLDER
                 field_flags_map[name] = (True, True, None)
             else:
@@ -787,6 +857,14 @@ def dataclass(
             name: annotation
             for name, annotation in body_annotations.items()
             if not _is_non_field_annotation(annotation)
+        }
+        field_names = tuple(name for name in body_annotations if not _is_non_field_annotation(body_annotations[name]))
+        required_kw_only = {
+            name
+            for name in field_names
+            if (name in kw_only_names or kw_only)
+            and name not in namespace
+            and name not in initvars
         }
         if factories:
             namespace["__post_init__"] = _make_post_init(
@@ -805,7 +883,9 @@ def dataclass(
                 [
                     (
                         name,
-                        initvars[name]
+                        dataclasses.MISSING
+                        if name in required_kw_only
+                        else initvars[name]
                         if name in initvars
                         else namespace.get(name, dataclasses.MISSING),
                         False if name in initvars else name in kw_only_names or kw_only,
@@ -815,9 +895,9 @@ def dataclass(
                     if name not in no_init and not _is_classvar(body_annotations[name])
                 ]
             )
-        field_names = tuple(name for name in body_annotations if not _is_non_field_annotation(body_annotations[name]))
         if kw_only:
             kw_only_names.update(field_names)
+        namespace.update({name: _PLACEHOLDER for name in required_kw_only})
         hash_restricted = any(
             flags[2] is False or not flags[0] for flags in field_flags_map.values()
         )
@@ -836,7 +916,11 @@ def dataclass(
         namespace["__dataclass_fields__"] = _build_fields(
             field_names,
             tuple(body_annotations[name] for name in field_names),
-            tuple(namespace[name] for name in field_names if name in namespace),
+            tuple(
+                namespace[name]
+                for name in field_names
+                if name in namespace and name not in required_kw_only
+            ),
             tuple(() for _ in field_names),
             dict(factories),
             {name: body_annotations[name] for name in field_names},

@@ -43,7 +43,7 @@ if [[ -d "$SALIX_WHEEL" ]]; then
 else
     WHEEL_LINKS="$(dirname "$SALIX_WHEEL")"
 fi
-uv pip install --python "$VENV" --no-index --find-links "$WHEEL_LINKS" salix==0.1.0
+uv pip install --python "$VENV" --no-index --find-links "$WHEEL_LINKS" --reinstall salix==0.1.0
 
 INSTALL_STANZA='from _shim import install
 
