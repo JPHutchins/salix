@@ -544,7 +544,7 @@ def _rebuild_struct_subclass(
     struct = cast(type[Struct], cls)
     names = struct.__struct_fields__
     defaults = struct.__struct_defaults__
-    inherited_factories: dict[str, Callable[[], Any]] = {}
+    inherited_factories = dict(_factories.get(struct, {}))
     no_init: set[str] = set()
     kw_only_names: set[str] = set()
     for base in struct.__mro__[1:]:

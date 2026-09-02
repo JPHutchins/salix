@@ -86,6 +86,14 @@ The InitVar story the tyro tier opened (passing InitVars to
   degenerate state stock dataclasses produce (its `init` parameter is ignored
   when the body defines `__init__`, and the generated init that would call
   `__post_init__` is never created).
+- Body `__setattr__` hooks that assign through `object.__setattr__` raise
+  `TypeError: can't apply this __setattr__ to <cls> object` on CPython 3.12
+  with the repo-built salix wheel (salix's C `tp_setattro` is custom and
+  `object.__setattr__` refuses non-generic setattro). Measured on 3.14.6 the
+  same pattern works on fresh, frozen, and rebuilt shimmed structs — the
+  failure is version-dependent. Assignment hooks should go through
+  `super().__setattr__` or salix's assignment path; a salix-core follow-up
+  could let `object.__setattr__` apply.
 
 Frozen structs hash by content even with eq=False: salix's tp_hash slot is
 content-based and a body `__hash__` only changes the attribute view, not
