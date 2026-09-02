@@ -69,6 +69,10 @@ The InitVar story the tyro tier opened (passing InitVars to
 
 - Decorator-level `init=False` raises `NotImplementedError` (field-level
   `init=False` is shimmed).
+- InitVar fields declared in a subclass of a shimmed struct fail at the
+  class statement: salix refuses the InitVar annotation before the
+  decorator runs (the fresh path strips it from plain classes; a struct
+  subclass never reaches that code). Salix-level.
 - `inspect.signature` of the synthesized `__init__` shows the `_INIT_UNSET`
   sentinel as parameter defaults instead of the real values (stock shows
   real defaults; mutable/factory defaults have no real value to show).

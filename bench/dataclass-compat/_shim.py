@@ -382,8 +382,13 @@ def _needs_factory_default(value: Any) -> bool:
     return False
 
 
+def _stock_mutable_raises(value: Any) -> bool:
+    return isinstance(value, (list, dict, set, bytearray)) or type(value).__hash__ is None
+
+
 def _deepcopy_factory(default: Any) -> Callable[[], Any]:
     return lambda: copy.deepcopy(default)
+    return False
 
 
 def _mutable_default_or_raise(name: str, value: Any) -> NoReturn:
@@ -402,7 +407,9 @@ def _translate_field(
     metadata = dict(value.metadata)
     if value.default is not dataclasses.MISSING:
         if _needs_factory_default(value.default):
-            _mutable_default_or_raise(name, value.default)
+            if _stock_mutable_raises(value.default):
+                _mutable_default_or_raise(name, value.default)
+            return _Translated(_PLACEHOLDER, value.init, _deepcopy_factory(value.default), metadata, kw_only, *flags)
         return _Translated(value.default, value.init, None, metadata, kw_only, *flags)
     if value.default_factory is not dataclasses.MISSING:
         return _Translated(_PLACEHOLDER, value.init, value.default_factory, metadata, kw_only, *flags)
@@ -600,6 +607,14 @@ def _rebuild_struct_subclass(
         for name in cast(type[Struct], base).__struct_fields__
     }
     own_names = [name for name in names if name not in inherited]
+    base_annotations: dict[str, Any] = {}
+    for base in struct.__mro__[1:]:
+        base_annotations.update(inspect.get_annotations(base))
+    redeclared = {
+        name
+        for name in names
+        if name in base_annotations and name in getattr(struct, "__annotations__", {})
+    }
     defaulted = names[len(names) - len(defaults) :] if defaults else ()
     default_map = dict(zip(defaulted, defaults, strict=True))
     if _params_equal(
@@ -612,9 +627,16 @@ def _rebuild_struct_subclass(
     field_metadata: dict[str, Any] = {}
     field_flags_map: dict[str, tuple[bool, bool, bool | None]] = {}
     for name, value in default_map.items():
-        if value is _PLACEHOLDER and name in inherited_factories:
+        if (
+            value is _PLACEHOLDER
+            and name in inherited_factories
+            and name not in own_names
+            and name not in redeclared
+        ):
             factories.append((name, inherited_factories[name]))
             namespace[name] = _PLACEHOLDER
+            continue
+        if value is _PLACEHOLDER and name in redeclared:
             continue
         if isinstance(value, dataclasses.Field):
             translated = _translate_field(cls.__name__, name, value)
@@ -632,7 +654,7 @@ def _rebuild_struct_subclass(
                 kw_only_names.add(name)
             field_flags_map[name] = (translated.compare, translated.repr, translated.hash)
             continue
-        if isinstance(value, (list, dict, set)):
+        if _stock_mutable_raises(value):
             _mutable_default_or_raise(name, value)
             continue
         if _needs_factory_default(value):
@@ -666,7 +688,7 @@ def _rebuild_struct_subclass(
         and namespace.get(name, dataclasses.MISSING) is dataclasses.MISSING
     }
     if (
-        no_init or kw_only_names or kw_only or kw_only_changed
+        no_init or kw_only_names or kw_only or kw_only_changed or redeclared or required_kw_only
     ) and (
         "__init__" not in cls.__dict__
         or getattr(cls.__dict__.get("__init__"), "_shim_synthesized", False)
@@ -840,7 +862,7 @@ def dataclass(
                 if translated.kw_only:
                     kw_only_names.add(name)
                 field_flags_map[name] = (translated.compare, translated.repr, translated.hash)
-            elif name in body_annotations and isinstance(value, (list, dict, set)):
+            elif name in body_annotations and _stock_mutable_raises(value):
                 _mutable_default_or_raise(name, value)
             elif name in body_annotations and _needs_factory_default(value):
                 factories.append((name, _deepcopy_factory(value)))
@@ -888,7 +910,7 @@ def dataclass(
                         else initvars[name]
                         if name in initvars
                         else namespace.get(name, dataclasses.MISSING),
-                        False if name in initvars else name in kw_only_names or kw_only,
+                        name in kw_only_names or kw_only,
                         name in initvars,
                     )
                     for name in body_annotations
@@ -917,9 +939,10 @@ def dataclass(
             field_names,
             tuple(body_annotations[name] for name in field_names),
             tuple(
-                namespace[name]
+                dataclasses.MISSING
+                if name in required_kw_only or name not in namespace
+                else namespace[name]
                 for name in field_names
-                if name in namespace and name not in required_kw_only
             ),
             tuple(() for _ in field_names),
             dict(factories),
