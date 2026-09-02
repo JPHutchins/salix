@@ -80,6 +80,10 @@ The InitVar story the tyro tier opened (passing InitVars to
   member descriptor, not the factory result stock stores on the class (the
   instance value is correct).
 - `__match_args__` includes `init=False` fields (stock excludes them).
+- Hashable-class defaults with unhashable content (a tuple containing a
+  list) become per-instance deepcopy factories where stock shares one
+  plain default: salix core refuses such defaults at the builder, and
+  `fields()` reports the factory instead of the shared value.
 - `asdict` recurses through list/dict/tuple containers of structs like
   stock but does not honor `dict_factory` options; `replace` is a
   dict-comprehension `salix.replace` equivalent.

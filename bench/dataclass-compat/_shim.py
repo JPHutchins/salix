@@ -276,7 +276,15 @@ def _build_fields(
         factory = factory_map.get(name)
         compare, repr_flag, hash_flag = flags_map.get(name, (True, True, None))
         field_kwargs: dict[str, Any] = {
-            "default": dataclasses.MISSING if (factory is not None or position < missing) else defaults[position - missing],
+            "default": (
+                dataclasses.MISSING
+                if (
+                    factory is not None
+                    or position < missing
+                    or defaults[position - missing] is _PLACEHOLDER
+                )
+                else defaults[position - missing]
+            ),
             "default_factory": factory if factory is not None else dataclasses.MISSING,
             "init": name not in no_init_names,
             "repr": repr_flag,
@@ -308,6 +316,20 @@ def fields(cls: Any) -> tuple[dataclasses.Field[Any], ...]:
         metadata_map.update(_field_metadata.get(base, {}))
         no_init_names.update(_no_init.get(base, frozenset()))
         kw_only_names.update(_kw_only.get(base, frozenset()))
+    default_map = dict(
+        zip(
+            struct.__struct_fields__[
+                len(struct.__struct_fields__) - len(struct.__struct_defaults__) :
+            ],
+            struct.__struct_defaults__,
+            strict=True,
+        )
+    )
+    factory_map = {
+        name: factory
+        for name, factory in factory_map.items()
+        if default_map.get(name) is _PLACEHOLDER
+    }
     return tuple(
         _build_fields(
             struct.__struct_fields__,
@@ -388,7 +410,6 @@ def _stock_mutable_raises(value: Any) -> bool:
 
 def _deepcopy_factory(default: Any) -> Callable[[], Any]:
     return lambda: copy.deepcopy(default)
-    return False
 
 
 def _mutable_default_or_raise(name: str, value: Any) -> NoReturn:
@@ -637,7 +658,10 @@ def _rebuild_struct_subclass(
             namespace[name] = _PLACEHOLDER
             continue
         if value is _PLACEHOLDER and name in redeclared:
+            field_flags_map[name] = (True, True, None)
             continue
+        if name in redeclared:
+            field_flags_map[name] = (True, True, None)
         if isinstance(value, dataclasses.Field):
             translated = _translate_field(cls.__name__, name, value)
             if translated.factory is not None:
