@@ -325,10 +325,22 @@ def fields(cls: Any) -> tuple[dataclasses.Field[Any], ...]:
             strict=True,
         )
     )
+    base_annotations: dict[str, Any] = {}
+    for base in struct.__mro__[1:]:
+        base_annotations.update(inspect.get_annotations(base))
+    redeclared = {
+        name
+        for name in struct.__struct_fields__
+        if name in base_annotations and name in getattr(struct, "__annotations__", {})
+    }
+    no_init_names -= redeclared
+    kw_only_names -= redeclared
+    own_factories = _factories.get(struct, {})
     factory_map = {
         name: factory
         for name, factory in factory_map.items()
-        if default_map.get(name) is _PLACEHOLDER
+        if name in own_factories
+        or (name not in redeclared and default_map.get(name) is _PLACEHOLDER)
     }
     return tuple(
         _build_fields(
@@ -636,6 +648,13 @@ def _rebuild_struct_subclass(
         for name in names
         if name in base_annotations and name in getattr(struct, "__annotations__", {})
     }
+    no_init -= redeclared
+    kw_only_names -= redeclared
+    inherited_factories = {
+        name: factory
+        for name, factory in inherited_factories.items()
+        if name not in redeclared
+    }
     defaulted = names[len(names) - len(defaults) :] if defaults else ()
     default_map = dict(zip(defaulted, defaults, strict=True))
     if _params_equal(
@@ -648,20 +667,18 @@ def _rebuild_struct_subclass(
     field_metadata: dict[str, Any] = {}
     field_flags_map: dict[str, tuple[bool, bool, bool | None]] = {}
     for name, value in default_map.items():
+        if name in redeclared and not isinstance(value, dataclasses.Field):
+            field_flags_map[name] = (True, True, None)
+            if value is _PLACEHOLDER:
+                continue
         if (
             value is _PLACEHOLDER
             and name in inherited_factories
             and name not in own_names
-            and name not in redeclared
         ):
             factories.append((name, inherited_factories[name]))
             namespace[name] = _PLACEHOLDER
             continue
-        if value is _PLACEHOLDER and name in redeclared:
-            field_flags_map[name] = (True, True, None)
-            continue
-        if name in redeclared:
-            field_flags_map[name] = (True, True, None)
         if isinstance(value, dataclasses.Field):
             translated = _translate_field(cls.__name__, name, value)
             if translated.factory is not None:

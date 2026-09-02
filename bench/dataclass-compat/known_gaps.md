@@ -84,6 +84,11 @@ The InitVar story the tyro tier opened (passing InitVars to
   list) become per-instance deepcopy factories where stock shares one
   plain default: salix core refuses such defaults at the builder, and
   `fields()` reports the factory instead of the shared value.
+- An annotation-only redeclaration over a non-factory defaulted base
+  field keeps the base's default where stock resets the field to
+  required: salix's statement-time class records the inherited value
+  indistinguishably from a body value, and the suites rely on body
+  values being kept.
 - `asdict` recurses through list/dict/tuple containers of structs like
   stock but does not honor `dict_factory` options; `replace` is a
   dict-comprehension `salix.replace` equivalent.
