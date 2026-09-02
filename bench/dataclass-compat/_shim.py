@@ -328,8 +328,6 @@ def fields(cls: Any) -> tuple[dataclasses.Field[Any], ...]:
         factory_map.update(_factories.get(base, {}))
         annotation_map.update(inspect.get_annotations(base))
         metadata_map.update(_field_metadata.get(base, {}))
-        no_init_names.update(_no_init.get(base, frozenset()))
-        kw_only_names.update(_kw_only.get(base, frozenset()))
     default_map = dict(
         zip(
             struct.__struct_fields__[
@@ -342,8 +340,14 @@ def fields(cls: Any) -> tuple[dataclasses.Field[Any], ...]:
     redeclared = _redeclared.get(struct)
     if redeclared is None:
         redeclared = _redeclared_names(struct)
-    no_init_names -= redeclared - _no_init.get(struct, frozenset())
-    kw_only_names -= redeclared - _kw_only.get(struct, frozenset())
+        _redeclared[struct] = redeclared
+    no_init_names = set()
+    kw_only_names = set()
+    for base in reversed(struct.__mro__):
+        no_init_names.difference_update(_redeclared.get(base, frozenset()))
+        no_init_names.update(_no_init.get(base, frozenset()))
+        kw_only_names.difference_update(_redeclared.get(base, frozenset()))
+        kw_only_names.update(_kw_only.get(base, frozenset()))
     own_factories = _factories.get(struct, {})
     factory_map = {
         name: factory
@@ -637,8 +641,10 @@ def _rebuild_struct_subclass(
     inherited_factories: dict[str, Callable[[], Any]] = {}
     no_init: set[str] = set()
     kw_only_names: set[str] = set()
-    for base in struct.__mro__[1:]:
+    for base in reversed(struct.__mro__[1:]):
+        no_init.difference_update(_redeclared.get(base, frozenset()))
         no_init.update(_no_init.get(base, frozenset()))
+        kw_only_names.difference_update(_redeclared.get(base, frozenset()))
         kw_only_names.update(_kw_only.get(base, frozenset()))
     for base in reversed(struct.__mro__):
         inherited_factories.update(_factories.get(base, {}))
@@ -659,6 +665,12 @@ def _rebuild_struct_subclass(
     }
     defaulted = names[len(names) - len(defaults) :] if defaults else ()
     default_map = dict(zip(defaulted, defaults, strict=True))
+    kw_only_overridden = {
+        name
+        for name in redeclared
+        if isinstance(default_map.get(name), dataclasses.Field)
+        and default_map[name].kw_only is False
+    }
     if _params_equal(
         cls.__dict__.get("__dataclass_params__"),
         _dataclass_params(init, repr, eq, order, unsafe_hash, frozen, match_args, kw_only),
@@ -709,6 +721,10 @@ def _rebuild_struct_subclass(
     for key, value in cls.__dict__.items():
         if key in names or key in _SALIX_MEMBERS:
             continue
+        if key == "__annotations_cache__":
+            continue
+        if key == "__annotate_func__" and value is None:
+            continue
         if key in ("__setattr__", "__delattr__") and value is getattr(object, key):
             continue
         if key == "__hash__" and value is None and eq:
@@ -745,7 +761,13 @@ def _rebuild_struct_subclass(
                     if name in required_kw_only
                     else namespace.get(name, dataclasses.MISSING),
                     name in kw_only_names
-                    or (kw_only and (name in own_names or name in redeclared)),
+                    or (
+                        kw_only
+                        and (
+                            name in own_names
+                            or (name in redeclared and name not in kw_only_overridden)
+                        )
+                    ),
                     False,
                 )
                 for name in names
@@ -760,7 +782,7 @@ def _rebuild_struct_subclass(
     metadata_map.update(field_metadata)
     if kw_only:
         kw_only_names.update(own_names)
-        kw_only_names.update(redeclared)
+        kw_only_names.update(redeclared - kw_only_overridden)
     namespace.update({name: _PLACEHOLDER for name in required_kw_only})
     merged_flags = {
         **_merged_field_flags(struct),
@@ -804,6 +826,8 @@ def _rebuild_struct_subclass(
         # and rebuilding here would re-trigger __init_subclass__ recursively.
         # Defer to the decorator that runs after the class statement.
         return cls
+
+
     built = cast(Any, type(cls))(
         cls.__name__,
         cls.__bases__,
@@ -819,8 +843,7 @@ def _rebuild_struct_subclass(
         _factories[built] = merged
     if no_init:
         _no_init[built] = frozenset(no_init)
-    if kw_only_names:
-        _kw_only[built] = frozenset(kw_only_names)
+    _kw_only[built] = frozenset(kw_only_names)
     if field_metadata:
         _field_metadata[built] = field_metadata
     if merged_flags:
@@ -1013,15 +1036,14 @@ def dataclass(
         )
         if factories:
             _factories[built] = dict(factories)
-        if no_init:
-            _no_init[built] = frozenset(no_init)
-        if kw_only_names:
-            _kw_only[built] = frozenset(kw_only_names)
+        _no_init[built] = frozenset(no_init)
+        _kw_only[built] = frozenset(kw_only_names)
         if field_metadata:
             _field_metadata[built] = field_metadata
         if field_flags_map:
             _merged_flags_cache.pop(built, None)
             _field_flags[built] = field_flags_map
+        _redeclared[built] = frozenset()
         _rebind_class_cells(cast(type[Any], built), cls)
         return cast(type[_T], built)
 
