@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-FORK_SHA=05c6e713c52be6b826457066a0541a07294f1960
+FORK_SHA=dfac2a101f910d2c6230b0592dbac344c8b2bb3e
 STOCK_SHA=4edba04e1db3478bea551c7c73d426abd59427bd
 PYTHON_VERSION=3.13
 

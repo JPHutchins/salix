@@ -8,7 +8,7 @@ speed claims.
 | library | fork | state | suite (fork mode) | suite (stock mode) |
 |---|---|---|---|---|
 | tyro | [JPHutchins/tyro-salix](https://github.com/JPHutchins/tyro-salix) PR #1 | **all 65 internal dataclasses converted to Structs** (2 documented exceptions) | 5088 passed, 300 skipped | 5080 passed, 300 skipped |
-| cyclopts | [JPHutchins/cyclopts-salix](https://github.com/JPHutchins/cyclopts-salix) PR #1 | reader reads Structs | 2530 passed, 22 failed, 3 errors | identical (same env) |
+| cyclopts | [JPHutchins/cyclopts-salix](https://github.com/JPHutchins/cyclopts-salix) PR #1 | **attrs classes converted to Structs** (3 documented exceptions) | 2530 passed, 22 failed, 3 errors | identical (same env) |
 
 The forks widen the spec readers' dataclass gates to also match
 struct metadata (tyro's `_struct_compat` / cyclopts'
@@ -18,10 +18,14 @@ the existing machinery consumes Structs unchanged), and replace the
 repos' own classes with Structs: tyro's internal dataclasses are all
 converted (exceptions: `LoweredArgumentDefinition`, which the lowering
 rules mutate ~40 times, and the `InstantiationError` Exception base).
-Cyclopts is attrs-based; its attrs-to-salix conversion is tracked in
-its fork PR, and until it lands its row demonstrates only the widened
-gates at stock parity — the 22 stock-identical failures make that
-explicit.
+Cyclopts is attrs-based; its attrs classes are converted to Structs
+with the same discipline (frozen unless the instances are reassigned;
+converters and validators move into __post_init__). Three classes stay
+attrs: Parameter and Group (attrs converters plus init-wrapping
+recorder / field aliases, which the generated struct constructor
+cannot host) and the exception classes (Exception bases). The 22
+failures in both columns are the sphinx-dependent tests, pre-existing
+on this environment.
 
 `run_tyro_salix.sh` and `run_cyclopts_salix.sh` reproduce the suite
 runs from this repo alone: they pin the fork and stock shas (full
