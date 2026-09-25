@@ -831,12 +831,13 @@ PyObject * Struct_get_signature(PyObject * const self, void * const closure) {
 			arguments == NULL ||
 			keywords == NULL ||
 			PyDict_SetItemString(keywords, "default", default_value) < 0 ||
-			PyDict_SetItemString(
+			(
+				PyDict_SetItemString(
 					keywords,
 					"annotation",
 					PyTuple_GET_ITEM(type->struct_annotations, i)
-				) <
-				0
+				) < 0
+			)
 		) {
 			return NULL;
 		}
@@ -922,6 +923,26 @@ static int Struct_set_attribute(
 
 	if (PyUnicode_Check(name) && PyUnicode_CompareWithASCIIString(name, "__orig_class__") == 0) {
 		return 0;
+	}
+
+	if (value != NULL && struct_type_of(self)->struct_options.frozen) {
+		/* Stock frozen dataclasses raise FrozenInstanceError; it subclasses
+		 * AttributeError, so generic catchers still work. */
+		PY_OWNED(module, PyImport_ImportModule("dataclasses"));
+
+		if (module != NULL) {
+			PY_OWNED(frozen_error, PyObject_GetAttrString(module, "FrozenInstanceError"));
+
+			if (frozen_error != NULL) {
+				PyErr_Format(frozen_error, "cannot assign to field '%U'", name);
+
+				return RESULT_ERROR;
+			}
+
+			PyErr_Clear();
+		} else {
+			PyErr_Clear();
+		}
 	}
 
 	PyErr_Format(

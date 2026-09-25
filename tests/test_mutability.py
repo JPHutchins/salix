@@ -17,7 +17,7 @@ class Mutable(Struct, frozen=False):
 
 
 def test_a_struct_is_frozen_unless_it_says_otherwise():
-    with pytest.raises(AttributeError, match="does not support attribute assignment"):
+    with pytest.raises(AttributeError, match="cannot assign to field 'x'"):
         Frozen(1).x = 9
 
     with pytest.raises(AttributeError, match="does not support attribute deletion"):
@@ -28,7 +28,7 @@ def test_frozen_true_is_accepted_and_is_the_default_anyway():
     class Explicit(Struct, frozen=True):
         x: int
 
-    with pytest.raises(AttributeError, match="does not support attribute assignment"):
+    with pytest.raises(AttributeError, match="cannot assign to field 'x'"):
         Explicit(1).x = 9
 
 
@@ -112,7 +112,7 @@ def test_frozenness_is_inherited():
     class Child(Frozen):
         z: int = 3
 
-    with pytest.raises(AttributeError, match="does not support attribute assignment"):
+    with pytest.raises(AttributeError, match="cannot assign to field 'z'"):
         Child(1, 2, 3).z = 9
 
 
@@ -133,7 +133,7 @@ def test_a_frozen_struct_may_strengthen_a_mutable_one():
 
     instance = Child(1)
 
-    with pytest.raises(AttributeError, match="does not support attribute assignment"):
+    with pytest.raises(AttributeError, match="cannot assign to field 'x'"):
         instance.x = 9
 
     assert instance == Child(1)
@@ -155,7 +155,7 @@ def test_frozen_true_over_a_mutable_base_holds_beside_a_permissive_co_base():
         pass
 
     for Child in (Ahead, Behind):
-        with pytest.raises(AttributeError, match="does not support attribute"):
+        with pytest.raises(AttributeError, match="cannot assign to field 'x'"):
             Child(1).x = 9
 
         with pytest.raises(AttributeError, match="does not support attribute"):
@@ -184,7 +184,7 @@ def test_a_frozen_child_of_a_frozen_base_holds_beside_a_permissive_co_base():
     for Child in (Ahead, Behind):
         assert "__setattr__" in Child.__dict__
 
-        with pytest.raises(AttributeError, match="does not support attribute"):
+        with pytest.raises(AttributeError, match="cannot assign to field 'x'"):
             Child(1).x = 9
 
         with pytest.raises(AttributeError, match="does not support attribute"):
@@ -241,7 +241,7 @@ def test_a_frozen_setattr_escape_beside_a_permissive_co_base_keeps_answering():
     class InheritedAhead(Permissive, Escaping):
         pass
 
-    with pytest.raises(AttributeError, match="does not support attribute"):
+    with pytest.raises(AttributeError, match="cannot assign to field 'x'"):
         InheritedAhead(1).x = 9
 
 
@@ -268,7 +268,7 @@ def test_a_frozen_delattr_escape_beside_a_permissive_co_base_keeps_answering():
         if sys.version_info >= (3, 13):
             del Child(1).x
 
-            with pytest.raises(AttributeError, match="does not support attribute"):
+            with pytest.raises(AttributeError, match="cannot assign to field 'x'"):
                 Child(1).x = 9
         else:
             with pytest.raises(TypeError):
@@ -424,7 +424,7 @@ def test_a_child_of_a_fieldless_mutable_base_may_freeze_itself():
     class Child(Fieldless, frozen=True):
         x: int
 
-    with pytest.raises(AttributeError, match="does not support attribute assignment"):
+    with pytest.raises(AttributeError, match="cannot assign to field 'x'"):
         Child(1).x = 9
 
     assert hash(Child(1)) == hash((1,))

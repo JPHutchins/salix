@@ -52,7 +52,7 @@ def test_neither_spelling_may_be_assigned(name):
     with pytest.raises(AttributeError):
         setattr(Point, name, ("z",))
 
-    with pytest.raises(AttributeError, match="does not support attribute assignment"):
+    with pytest.raises(AttributeError, match="cannot assign to field"):
         setattr(Point(1), name, ("z",))
 
 
