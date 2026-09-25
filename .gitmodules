@@ -1,0 +1,18 @@
+[submodule "bench/source-tiers/vendor/tyro-salix"]
+	path = bench/source-tiers/vendor/tyro-salix
+	url = https://github.com/JPHutchins/tyro-salix.git
+[submodule "bench/source-tiers/vendor/cyclopts-salix"]
+	path = bench/source-tiers/vendor/cyclopts-salix
+	url = https://github.com/JPHutchins/cyclopts-salix.git
+[submodule "bench/source-tiers/vendor/omegaconf-salix"]
+	path = bench/source-tiers/vendor/omegaconf-salix
+	url = https://github.com/JPHutchins/omegaconf-salix.git
+[submodule "bench/source-tiers/vendor/transformers-salix"]
+	path = bench/source-tiers/vendor/transformers-salix
+	url = https://github.com/JPHutchins/transformers-salix.git
+[submodule "bench/source-tiers/vendor/hydra"]
+	path = bench/source-tiers/vendor/hydra
+	url = https://github.com/facebookresearch/hydra.git
+[submodule "tyro-salix"]
+	path = bench/source-tiers/vendor/tyro-salix
+	url = https://github.com/JPHutchins/tyro-salix.git
