@@ -22,7 +22,7 @@ done
 [[ -n "$SALIX_WHEEL" ]] || usage
 [[ -e "$SALIX_WHEEL" ]] || { echo "salix wheel not found: $SALIX_WHEEL" >&2; exit 1; }
 
-CHECKOUT="$(dirname "$0")/vendor/tyro-salix"
+CHECKOUT="$(dirname "$0")/vendor/omegaconf-salix"
 [[ -e "$CHECKOUT/.git" ]] || { echo "submodule not initialized: $CHECKOUT" >&2; exit 1; }
 
 WORKDIR="${WORKDIR:-$(mktemp -d)}"

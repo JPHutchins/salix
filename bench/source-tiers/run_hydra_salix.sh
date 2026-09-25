@@ -22,7 +22,8 @@ done
 [[ -n "$SALIX_WHEEL" ]] || usage
 [[ -e "$SALIX_WHEEL" ]] || { echo "salix wheel not found: $SALIX_WHEEL" >&2; exit 1; }
 
-CHECKOUT="$(dirname "$0")/vendor/tyro-salix"
+HERE="$(cd "$(dirname "$0")" && pwd)"
+CHECKOUT="$HERE/vendor/hydra"
 [[ -e "$CHECKOUT/.git" ]] || { echo "submodule not initialized: $CHECKOUT" >&2; exit 1; }
 
 WORKDIR="${WORKDIR:-$(mktemp -d)}"
@@ -31,7 +32,9 @@ VENV="$WORKDIR/venv"
 if [[ ! -d "$VENV" ]]; then
     uv venv --python "$PYTHON_VERSION" "$VENV"
 fi
-uv pip install --python "$VENV" -e "$CHECKOUT[dev]"
+uv pip install --python "$VENV" -r "$HERE/../dataclass-compat/requirements-hydra.txt"
+uv pip install --python "$VENV" -e "$CHECKOUT"
+uv pip install --python "$VENV" -r "$CHECKOUT/requirements/dev.txt"
 if [[ -d "$SALIX_WHEEL" ]]; then
     WHEEL_LINKS="$SALIX_WHEEL"
 else
@@ -39,9 +42,18 @@ else
 fi
 uv pip install --python "$VENV" --no-index --find-links "$WHEEL_LINKS" --reinstall salix==0.1.0
 
+INSTALL_STANZA='from _shim import install
+install()'
+if ! grep -q "from _shim import install" "$CHECKOUT/conftest.py"; then
+    {
+        echo ""
+        echo "$INSTALL_STANZA"
+    } >>"$CHECKOUT/conftest.py"
+fi
+
 (
     cd "$CHECKOUT"
-    "$VENV/bin/python" -m pytest tests/ -q
+    PYTHONPATH="$HERE/../dataclass-compat" "$VENV/bin/python" -m pytest tests/ -q
 )
 
 if [[ "$KEEP_VENV" -eq 0 ]]; then

@@ -23,7 +23,7 @@ done
 [[ -e "$SALIX_WHEEL" ]] || { echo "salix wheel not found: $SALIX_WHEEL" >&2; exit 1; }
 
 CHECKOUT="$(dirname "$0")/vendor/cyclopts-salix"
-[[ -d "$CHECKOUT/.git" ]] || { echo "submodule not initialized: $CHECKOUT" >&2; exit 1; }
+[[ -e "$CHECKOUT/.git" ]] || { echo "submodule not initialized: $CHECKOUT" >&2; exit 1; }
 
 WORKDIR="${WORKDIR:-$(mktemp -d)}"
 VENV="$WORKDIR/venv"
