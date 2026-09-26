@@ -30,7 +30,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 CHECKOUT="$HERE/vendor/transformers-salix"
 [[ -e "$CHECKOUT/.git" ]] || { echo "submodule not initialized: $CHECKOUT" >&2; exit 1; }
 
-PIN_SHA="$(git -C "$HERE" ls-tree HEAD bench/source-tiers/vendor/transformers-salix | awk '{print $3}')"
+PIN_SHA="$(git -C "$HERE" ls-tree HEAD vendor/transformers-salix | awk '{print $3}')"
 [[ "$(git -C "$CHECKOUT" rev-parse HEAD)" == "$PIN_SHA" ]] || {
     echo "checkout is not at the pinned commit: expected $PIN_SHA, at $(git -C "$CHECKOUT" rev-parse HEAD)" >&2
     exit 1
@@ -62,10 +62,13 @@ trap cleanup EXIT
 if [[ ! -d "$VENV" ]]; then
     uv venv --python "$PYTHON_VERSION" "$VENV"
 fi
-# torch is what the model modules import at module scope; the testing extra
-# carries pytest and its plugins. The shim itself lives in dataclass-compat
-# and rides PYTHONPATH, so the pinned checkout is never written to.
-uv pip install --python "$VENV" -e "$CHECKOUT[testing]" torch
+# torch is what the model modules import at module scope, and the parity
+# walk never touches a tensor, so the CPU index serves the import without
+# the CUDA-bundled wheel. The testing extra carries pytest and its plugins.
+# The shim itself lives in dataclass-compat and rides PYTHONPATH, so the
+# pinned checkout is never written to.
+uv pip install --python "$VENV" -e "$CHECKOUT[testing]"
+uv pip install --python "$VENV" --index https://download.pytorch.org/whl/cpu torch
 if [[ -d "$SALIX_WHEEL" ]]; then
     WHEEL_LINKS="$SALIX_WHEEL"
 else
@@ -107,7 +110,8 @@ for module in pkgutil.walk_packages(transformers.models.__path__, "transformers.
         continue
 print(f"model classes with config_class: {count}")
 print(f"modules whose import failed: {failed}")
-assert count == 782, f"import parity broken: {count} != 782"
+assert count == 3266, f"import parity broken: {count} != 3266"
+assert failed == 351, f"unexpected import failures: {failed} != 351"
 PYEOF
 
 if [[ "$RUN_SUITE" -eq 1 ]]; then

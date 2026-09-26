@@ -28,7 +28,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 CHECKOUT="$HERE/vendor/omegaconf-salix"
 [[ -e "$CHECKOUT/.git" ]] || { echo "submodule not initialized: $CHECKOUT" >&2; exit 1; }
 
-PIN_SHA="$(git -C "$HERE" ls-tree HEAD bench/source-tiers/vendor/omegaconf-salix | awk '{print $3}')"
+PIN_SHA="$(git -C "$HERE" ls-tree HEAD vendor/omegaconf-salix | awk '{print $3}')"
 [[ "$(git -C "$CHECKOUT" rev-parse HEAD)" == "$PIN_SHA" ]] || {
     echo "checkout is not at the pinned commit: expected $PIN_SHA, at $(git -C "$CHECKOUT" rev-parse HEAD)" >&2
     exit 1
