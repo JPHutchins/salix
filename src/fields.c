@@ -128,7 +128,6 @@ static bool class_var_machinery_name(PyObject * const name) {
 	);
 }
 static PyObject * build_defaults(PyObject * all_names, PyObject * default_by_name);
-static enum result reject_unsafe_default(PyObject * field_name, PyObject * value);
 static PyObject * checked_annotations(PyObject * namespace);
 static enum inheritance inherits_field(StructType const * base, PyObject * field_name);
 static struct special_form special_form_of(
@@ -910,28 +909,6 @@ static PyObject * module_attribute(char const * const module_name, char const * 
 	return optional_attribute(module, attribute);
 }
 
-static enum result reject_unsafe_default(PyObject * const field_name, PyObject * const value) {
-	PyTypeObject * const kind = Py_TYPE(value);
-	Py_ssize_t const filled = struct_copies_default(kind) ? PyObject_Size(value) : 0;
-
-	if (filled <= 0) {
-		return filled < 0 ? RESULT_ERROR : RESULT_OK;
-	}
-
-	PyErr_Format(
-		PyExc_TypeError,
-		"field '%U' defaults to a non-empty %.100s, whose copy could only be "
-		"shallow and would leave the contents shared; default it to an empty "
-		"one and fill it with set_field -- from __post_init__, or from your own "
-		"__init__ if the body writes one, which displaces the constructor "
-		"__post_init__ runs from",
-		field_name,
-		kind->tp_name
-	);
-
-	return RESULT_ERROR;
-}
-
 static PyObject * build_defaults(PyObject * const all_names, PyObject * const default_by_name) {
 	Py_ssize_t const field_count = PyList_GET_SIZE(all_names);
 	Py_ssize_t first_default = field_count;
@@ -993,16 +970,9 @@ static PyObject * build_defaults(PyObject * const all_names, PyObject * const de
 		 *
 		 * `_struct_defaults_` still hands the stored object out, so filling it
 		 * through there defeats this. That route is out of contract. */
-		if (reject_unsafe_default(field_name, value) != RESULT_OK) {
-			Py_DECREF(defaults);
-
-			return NULL;
-		}
-
 		PyObject * const stored = struct_default_copy(value);
 
-		if (stored == NULL || reject_unsafe_default(field_name, stored) != RESULT_OK) {
-			Py_XDECREF(stored);
+		if (stored == NULL) {
 			Py_DECREF(defaults);
 
 			return NULL;

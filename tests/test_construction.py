@@ -241,33 +241,39 @@ class TestMutableDefaults:
 
         assert Holder(supplied).xs is supplied
 
-    def test_a_non_empty_container_is_refused_rather_than_shallow_copied(self):
-        """Copying it could only be shallow, so every instance would get its own
-        outer list around the same inner one -- the same bug one level down.
+    def test_a_non_empty_container_is_deep_copied(self):
+        """#172: a shallow copy would share the inner list, so the default is
+        deep-copied per instance instead of refused.
         """
 
-        with pytest.raises(TypeError, match="non-empty list"):
+        class Nested(Struct):
+            xs: list = [[1]]  # noqa: RUF012 -- the copy is the assertion
 
-            class Nested(Struct):
-                xs: list = [[1]]  # noqa: RUF012 -- the refusal is the assertion
+        first, second = Nested(), Nested()
+        first.xs[0].append(2)
+
+        assert second.xs == [[1]]
 
     @pytest.mark.parametrize(
         "factory",
         [kind for kind in COPIED_WHEN_EMPTY if kind is not list],
         ids=lambda factory: factory.__name__,
     )
-    def test_every_non_empty_builtin_is_refused(self, factory):
-        """Derived from the same list the copying is, so a type added there
-        arrives here refused as well as copied -- the two halves of the rule
-        that have to agree.
+    def test_every_non_empty_builtin_is_deep_copied(self, factory):
+        """#172: the refusal is gone; the default is deep-copied per instance,
+        derived from the same list the copying is, so a type added there
+        arrives here copied as well -- the halves of the rule still agree.
         """
 
         value = NON_EMPTY[factory]
 
-        with pytest.raises(TypeError, match=f"non-empty {factory.__name__}"):
+        class Holder(Struct):
+            v: object = value
 
-            class Holder(Struct):
-                v: object = value
+        first, second = Holder(), Holder()
+
+        assert first.v is not second.v
+        assert first.v == value
 
     @pytest.mark.parametrize(
         "value",
@@ -491,21 +497,23 @@ class TestMutableDefaults:
         assert Holder().v is Holder().v
 
     def test_a_body_init_does_not_exempt_the_declared_default(self):
-        """Its constructor never reads the default, so nothing is shared -- but
-        the declaration is still a promise the class makes through
-        _struct_defaults_, and dataclasses refuses it under init=False for the
-        same reason. The message names both hooks because __post_init__ is not
-        one of them here: a body __init__ displaces the generated constructor,
-        and run_post_init goes with it.
+        """Its constructor never reads the default, so nothing is shared. The
+        declaration is still a promise the class makes through
+        _struct_defaults_, and the stored copy is severed from the declared
+        object by the deep copy.
         """
 
-        with pytest.raises(TypeError, match=r"non-empty list.*your own __init__"):
+        class Holder(Struct, frozen=False):
+            xs: list = ["a", "b"]  # noqa: RUF012 -- the copy is the assertion
 
-            class Holder(Struct, frozen=False):
-                xs: list = ["a", "b"]  # noqa: RUF012 -- the refusal is the assertion
+        class WithBodyInit(Struct, frozen=False):
+            xs: list = ["a", "b"]  # noqa: RUF012 -- the copy is the assertion
 
-                def __init__(self) -> None:
-                    self.xs = []
+            def __init__(self) -> None:
+                self.xs = []
+
+        assert Holder._struct_defaults_[0] == ["a", "b"]
+        assert WithBodyInit._struct_defaults_[0] == ["a", "b"]
 
     def test_a_subclass_of_a_mutable_builtin_is_shared_not_copied(self):
         """The copy has to preserve the type and PyDict_Copy of a defaultdict is
