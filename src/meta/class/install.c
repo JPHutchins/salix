@@ -126,7 +126,9 @@ enum result ensure_singleton(StructType * const struct_class, bool const bases_d
 }
 
 bool defines_own_init(StructType const * const struct_class) {
-	return struct_class->heap_type.ht_type.tp_init != PyBaseObject_Type.tp_init;
+	PyTypeObject const * const init_owner = struct_class->heap_type.ht_type.tp_init;
+
+	return init_owner != PyBaseObject_Type.tp_init && init_owner != ((PyTypeObject *) PyExc_BaseException)->tp_init;
 }
 
 enum result install_post_init(StructType * const struct_class) {
