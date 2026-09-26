@@ -44,8 +44,7 @@ Measured 2026-09-01: 5062 passed, 30 failed, 288 skipped. Failure families:
 
 Also documented: a namespace `__setattr__` flips salix's hash plan to
 unhashable, so the shim injects none (unfrozen structs accept plain
-assignment natively; frozen ones refuse with AttributeError instead of
-stock's FrozenInstanceError).
+assignment natively; frozen ones raise stock's FrozenInstanceError).
 
 Hydra's real startup path (composing its example config) hits an
 instance-`__dict__` cache in its own internals that the suite never

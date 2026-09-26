@@ -129,6 +129,12 @@ class TestPep487Keywords:
 
 
 class TestEq:
+    def test_frozen_assignment_raises_frozen_instance_error(self):
+        from dataclasses import FrozenInstanceError
+
+        with pytest.raises(FrozenInstanceError, match="cannot assign to field 'x'"):
+            NoEq(1).x = 2
+
     def test_identity_replaces_structural_equality(self):
         instance = NoEq(1)
 

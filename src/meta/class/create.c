@@ -108,8 +108,13 @@ PyObject * build_struct_class(
 
 				if (
 					weakref_only == NULL ||
-					PyDict_SetItemString(weakref_only, option_keywords[OPTION_WEAKREF], Py_True) <
-						0
+					(
+						PyDict_SetItemString(
+							weakref_only,
+							option_keywords[OPTION_WEAKREF],
+							Py_True
+						) < 0
+					)
 				) {
 					return NULL;
 				}
@@ -125,8 +130,13 @@ PyObject * build_struct_class(
 
 				if (
 					weakref_only == NULL ||
-					PyDict_SetItemString(weakref_only, option_keywords[OPTION_WEAKREF], Py_True) <
-						0
+					(
+						PyDict_SetItemString(
+							weakref_only,
+							option_keywords[OPTION_WEAKREF],
+							Py_True
+						) < 0
+					)
 				) {
 					return NULL;
 				}
@@ -210,13 +220,14 @@ struct field_plan plan = field_plan_build(base, original_namespace);
 		refuse_colliding_methods(original_namespace, plan.all_names, name) != RESULT_OK ||
 		refuse_mixin_method_fields(plan.all_names) != RESULT_OK ||
 		refuse_slot_name_fields(plan.new_names) != RESULT_OK ||
-		refuse_displaced_slots(
+		(
+			refuse_displaced_slots(
 				original_namespace,
 				plan.all_names,
 				request.options,
 				survey.facts.instance_dict_carried
-			) !=
-			RESULT_OK
+			) != RESULT_OK
+		)
 	) {
 		field_plan_clear(&plan);
 
@@ -332,14 +343,15 @@ struct field_plan plan = field_plan_build(base, original_namespace);
 				);
 
 				if (
-					settle_mro_bindings(
+					(
+						settle_mro_bindings(
 							struct_class,
 							bases,
 							original_namespace,
 							bindings,
 							request.options
-						) !=
-						RESULT_OK ||
+						) != RESULT_OK
+					) ||
 					install_constructor(struct_class, bases_divert_setattro) != RESULT_OK
 				) {
 					Py_CLEAR(struct_class);
