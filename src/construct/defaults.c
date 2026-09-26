@@ -1,6 +1,7 @@
 #include <Python.h>
 
 #include "construct.h"
+#include "../owned.h"
 #include "../result.h"
 #include "../types.h"
 
@@ -15,7 +16,56 @@ static PyObject * copy_list(PyObject * const declared) {
 	return PyList_GetSlice(declared, 0, PyList_GET_SIZE(declared));
 }
 
-static default_copier copies_default(PyTypeObject const * const kind) {
+static PyObject * copy_declared(PyObject * const declared) {
+	/* The type's own constructor preserves the subclass, which runs the
+	 * subclass's __init__ (and __len__, at the class-statement emptiness
+	 * gate) on every copy. A constructor whose signature is not the iterable
+	 * one (a defaultdict takes a factory) raises TypeError; the caller falls
+	 * back to the base copy, dropping the subclass and its extra state. Any
+	 * TypeError raised by the constructor's own code is swallowed the same
+	 * way — the fallback cannot tell the two apart. */
+	return PyObject_CallOneArg((PyObject *) Py_TYPE(declared), declared);
+}
+
+static PyObject * copy_or_base(
+	PyObject * const declared,
+	PyObject * (* const base_copy) (PyObject *)
+) {
+	PY_MOVABLE(copied, copy_declared(declared));
+
+	/* A constructor that returns its argument is a caching or delegating
+	 * __new__; the result would re-alias the declared default, so it takes
+	 * the base-copy path like a rejecting constructor. */
+	if (copied != NULL && copied != declared) {
+		return py_move(&copied);
+	}
+
+	if (copied == NULL && !PyErr_ExceptionMatches(PyExc_TypeError)) {
+		return NULL;
+	}
+
+	PyErr_Clear();
+
+	return base_copy(declared);
+}
+
+static PyObject * copy_list_or_base(PyObject * const declared) {
+	return copy_or_base(declared, copy_list);
+}
+
+static PyObject * copy_dict_or_base(PyObject * const declared) {
+	return copy_or_base(declared, PyDict_Copy);
+}
+
+static PyObject * copy_set_or_base(PyObject * const declared) {
+	return copy_or_base(declared, PySet_New);
+}
+
+static PyObject * copy_bytearray_or_base(PyObject * const declared) {
+	return copy_or_base(declared, PyByteArray_FromObject);
+}
+
+static default_copier copies_default(PyTypeObject * const kind) {
 	if (kind == &PyList_Type) {
 		return copy_list;
 	}
@@ -32,10 +82,26 @@ static default_copier copies_default(PyTypeObject const * const kind) {
 		return PyByteArray_FromObject;
 	}
 
+	if (PyType_IsSubtype(kind, &PyList_Type)) {
+		return copy_list_or_base;
+	}
+
+	if (PyType_IsSubtype(kind, &PyDict_Type)) {
+		return copy_dict_or_base;
+	}
+
+	if (PyType_IsSubtype(kind, &PySet_Type)) {
+		return copy_set_or_base;
+	}
+
+	if (PyType_IsSubtype(kind, &PyByteArray_Type)) {
+		return copy_bytearray_or_base;
+	}
+
 	return NULL;
 }
 
-bool struct_copies_default(PyTypeObject const * const kind) {
+bool struct_copies_default(PyTypeObject * const kind) {
 	return copies_default(kind) != NULL;
 }
 

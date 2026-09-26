@@ -32,7 +32,7 @@ def test_a_value_survives_a_round_trip_unchanged(value):
 
 @pytest.mark.parametrize("value", EVERY, ids=identify)
 def test_a_value_may_be_a_default(value):
-    if type(value) in COPIED_WHEN_EMPTY and len(value) > 0:
+    if isinstance(value, COPIED_WHEN_EMPTY) and len(value) > 0:
         with pytest.raises(TypeError, match="non-empty"):
 
             class Refused(Struct):
@@ -56,7 +56,7 @@ def test_a_value_may_be_a_default(value):
     assert Local().field == value
     assert stored == value
 
-    if type(value) in COPIED_WHEN_EMPTY:
+    if isinstance(value, COPIED_WHEN_EMPTY):
         # Two copies, not one: the class keeps its own, severed from whatever
         # the body named, and each instance keeps one severed from the class's.
         assert stored is not value

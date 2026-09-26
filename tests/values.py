@@ -8,12 +8,14 @@ import typing
 
 from salix import Struct
 
-# Exactly these four, not subclasses of them: the copy has to preserve the type,
-# and a PyDict_Copy of a defaultdict is a dict. Empty ones are copied per
-# instance; a non-empty one is refused, because copying it could only be shallow
-# and its contents would still be shared. `struct_copies_default` in
-# src/construct.h is what this mirrors, and it is the only list of the four that
-# the suite keeps.
+# These four and their subclasses: the copy goes through the declared type's
+# own constructor where its signature is the iterable one, and falls back to the
+# base copy otherwise (a defaultdict keeps neither its factory nor its type on
+# that path). Any TypeError the constructor itself raises is swallowed the same
+# way -- the fallback cannot tell the two apart. Empty ones are copied per instance; a non-empty one is refused,
+# because copying it could only be shallow and its contents would still be
+# shared. `struct_copies_default` in src/construct.h is what this mirrors, and
+# it is the only list of the four that the suite keeps.
 COPIED_WHEN_EMPTY = (list, dict, set, bytearray)
 
 # A non-empty instance of each, for the half of the rule that refuses rather
