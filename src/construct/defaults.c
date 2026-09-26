@@ -1,6 +1,7 @@
 #include <Python.h>
 
 #include "construct.h"
+#include "../owned.h"
 #include "../result.h"
 #include "../types.h"
 
