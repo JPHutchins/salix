@@ -8,23 +8,24 @@ import typing
 
 from salix import Struct
 
-# These four and their subclasses: the copy goes through the declared type's
-# own constructor where its signature is the iterable one, and falls back to the
-# base copy otherwise (a defaultdict keeps neither its factory nor its type on
-# that path). Empty ones are copied per instance; a non-empty one is refused,
-# because copying it could only be shallow and its contents would still be
-# shared. `struct_copies_default` in src/construct.h is what this mirrors, and
-# it is the only list of the four that the suite keeps.
+# These four and their subclasses: an empty default copies through the
+# declared type's own constructor where its signature is the iterable one, and
+# falls back to the base copy otherwise (a defaultdict keeps neither its
+# factory nor its type on that path); a non-empty one is deep-copied per
+# instance, and a value a deepcopy cannot carry falls back to sharing. Any
+# TypeError the constructor itself raises is swallowed the same way -- the
+# fallback cannot tell the two apart. `src/construct/defaults.c` is what this
+# mirrors, and it is the only list of the four that the suite keeps.
 COPIED_WHEN_EMPTY = (list, dict, set, bytearray)
 
-# A non-empty instance of each, for the half of the rule that refuses rather
-# than copies. The types come from the tuple above; only the contents are
-# spelled here, because no one seed constructs all four -- dict wants pairs and
-# bytearray wants small ints. The assertion is what keeps the two from drifting.
+# A non-empty instance of each, for the deep-copy half of the rule. The types
+# come from the tuple above; only the contents are spelled here, because no one
+# seed constructs all four -- dict wants pairs and bytearray wants small ints.
+# The assertion is what keeps the two from drifting.
 NON_EMPTY = {list: [1], dict: {"k": 1}, set: {1}, bytearray: bytearray(b"x")}
 
 # A seed is an exact instance of its own key, and it is non-empty; `b"x"` is a
-# bytes rather than a bytearray and would not be refused at all.
+# bytes rather than a bytearray and would not take the deep path at all.
 assert set(NON_EMPTY) == set(COPIED_WHEN_EMPTY)
 assert all(type(value) is kind and len(value) > 0 for kind, value in NON_EMPTY.items())
 

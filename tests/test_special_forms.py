@@ -241,10 +241,14 @@ def test_re_annotating_an_inherited_field_with_a_mutable_is_deep_copied():
     class Base(Struct):
         x: int = 3
 
-    class Sub(Base):
-        x: ClassVar[list] = ([1],)
+    body = ([1],)
 
-    assert Sub._struct_defaults_[0] == ([1],)
+    class Sub(Base):
+        x: ClassVar[list] = body
+
+    assert Sub._struct_defaults_[0] == body
+    assert Sub._struct_defaults_[0] is not body
+    assert Sub().x is not body
 
 
 def test_re_annotating_an_inherited_class_var_without_a_value_is_refused():

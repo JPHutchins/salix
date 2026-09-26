@@ -954,19 +954,8 @@ static PyObject * build_defaults(PyObject * const all_names, PyObject * const de
 			return NULL;
 		}
 
-		/* Twice, on purpose. The first read is what raises in the ordinary case,
-		 * but its verdict is not final: it reads an object the module still
-		 * holds and can still write to between the two checks. It earns its
-		 * place by being O(1) and keeping a default that is going to be refused
-		 * from being built into a copy that is then thrown away -- that copy is
-		 * the whole of what it saves, since copying a set hashes nothing
-		 * (PySet_New copies the table).
-		 *
-		 * The second read is the one that counts, because it reads the copy --
-		 * what the class keeps, and what no module-level alias still points at.
-		 * A racing write is captured by the copy (the copy is made from the
-		 * declaration, so of course it is) and refused there, so the race costs
-		 * the work the first check exists to skip and not the invariant.
+		/* The stored copy is what the class keeps, severed from the class-body
+		 * object and from any module-level alias still pointing at it.
 		 *
 		 * `_struct_defaults_` still hands the stored object out, so filling it
 		 * through there defeats this. That route is out of contract. */
