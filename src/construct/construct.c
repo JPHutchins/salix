@@ -217,6 +217,37 @@ static void store_exception_args(PyObject * const self, PyObject * const args) {
 	Py_XDECREF(old);
 }
 
+#if PY_VERSION_HEX >= 0x030B0000
+static enum result store_group_args(StructType * const type, PyObject * const self) {
+	/* The group payload is the members' shape -- (msg, excs) when both
+	 * fields exist, the single member otherwise -- so pickle's positional
+	 * reconstruction binds them by index back onto the same fields. A
+	 * struct without either member field keeps the field-value payload the
+	 * explicit-prefix writer produced. */
+	bool const has_message = type->struct_message_index >= 0;
+	bool const has_exceptions = type->struct_exceptions_index >= 0;
+
+	if (!has_message && !has_exceptions) {
+		return RESULT_OK;
+	}
+
+	PyBaseExceptionGroupObject * const group = (PyBaseExceptionGroupObject *) self;
+	PY_MOVABLE(packed, (
+		has_message && has_exceptions ? PyTuple_Pack(2, group->msg, group->excs) :
+		has_message ? PyTuple_Pack(1, group->msg) :
+		PyTuple_Pack(1, group->excs)
+	));
+
+	if (packed == NULL) {
+		return RESULT_ERROR;
+	}
+
+	store_exception_args(self, py_move(&packed));
+
+	return RESULT_OK;
+}
+#endif
+
 enum result set_exception_args_from_fields(
 	StructType * const type,
 	PyObject * const self,
@@ -626,17 +657,13 @@ PyObject * Struct_vectorcall(
 
 	if (exception_struct) {
 #if PY_VERSION_HEX >= 0x030B0000
-		if (type->struct_group_family) {
-			/* args mirror the members the carry installed, whatever the
-			 * field-declaration order. */
-			PyBaseExceptionGroupObject * const group = (PyBaseExceptionGroupObject *) self;
-			PY_MOVABLE(packed_args, PyTuple_Pack(2, group->msg, group->excs));
-
-			if (packed_args == NULL) {
+		if (
+			type->struct_group_family &&
+			(type->struct_message_index >= 0 || type->struct_exceptions_index >= 0)
+		) {
+			if (store_group_args(type, self) != RESULT_OK) {
 				return NULL;
 			}
-
-			store_exception_args(self, py_move(&packed_args));
 		} else
 #endif
 		if (set_exception_args_from_fields(type, self, explicit_count) != RESULT_OK) {
@@ -775,6 +802,19 @@ PyObject * Struct_replace(
 					PyErr_Clear();
 					allocated_route = true;
 					replaced = cls->tp_alloc(cls, 0);
+				} else if (replaced != NULL && !PyObject_TypeCheck(replaced, cls)) {
+					/* The type_call sequence this mirrors hands an author
+					 * __new__'s foreign object back without initializing it;
+					 * the slot writes that follow assume the struct's own
+					 * layout. */
+					PyErr_Format(
+						PyExc_TypeError,
+						"%s.__new__(%s) is not safe, use %s.__new__()",
+						Py_TYPE(replaced)->tp_name,
+						cls->tp_name,
+						cls->tp_name
+					);
+					Py_CLEAR(replaced);
 				} else if (replaced != NULL) {
 					if (cls->tp_init != NULL && cls->tp_init(replaced, positionals, NULL) < 0) {
 						Py_CLEAR(replaced);
@@ -845,21 +885,9 @@ PyObject * Struct_replace(
 							return NULL;
 						}
 
-						PyBaseExceptionGroupObject * const rebuilt_group =
-							(PyBaseExceptionGroupObject *) replaced;
-						PY_MOVABLE(
-							packed_args,
-							PyTuple_Pack(2, rebuilt_group->msg, rebuilt_group->excs)
-						);
-
-						if (packed_args == NULL) {
+						if (store_group_args(type, replaced) != RESULT_OK) {
 							return NULL;
 						}
-
-						Py_XSETREF(
-							((PyBaseExceptionObject *) replaced)->args,
-							py_move(&packed_args)
-						);
 					} else if (allocated_route) {
 						if (
 							carry_group_members(
@@ -1058,16 +1086,13 @@ PyObject * Struct_replace(
 #if PY_VERSION_HEX >= 0x030B0000
 	if (type->struct_group_family) {
 		/* The payload mirrors the carried or rebuilt members, so args and
-		 * str() never disagree about the message. The locked store answers
-		 * because the post-init hook may have published the copy. */
-		PyBaseExceptionGroupObject * const group = (PyBaseExceptionGroupObject *) copy;
-		PY_MOVABLE(packed_args, PyTuple_Pack(2, group->msg, group->excs));
-
-		if (packed_args == NULL) {
+		 * str() never disagree about the message; a struct without either
+		 * member field keeps the field-value payload written above. The
+		 * locked store answers because the post-init hook may have
+		 * published the copy. */
+		if (store_group_args(type, copy) != RESULT_OK) {
 			return NULL;
 		}
-
-		store_exception_args(copy, py_move(&packed_args));
 	}
 #endif
 
@@ -1310,7 +1335,11 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 			return NULL;
 		}
 
-		if (type->struct_own_init && type->struct_installed_init != NULL) {
+		if (
+			type->struct_own_init &&
+			!type->struct_family_owned &&
+			type->struct_installed_init != NULL
+		) {
 			/* The author's init owns validation on direct construction and
 			 * replace; the mapping's keywords reach it the same way. */
 			PY_OWNED(no_arguments, PyTuple_New(0));
@@ -1325,23 +1354,21 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 	}
 #endif
 
-	if (run_post_init(type, built) != RESULT_OK) {
+	if (
+		(!type->struct_own_init || !type->struct_group_family) &&
+		run_post_init(type, built) != RESULT_OK
+	) {
 		return NULL;
 	}
 
 #if PY_VERSION_HEX >= 0x030B0000
-	if (type->struct_group_family) {
-		/* args mirror the members the carry installed, whatever the
-		 * field-declaration order; the locked store answers because the
-		 * post-init hook may have published the instance. */
-		PyBaseExceptionGroupObject * const group = (PyBaseExceptionGroupObject *) built;
-		PY_MOVABLE(packed_args, PyTuple_Pack(2, group->msg, group->excs));
-
-		if (packed_args == NULL) {
+	if (
+		type->struct_group_family &&
+		(type->struct_message_index >= 0 || type->struct_exceptions_index >= 0)
+	) {
+		if (store_group_args(type, built) != RESULT_OK) {
 			return NULL;
 		}
-
-		store_exception_args(built, py_move(&packed_args));
 	} else
 #endif
 	if (
@@ -1370,6 +1397,28 @@ static void bind_positional(
 	PyObject * const * const arguments,
 	Py_ssize_t const positional_count
 ) {
+#if PY_VERSION_HEX >= 0x030B0000
+	if (type->struct_group_family) {
+		/* A group struct's positional shape is the family's -- (msg, excs)
+		 * -- so the first two positionals bind by the resolved member
+		 * indexes, whatever the declaration order; further positionals bind
+		 * in declaration order, and a slot already written keeps its value. */
+		for (Py_ssize_t i = 0; i < positional_count; ++i) {
+			Py_ssize_t const target = (
+				i == 0 && type->struct_message_index >= 0 ? type->struct_message_index :
+				i == 1 && type->struct_exceptions_index >= 0 ? type->struct_exceptions_index :
+				i
+			);
+
+			if (*struct_slot(type, self, target) == NULL) {
+				*struct_slot(type, self, target) = Py_NewRef(arguments[i]);
+			}
+		}
+
+		return;
+	}
+#endif
+
 	for (Py_ssize_t i = 0; i < positional_count; ++i) {
 		*struct_slot(type, self, i) = Py_NewRef(arguments[i]);
 	}

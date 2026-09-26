@@ -355,7 +355,7 @@ def test_an_exception_group_struct_constructs_through_the_alloc_fallback():
     error = EG("boom")
 
     assert error.x == "boom"
-    assert error.args == ("boom", ())
+    assert error.args == ("boom",)
     assert str(error) == "boom (0 sub-exception)"
 
 
@@ -378,7 +378,7 @@ def test_the_fallback_arm_writes_args_before_the_hook():
     error = HookEG(1)
 
     assert error.x == 1
-    assert error.args == ("1", ())
+    assert error.args == (1,)
 
 
 if sys.version_info >= (3, 11):
@@ -793,6 +793,87 @@ def test_group_args_are_the_members_whatever_the_field_order():
     assert len(group.args[1]) == 1
     assert group.args[1][0].args == ("q",)
 
+    positional = ReversedGroup("p", [ValueError("r")])
+
+    assert positional.message == "p"
+    assert len(positional.exceptions) == 1
+    assert positional.exceptions[0].args == ("r",)
+
     restored = pickle.loads(pickle.dumps(group))
 
+    assert restored.message == "m"
     assert str(restored) == "m (1 sub-exception)"
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
+def test_a_one_field_group_struct_pickles_round_trip():
+    import pickle
+
+    restored = pickle.loads(pickle.dumps(EG("boom")))
+
+    assert restored.x == "boom"
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
+def test_replace_replays_the_source_payload_not_the_changes():
+    import salix
+
+    class ValidatingOwnInitGroup(ExceptionGroup, Struct, frozen=False):
+        message: str
+        exceptions: list
+
+        def __init__(self, message, exceptions):
+            if message.startswith("bad"):
+                raise TypeError("rejected message")
+            self.message = message
+            self.exceptions = exceptions
+
+    group = ValidatingOwnInitGroup("ok", [ValueError()])
+    replaced = salix.replace(group, message="bad")
+
+    assert replaced.message == "bad"
+    assert str(replaced) == "ok (1 sub-exception)"
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
+def test_from_mapping_skips_post_init_for_an_own_init_group_struct():
+    import salix
+
+    calls = []
+
+    class LoggingGroup(ExceptionGroup, Struct, frozen=False):
+        message: str
+        exceptions: list
+
+        def __init__(self, message, exceptions):
+            calls.append("init")
+            self.message = message
+            self.exceptions = exceptions
+
+        def __post_init__(self):
+            calls.append("post_init")
+
+    salix.from_mapping(LoggingGroup, {"message": "m", "exceptions": [ValueError()]})
+
+    assert calls == ["init"]
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
+def test_replace_refuses_an_author_new_returning_a_foreign_object():
+    import salix
+
+    class ForeignNewGroup(ExceptionGroup, Struct, frozen=False):
+        message: str
+        exceptions: list
+
+        def __new__(cls, *a, **k):
+            return 42
+
+        def __init__(self, message, exceptions):
+            self.message = message
+            self.exceptions = exceptions
+
+    group = salix.from_mapping(ForeignNewGroup, {"message": "m", "exceptions": [ValueError()]})
+
+    with pytest.raises(TypeError, match="is not safe"):
+        salix.replace(group, message="n")
