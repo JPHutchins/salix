@@ -808,6 +808,7 @@ PyObject * Struct_replace(
 							group_members_from_fields(
 								type,
 								replaced,
+								type->struct_message_index >= 0 ? NULL :
 								Py_XNewRef(source_group->msg)
 							) !=
 							RESULT_OK
@@ -817,7 +818,7 @@ PyObject * Struct_replace(
 
 						PyBaseExceptionGroupObject * const rebuilt_group =
 							(PyBaseExceptionGroupObject *) replaced;
-						PY_OWNED(
+						PY_MOVABLE(
 							packed_args,
 							PyTuple_Pack(2, rebuilt_group->msg, rebuilt_group->excs)
 						);
@@ -826,7 +827,10 @@ PyObject * Struct_replace(
 							return NULL;
 						}
 
-						Py_SETREF(((PyBaseExceptionObject *) replaced)->args, packed_args);
+						Py_SETREF(
+							((PyBaseExceptionObject *) replaced)->args,
+							py_move(&packed_args)
+						);
 					} else if (allocated_route) {
 						if (
 							carry_group_members(
@@ -970,7 +974,14 @@ PyObject * Struct_replace(
 			/* An exceptions change replaces what is raised, so the members
 			 * rebuild from the resulting fields instead of carrying the
 			 * source's; the message field answers the message. */
-			if (group_members_from_fields(type, copy, Py_XNewRef(source_group->msg)) != RESULT_OK) {
+			if (
+				group_members_from_fields(
+					type,
+					copy,
+					type->struct_message_index >= 0 ? NULL : Py_XNewRef(source_group->msg)
+				) !=
+				RESULT_OK
+			) {
 				return NULL;
 			}
 		} else if (
