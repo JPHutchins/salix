@@ -46,7 +46,7 @@ static PyObject * copy_or_base(
 	}
 
 	if (size > 0) {
-		PyObject * const deepcopy = deepcopy_function();
+		PY_OWNED(deepcopy, deepcopy_function());
 
 		if (deepcopy == NULL) {
 			return NULL;
@@ -54,16 +54,18 @@ static PyObject * copy_or_base(
 
 		PY_MOVABLE(deep_copied, PyObject_CallOneArg(deepcopy, declared));
 
-		if (deep_copied != NULL) {
+		if (deep_copied != NULL && deep_copied != declared) {
 			return py_move(&deep_copied);
 		}
 
-		/* A TypeError is the deepcopy refusal shape (a memoryview); the old
-		 * rule shared those, so share them still. Anything else propagates. */
-		if (!PyErr_ExceptionMatches(PyExc_TypeError)) {
+		if (deep_copied == NULL && !PyErr_ExceptionMatches(PyExc_TypeError)) {
 			return NULL;
 		}
 
+		/* A TypeError is the deepcopy refusal shape (a memoryview), and a
+		 * __deepcopy__ that returns its argument is the refusal by protocol;
+		 * the old rule shared those, so share them still. Anything else
+		 * propagates. */
 		PyErr_Clear();
 
 		return Py_NewRef(declared);
@@ -129,7 +131,7 @@ static PyObject * cached_deepcopy = NULL;
 
 static PyObject * deepcopy_function(void) {
 	if (cached_deepcopy != NULL) {
-		return cached_deepcopy;
+		return Py_XNewRef(cached_deepcopy);
 	}
 
 	PY_OWNED(module, PyImport_ImportModule("copy"));
@@ -145,14 +147,16 @@ static PyObject * deepcopy_function(void) {
 	}
 
 	/* Both racers hold the same module, so the critical section is on it; the
-	 * loser's reference drops with its scope. */
+	 * loser's reference drops with its scope. The caller gets its own
+	 * reference, so a concurrent defaults_free cannot free the object the
+	 * caller is about to invoke. */
 	STRUCT_BEGIN_CRITICAL_SECTION(module);
 		if (cached_deepcopy == NULL) {
 			cached_deepcopy = Py_NewRef(resolved);
 		}
 	STRUCT_END_CRITICAL_SECTION();
 
-	return cached_deepcopy;
+	return Py_XNewRef(cached_deepcopy);
 }
 
 void defaults_free(void) {
@@ -206,26 +210,27 @@ PyObject * struct_default_copy(PyObject * const declared) {
 			return NULL;
 	}
 
-	PyObject * const deepcopy = deepcopy_function();
+	PY_OWNED(deepcopy, deepcopy_function());
 
 	if (deepcopy == NULL) {
 		return NULL;
 	}
 
 	/* A fresh memo per field: two fields declaring the same object get
-	 * disjoint copies, and the copies never are the declared object. */
+	 * disjoint copies. */
 	PY_MOVABLE(copied, PyObject_CallOneArg(deepcopy, declared));
 
-	if (copied != NULL) {
+	if (copied != NULL && copied != declared) {
 		return py_move(&copied);
 	}
 
-	/* A TypeError is the deepcopy refusal shape (a memoryview); the old rule
-	 * shared those, so share them still. Anything else propagates. */
-	if (!PyErr_ExceptionMatches(PyExc_TypeError)) {
+	if (copied == NULL && !PyErr_ExceptionMatches(PyExc_TypeError)) {
 		return NULL;
 	}
 
+	/* A TypeError is the deepcopy refusal shape (a memoryview), and a
+	 * __deepcopy__ that returns its argument is the refusal by protocol; the
+	 * old rule shared those, so share them still. Anything else propagates. */
 	PyErr_Clear();
 
 	return Py_NewRef(declared);

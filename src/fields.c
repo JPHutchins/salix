@@ -954,8 +954,9 @@ static PyObject * build_defaults(PyObject * const all_names, PyObject * const de
 			return NULL;
 		}
 
-		/* The stored copy is what the class keeps, severed from the class-body
-		 * object and from any module-level alias still pointing at it.
+		/* The stored default is what the class keeps, severed from the
+		 * class-body object wherever the copy path can sever it; the share
+		 * fallbacks deliberately keep the declared object.
 		 *
 		 * `_struct_defaults_` still hands the stored object out, so filling it
 		 * through there defeats this. That route is out of contract. */

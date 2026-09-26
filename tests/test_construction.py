@@ -141,8 +141,8 @@ class TestMutableDefaults:
     )
     def test_the_other_mutable_builtins_are_copied_too(self, factory):
         """`list` has its own test above; these are the rest of the four that
-        `struct_copies_default` names, taken from that list rather than named
-        again -- adding a type to values.py brings a case here with it.
+        values.py names, taken from that list rather than named again --
+        adding a type to values.py brings a case here with it.
 
         The type is asserted as well as the distinctness, because each of these
         is copied by its own constructor and a wrong one would answer with a
@@ -426,10 +426,8 @@ class TestMutableDefaults:
         assert Holder().v is Holder().v
 
     def test_the_probe_hashes_a_default_once(self):
-        """`build_defaults` checks the declared value and then the stored copy,
-        which for anything outside the four copied types is the same object. The
-        hash probe runs on the stored one only, so a class author's `__hash__`
-        is called once rather than twice.
+        """The hash probe runs once when the class builds its stored default,
+        so a class author's `__hash__` answers once per class statement.
         """
 
         calls = []
@@ -490,6 +488,57 @@ class TestMutableDefaults:
 
         with pytest.raises(RuntimeError, match="boom"):
             Holder()
+
+    def test_a_deepcopy_that_returns_its_argument_falls_back_to_sharing(self):
+        """A __deepcopy__ returning self is the refusal by protocol; the
+        stored default stays the declared object rather than masquerading as
+        a severed copy. Both the size-gated path and the probe path share."""
+
+        class Selfie(list):
+            def __deepcopy__(self, memo):
+                return self
+
+        seed = Selfie([1])
+
+        class NonEmpty(Struct):
+            v: object = seed
+
+        assert NonEmpty().v is seed
+
+        class UnhashableSelfie:
+            def __hash__(self) -> int:
+                raise TypeError("nope")
+
+            def __deepcopy__(self, memo):
+                return self
+
+        value = UnhashableSelfie()
+
+        class Probed(Struct):
+            v: object = value
+
+        assert Probed().v is value
+
+    def test_a_caching_new_takes_the_base_copy_instead_of_aliasing(self):
+        """A caching __new__ hands the same instance back; the constructor
+        copy must not return it."""
+
+        class Cached(list):
+            def __new__(cls, *args):
+                cached = getattr(cls, "_one", None)
+
+                if cached is None:
+                    cached = cls._one = super().__new__(cls)
+
+                return cached
+
+        declared = Cached()
+
+        class Holder(Struct):
+            v: object = declared
+
+        assert Holder().v is not declared
+        assert Holder().v is not Cached._one
 
     def test_a_subclass_re_probes_an_inherited_default_once_per_class(self):
         """The probe runs when the singleton is built, once per class
