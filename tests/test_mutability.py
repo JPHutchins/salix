@@ -288,7 +288,7 @@ def test_a_frozen_delattr_escape_beside_a_permissive_co_base_keeps_answering():
             with pytest.raises(TypeError):
                 del Child(1).x
 
-            with pytest.raises(AttributeError):
+            with pytest.raises(FrozenInstanceError, match="cannot assign to field 'x'"):
                 Child(1).x = 9
 
 

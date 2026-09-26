@@ -1,6 +1,7 @@
 #include <Python.h>
 
 #include "compare.h"
+#include "meta/meta.h"
 #include "construct.h"
 #include "hash.h"
 #include "mixin.h"
@@ -912,15 +913,15 @@ int Struct_set_signature(PyObject * const self, PyObject * const value, void * c
 	return 0;
 }
 
-static PyObject * frozen_instance_error(void) {
-	static bool resolved;
-	static PyObject * cached;
+static PyObject * frozen_instance_error(StructType const * const type) {
+	PyObject * const cached = type->struct_state->frozen_instance_error;
 
-	if (resolved) {
+	if (cached != NULL) {
 		return cached;
 	}
 
-	resolved = true;
+	/* A failed resolution is not cached, so a later failure retries the
+	 * import instead of latching the fallback process-wide. */
 	PY_OWNED(module, PyImport_ImportModule("dataclasses"));
 
 	if (module == NULL) {
@@ -936,15 +937,21 @@ static PyObject * frozen_instance_error(void) {
 		return NULL;
 	}
 
-	PY_MOVABLE(frozen_error, optional_attribute(module, "FrozenInstanceError"));
+	PY_OWNED(resolved, optional_attribute(module, "FrozenInstanceError"));
 
-	if (frozen_error == NULL || !PyExceptionClass_Check(frozen_error)) {
+	if (resolved == NULL || !PyExceptionClass_Check(resolved)) {
 		return NULL;
 	}
 
-	cached = Py_NewRef(frozen_error);
+	/* Both racers hold the same module, so the critical section is on it; the
+	 * loser's reference drops with its scope. */
+	STRUCT_BEGIN_CRITICAL_SECTION(module);
+		if (type->struct_state->frozen_instance_error == NULL) {
+			type->struct_state->frozen_instance_error = Py_NewRef(resolved);
+		}
+	STRUCT_END_CRITICAL_SECTION();
 
-	return py_move(&frozen_error);
+	return type->struct_state->frozen_instance_error;
 }
 
 static int Struct_set_attribute(
@@ -963,7 +970,7 @@ static int Struct_set_attribute(
 	/* Stock frozen dataclasses raise FrozenInstanceError; it subclasses
 	 * AttributeError, so generic catchers still work. */
 	if (value != NULL && PyUnicode_Check(name) && struct_type_of(self)->struct_options.frozen) {
-		PyObject * const frozen_error = frozen_instance_error();
+		PyObject * const frozen_error = frozen_instance_error(struct_type_of(self));
 
 		if (frozen_error != NULL) {
 			PyErr_Format(frozen_error, "cannot assign to field %R", name);

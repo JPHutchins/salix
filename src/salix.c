@@ -91,6 +91,8 @@ static void struct_free(void * const module) {
 		Py_CLEAR(state->object_bindings[i]);
 	}
 
+	Py_CLEAR(state->frozen_instance_error);
+
 	Py_CLEAR(state->handoff_attempt);
 	Py_CLEAR(state->handoff_declined);
 	Py_CLEAR(state->handoff_new);
