@@ -391,11 +391,15 @@ PyObject * Struct_vectorcall(
 					group->excs = PyTuple_New(0);
 					bool complete = group->msg != NULL && group->excs != NULL;
 
-#	if PY_VERSION_HEX >= 0x030E0000
-					/* 3.14's repr reads the cached excs string; the member
-					 * does not exist before it. */
-					group->excs_str = PyUnicode_FromString("");
-					complete = complete && group->excs_str != NULL;
+#	if PY_VERSION_HEX >= 0x030D0C00
+					/* 3.13.12+ backported the cached excs string: its repr
+					 * dereferences it on 3.14 and, without it, reads args[1]
+					 * past a one-item payload on 3.13.12+. The runtime check
+					 * keeps a wheel built here off an older patch's layout. */
+					if (Py_Version >= 0x030D0C00) {
+						group->excs_str = PyUnicode_FromString("");
+						complete = complete && group->excs_str != NULL;
+					}
 #	endif
 
 					if (!complete) {
