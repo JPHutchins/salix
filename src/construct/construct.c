@@ -94,8 +94,10 @@ enum result carry_group_members(
 #	endif
 
 		if (!complete) {
-			Py_CLEAR(self);
-
+			/* The partially carried members belong to the instance; the
+			 * caller's return frees them with it. Clearing here would hand
+			 * the caller a freed pointer its cleanup attribute then
+			 * touches again. */
 			return RESULT_ERROR;
 		}
 	}
@@ -442,30 +444,6 @@ PyObject * Struct_vectorcall(
 				self = python_class->tp_alloc(python_class, 0);
 
 				if (self != NULL) {
-					/* The fallback bypasses __new__, the group members'
-					 * only writer; the message mirrors the first supplied
-					 * value. */
-					PY_MOVABLE(group_msg, (
-						positional_count > 0 ? PyObject_Str(arguments[0]) :
-						keyword_names != NULL && PyTuple_GET_SIZE(
-							keyword_names
-						) > 0 ? PyObject_Str(arguments[positional_count]) :
-						PyUnicode_FromString("")
-					));
-
-					if (group_msg == NULL) {
-						Py_CLEAR(self);
-					} else {
-						if (
-							carry_group_members(type, self, group_msg, NULL, NULL, NULL) !=
-							RESULT_OK
-						) {
-							return NULL;
-						}
-					}
-				}
-
-				if (self != NULL) {
 					/* The family tp_new would have written args; the fallback
 					 * writes the same payload before any hook runs, so a
 					 * __post_init__ that formats the instance never reads
@@ -492,6 +470,33 @@ PyObject * Struct_vectorcall(
 		if (self == NULL) {
 			return NULL;
 		}
+
+#if PY_VERSION_HEX >= 0x030B0000
+		if (is_group_family(python_class) && ((PyBaseExceptionGroupObject *) self)->msg == NULL) {
+			/* The family's __new__ is the group members' only writer; a
+			 * construction that reached the allocation without it -- the
+			 * fallback, or an author __new__ that allocated elsewhere --
+			 * still carries them, so str()/repr()/raise never read NULL.
+			 * The message mirrors the first supplied value. */
+			PY_MOVABLE(group_msg, (
+				positional_count > 0 ? PyObject_Str(arguments[0]) :
+				keyword_names != NULL && PyTuple_GET_SIZE(
+					keyword_names
+				) > 0 ? PyObject_Str(arguments[positional_count]) :
+				PyUnicode_FromString("")
+			));
+
+			if (group_msg == NULL) {
+				Py_CLEAR(self);
+			} else if (carry_group_members(type, self, group_msg, NULL, NULL, NULL) != RESULT_OK) {
+				return NULL;
+			}
+
+			if (self == NULL) {
+				return NULL;
+			}
+		}
+#endif
 	} else {
 		self = python_class->tp_alloc(python_class, 0);
 
@@ -607,7 +612,7 @@ PyObject * Struct_replace(
 
 	PyTypeObject * const cls = &type->heap_type.ht_type;
 
-	if (defines_own_init(type, NULL)) {
+	if (type->struct_own_init) {
 		for (Py_ssize_t i = 0; i < change_count; ++i) {
 			if (named_field(type, PyTuple_GET_ITEM(keyword_names, i)).tag != FIELD_LOOKUP_FOUND) {
 				return NULL;
@@ -891,7 +896,7 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 		}
 	}
 
-	if (defines_own_init(type, NULL) && !type->struct_family_owned) {
+	if (type->struct_own_init && !type->struct_family_owned) {
 		PY_MOVABLE(keywords, NULL);
 
 		if (dict_values != NULL) {
@@ -1048,6 +1053,10 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 
 					if (body != NULL) {
 						group_excs = PyTuple_Check(body) ? Py_NewRef(body) : PySequence_Tuple(body);
+
+						if (group_excs == NULL) {
+							return NULL;
+						}
 					}
 				}
 			}

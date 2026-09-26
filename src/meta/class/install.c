@@ -95,7 +95,10 @@ enum result install_constructor(
 	PyObject * const namespace,
 	bool const bases_divert_setattro
 ) {
-	if (defines_own_init(struct_class, namespace)) {
+	bool const own_init = defines_own_init(struct_class, namespace);
+	struct_class->struct_own_init = own_init;
+
+	if (own_init) {
 		/* The wrapped init fills the defaults and writes the positional
 		 * payload before the author's or the family's own init answers;
 		 * tp_new stays the pre-install slot -- the body's, the family's
@@ -158,7 +161,7 @@ enum result ensure_singleton(
 		struct_class->struct_options.frozen &&
 		!struct_class->struct_options.weakref &&
 		struct_class->struct_field_count == 0 &&
-		!defines_own_init(struct_class, namespace) &&
+		!struct_class->struct_own_init &&
 		(
 			struct_class->heap_type.ht_type.tp_new == NULL ||
 			struct_class->heap_type.ht_type.tp_new == PyBaseObject_Type.tp_new

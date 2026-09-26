@@ -586,3 +586,11 @@ class PlainNoneNew(Struct):
 def test_a_plain_none_new_struct_refuses_construction():
     with pytest.raises(TypeError, match="cannot create"):
         PlainNoneNew(5)
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
+def test_from_mapping_refuses_a_non_sequence_group_body():
+    import salix
+
+    with pytest.raises(TypeError):
+        salix.from_mapping(EG2, {"message": "m", "exceptions": 5})
