@@ -176,14 +176,15 @@ static enum init_owner base_init_owner(PyTypeObject * const base) {
 		return INIT_OWNER_NONE;
 	}
 
-	if (PyFunction_Check(init_value)) {
-		return INIT_OWNER_AUTHOR;
+	if (PyType_FastSubclass(base, Py_TPFLAGS_BASE_EXC_SUBCLASS)) {
+		/* A heap-type exception base carries only its own members: the
+		 * entry is the author's. A static builtin's entry is the family's
+		 * own init, which the field constructor answers beside. */
+		return (base->tp_flags & Py_TPFLAGS_HEAPTYPE) != 0 ? INIT_OWNER_AUTHOR :
+			INIT_OWNER_FIELD_CONSTRUCTOR;
 	}
 
-	return (
-		PyType_FastSubclass(base, Py_TPFLAGS_BASE_EXC_SUBCLASS) ? INIT_OWNER_FIELD_CONSTRUCTOR :
-		INIT_OWNER_AUTHOR
-	);
+	return INIT_OWNER_AUTHOR;
 }
 
 bool defines_own_init(
@@ -206,7 +207,17 @@ bool defines_own_init(
 		/* The type being built has no ready tp_dict or tp_base; the
 		 * namespace is the class body and the declared bases carry the MRO
 		 * walk. */
-		if (dict_has_string(namespace, "__init__") > 0) {
+		int const namespace_present = dict_has_string(namespace, "__init__");
+
+		if (namespace_present < 0) {
+			/* The probe error cannot ride the class statement; the
+			 * conservative answer owns the construction. */
+			PyErr_Clear();
+
+			return true;
+		}
+
+		if (namespace_present == 1) {
 			return true;
 		}
 

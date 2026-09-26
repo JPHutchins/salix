@@ -85,7 +85,16 @@ struct salix_state {
 };
 
 enum result settle_cache_fill(struct salix_state * state);
-enum result set_exception_args_from_fields(StructType * type, PyObject * self);
+enum result set_exception_args_from_fields(
+	StructType * type,
+	PyObject * self,
+	Py_ssize_t field_count
+);
+enum result set_exception_args_from_original(
+	StructType * type,
+	PyObject * copy,
+	PyObject * original
+);
 PyModuleDef * salix_module_def(void);
 bool any_base_diverts_setattro(PyObject * bases);
 bool carries_weakref_slot(PyTypeObject const * type);

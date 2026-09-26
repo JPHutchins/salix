@@ -447,7 +447,15 @@ static PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 
 	if (
 		(dict != NULL && struct_dict_copy_merged(dict, copy) < 0) ||
-		set_exception_args_from_fields(type, copy) != RESULT_OK
+		(
+				defines_own_init(
+					type,
+					NULL,
+					NULL
+				) ? set_exception_args_from_original(type, copy, self) :
+				set_exception_args_from_fields(type, copy, type->struct_field_count)
+			) !=
+			RESULT_OK
 	) {
 		return NULL;
 	}
@@ -627,7 +635,17 @@ static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) 
 		}
 	}
 
-	if (set_exception_args_from_fields(type, copy) != RESULT_OK) {
+	if (
+		(
+			defines_own_init(
+				type,
+				NULL,
+				NULL
+			) ? set_exception_args_from_original(type, copy, self) :
+			set_exception_args_from_fields(type, copy, type->struct_field_count)
+		) !=
+		RESULT_OK
+	) {
 		return memo_failure(memo, key);
 	}
 
@@ -770,7 +788,31 @@ PyObject * Struct_get_signature(PyObject * const self, void * const closure) {
 
 		if (PyType_FastSubclass(entry_type, Py_TPFLAGS_BASE_EXC_SUBCLASS)) {
 			/* The exception family carries its own signatures; the field
-			 * constructor's answers instead. */
+			 * constructor's answers instead. A user-authored binding on an
+			 * exception-struct ancestor is redefined, not inherited, and
+			 * answers. */
+			PY_OWNED(entry_dict, struct_type_dict(entry_type));
+
+			if (entry_dict != NULL) {
+				PY_MOVABLE(entry_binding, dict_value_ref(entry_dict, binding_name));
+
+				if (entry_binding != NULL) {
+					PyTypeObject * const parent_type = (PyTypeObject *) PyTuple_GET_ITEM(
+						mro,
+						i + 1
+					);
+					PY_OWNED(parent_dict, struct_type_dict(parent_type));
+					PY_OWNED(
+						parent_binding,
+						parent_dict != NULL ? dict_value_ref(parent_dict, binding_name) : NULL
+					);
+
+					if (entry_binding != parent_binding) {
+						return py_move(&entry_binding);
+					}
+				}
+			}
+
 			continue;
 		}
 

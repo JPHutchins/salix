@@ -40,7 +40,11 @@ static PyObject * interned_value(StructType const * const type, bool const no_ar
 	return (singleton != NULL && no_arguments) ? Py_NewRef(singleton) : NULL;
 }
 
-enum result set_exception_args_from_fields(StructType * const type, PyObject * const self) {
+enum result set_exception_args_from_fields(
+	StructType * const type,
+	PyObject * const self,
+	Py_ssize_t const field_count
+) {
 	PyTypeObject * const cls = &type->heap_type.ht_type;
 
 	if (
@@ -52,22 +56,45 @@ enum result set_exception_args_from_fields(StructType * const type, PyObject * c
 
 	/* The exception's C-level args member sits at offset zero when the first
 	 * base is the exception; str()/repr()/__reduce__ read it without a NULL
-	 * check. The fields are the payload: the field constructor binds them in
-	 * order, so args carries them, and __reduce__'s (cls, args) reconstructs
-	 * the fields positionally -- keyword-constructed instances included. */
-	PY_MOVABLE(args, PyTuple_New(type->struct_field_count));
+	 * check. The leading field values are the payload: __reduce__'s
+	 * (cls, args) reconstructs them positionally, keyword-constructed
+	 * instances included, and the trailing auto-filled defaults stay out. */
+	PY_MOVABLE(args, PyTuple_New(field_count));
 
 	if (args == NULL) {
 		return RESULT_ERROR;
 	}
 
-	for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
+	for (Py_ssize_t i = 0; i < field_count; ++i) {
 		PyTuple_SET_ITEM(args, i, Py_XNewRef(*struct_slot(type, self, i)));
 	}
 
 	((PyBaseExceptionObject *) self)->args = py_move(&args);
 
 	return RESULT_OK;
+}
+
+enum result set_exception_args_from_original(
+	StructType * const type,
+	PyObject * const copy,
+	PyObject * const original
+) {
+	PyTypeObject * const cls = &type->heap_type.ht_type;
+
+	if (
+		!PyType_FastSubclass(cls, Py_TPFLAGS_BASE_EXC_SUBCLASS) ||
+		!PyType_FastSubclass(cls->tp_base, Py_TPFLAGS_BASE_EXC_SUBCLASS)
+	) {
+		return RESULT_OK;
+	}
+
+	/* An own-init class's payload is whatever the author's construction
+	 * produced; the copy keeps it. */
+	PyObject * const args = ((PyBaseExceptionObject *) original)->args;
+
+	((PyBaseExceptionObject *) copy)->args = args != NULL ? Py_XNewRef(args) : PyTuple_New(0);
+
+	return ((PyBaseExceptionObject *) copy)->args != NULL ? RESULT_OK : RESULT_ERROR;
 }
 
 static enum result set_exception_args_from_positionals(
@@ -133,9 +160,30 @@ PyObject * Struct_vectorcall(
 
 	if (
 		bind_keywords(type, self, arguments, positional_count, keyword_names) != RESULT_OK ||
-		fill_defaults(type, self, positional_count) != RESULT_OK ||
+		fill_defaults(type, self, positional_count) != RESULT_OK
+	) {
+		return NULL;
+	}
+
+	Py_ssize_t explicit_count = positional_count;
+
+	if (keyword_names != NULL) {
+		for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(keyword_names); ++i) {
+			struct field_lookup const found = find_field(type, PyTuple_GET_ITEM(keyword_names, i));
+
+			if (found.tag == FIELD_LOOKUP_FOUND && found.index + 1 > explicit_count) {
+				explicit_count = found.index + 1;
+			}
+		}
+	}
+
+	/* The write precedes __post_init__ so a hook that formats the exception
+	 * never dereferences NULL args; the rewrite follows it so the payload
+	 * reflects the hook's mutations. */
+	if (
+		set_exception_args_from_fields(type, self, explicit_count) != RESULT_OK ||
 		run_post_init(type, self) != RESULT_OK ||
-		set_exception_args_from_fields(type, self) != RESULT_OK
+		set_exception_args_from_fields(type, self, explicit_count) != RESULT_OK
 	) {
 		return NULL;
 	}
@@ -308,7 +356,7 @@ PyObject * Struct_replace(
 
 	if (
 		run_post_init(type, copy) != RESULT_OK ||
-		set_exception_args_from_fields(type, copy) != RESULT_OK
+		set_exception_args_from_fields(type, copy, type->struct_field_count) != RESULT_OK
 	) {
 		return NULL;
 	}
@@ -514,7 +562,8 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 			built
 		) == RESULT_OK && set_exception_args_from_fields(
 			type,
-			built
+			built,
+			type->struct_field_count
 		) == RESULT_OK ? py_move(&built) :
 		NULL
 	);
