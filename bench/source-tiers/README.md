@@ -11,7 +11,7 @@ suites passing with the consumers' dataclasses/attrs replaced by salix
 | tyro | `vendor/tyro-salix` | all 65 internal dataclasses converted to Structs (1 documented exception) | 5088 passed, 300 skipped | 5080 passed, 300 skipped |
 | cyclopts | `vendor/cyclopts-salix` | attrs classes converted to Structs (3 documented exceptions) | 2530 passed, 22 failed, 3 errors | identical |
 | omegaconf | `vendor/omegaconf-salix` | Metadata/ContainerMetadata converted to Structs | 8553 passed, 2 failed, 1 module excluded | 8555 passed |
-| transformers | `vendor/transformers-salix` | the fork's own shim patches only transformers (`include_prefixes`); the parity gate asserts 3266 distinct config-bearing classes and 351 expected torch-only import failures, measured at the pin in the runner's own environment | 3266 classes, 351 failed imports | 3266 classes, 351 failed imports |
+| transformers | `vendor/transformers-salix` | the repo-local shim patches only transformers (`include_prefixes`); the parity gate asserts 3266 distinct config-bearing classes with 314 expected import failures and 37 expected class-scan failures (fork code raising during attribute access, stock and shimmed alike); `--stock` runs the same count without the shim for the baseline column | 3266 classes, 311 + 37 failures (`--stock` measured) | 3266 classes, 314 + 37 failures |
 | hydra | `vendor/hydra` | patch-tier parity (no source changes; stock upstream pin) | 3264 passed, 2 failed | identical |
 
 The readers widen the spec readers' dataclass gates to match struct

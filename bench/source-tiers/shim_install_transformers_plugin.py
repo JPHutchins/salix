@@ -1,3 +1,3 @@
-from transformers import _salix_shim  # type: ignore[import-not-found]
+from _shim import install
 
-_salix_shim.install(include_prefixes=("transformers",))
+install(include_prefixes=("transformers",))

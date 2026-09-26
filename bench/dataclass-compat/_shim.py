@@ -889,12 +889,6 @@ def dataclass(
             return _to_stock(cls, init, repr, eq, order, unsafe_hash, frozen, match_args, kw_only, slots, weakref_slot)
         if not init:
             raise NotImplementedError(f"init=False is not shimmed yet: {cls.__name__}")
-            # The class statement already built this class as a Struct: a
-            # Struct base binds the metatype, which runs before the decorator
-            # sees the class. The statement-time namespace is recoverable
-            # (salix aligns inherited annotations first and defaults trailing)
-            # and the rebuild translates field() and honors the options.
-            return _rebuild_struct_subclass(cls, init, repr, eq, order, unsafe_hash, frozen, match_args, kw_only)
         if (
             _needs_stock_fallback(cls.__bases__)
             or _has_descriptor_field_collision(

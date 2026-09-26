@@ -5,7 +5,7 @@ PYTHON_VERSION=3.13
 SALIX_VERSION=0.1.0
 
 usage() {
-    echo "usage: $0 --salix-wheel <wheel-or-dir> [--workdir <dir>] [--keep-venv] [--suite]" >&2
+    echo "usage: $0 --salix-wheel <wheel-or-dir> [--workdir <dir>] [--keep-venv] [--suite] [--stock]" >&2
     exit 2
 }
 
@@ -14,12 +14,14 @@ WORKDIR=""
 KEEP_VENV=0
 OWNED_WORKDIR=0
 RUN_SUITE=0
+RUN_STOCK=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --salix-wheel) [[ $# -ge 2 && $2 != -* ]] || usage; SALIX_WHEEL="$2"; shift 2 ;;
         --workdir) [[ $# -ge 2 && $2 != -* ]] || usage; WORKDIR="$2"; shift 2 ;;
         --keep-venv) KEEP_VENV=1; shift ;;
         --suite) RUN_SUITE=1; shift ;;
+        --stock) RUN_STOCK=1; shift ;;
         *) usage ;;
     esac
 done
@@ -51,7 +53,7 @@ cleanup() {
         if [[ "$OWNED_WORKDIR" -eq 1 ]]; then
             rm -rf "$WORKDIR"
         fi
-    elif [[ "$OWNED_WORKDIR" -eq 1 ]]; then
+    elif [[ "$KEEP_VENV" -eq 1 ]]; then
         echo "venv kept: $VENV"
     fi
 
@@ -64,11 +66,13 @@ if [[ ! -d "$VENV" ]]; then
 fi
 # torch is what the model modules import at module scope, and the parity
 # walk never touches a tensor, so the CPU index serves the import without
-# the CUDA-bundled wheel. The testing extra carries pytest and its plugins.
-# The shim itself lives in dataclass-compat and rides PYTHONPATH, so the
-# pinned checkout is never written to.
-uv pip install --python "$VENV" -e "$CHECKOUT[testing]"
+# the CUDA-bundled wheel. It is installed first: the testing extra pulls
+# accelerate, which requires torch, and a later line must not satisfy that
+# requirement from the default index first. The testing extra carries
+# pytest and its plugins. The shim itself lives in dataclass-compat and
+# rides PYTHONPATH, so the pinned checkout is never written to.
 uv pip install --python "$VENV" --index https://download.pytorch.org/whl/cpu torch
+uv pip install --python "$VENV" -e "$CHECKOUT[testing]"
 if [[ -d "$SALIX_WHEEL" ]]; then
     WHEEL_LINKS="$SALIX_WHEEL"
 else
@@ -76,29 +80,33 @@ else
 fi
 uv pip install --python "$VENV" --no-index --find-links "$WHEEL_LINKS" --reinstall "salix==$SALIX_VERSION"
 
-# The pin's proof: the fork's own shim patches only transformers (the
+# The pin's proof: the repo-local shim patches only transformers (the
 # dependencies stay stock, so dependency drift cannot break the proof), and
-# every public class imports with its dataclass fields read back. The suite
+# every public class imports with its dataclass fields read back. --stock
+# runs the same count without the shim for the baseline column. The suite
 # subset exercises the config path.
-"$VENV/bin/python" - <<PYEOF
+PYTHONPATH="$HERE/../dataclass-compat" "$VENV/bin/python" - <<PYEOF
 import importlib
 import pkgutil
 
 import transformers
-from transformers import _salix_shim
 
-_salix_shim.install(include_prefixes=("transformers",))
+if $RUN_STOCK == 0:
+    import _shim
+
+    _shim.install(include_prefixes=("transformers",))
 
 import transformers.models
 
 count = 0
-failed = 0
+failed_imports = 0
+failed_scans = 0
 seen: set[int] = set()
 for module in pkgutil.walk_packages(transformers.models.__path__, "transformers.models."):
     try:
         imported = importlib.import_module(module.name)
     except Exception:
-        failed += 1
+        failed_imports += 1
         continue
     try:
         for name, value in vars(imported).items():
@@ -106,12 +114,15 @@ for module in pkgutil.walk_packages(transformers.models.__path__, "transformers.
                 seen.add(id(value))
                 count += 1
     except Exception:
-        failed += 1
+        failed_scans += 1
         continue
 print(f"model classes with config_class: {count}")
-print(f"modules whose import failed: {failed}")
-assert count == 3266, f"import parity broken: {count} != 3266"
-assert failed == 351, f"unexpected import failures: {failed} != 351"
+print(f"modules whose import failed: {failed_imports}")
+print(f"modules whose class scan failed: {failed_scans}")
+if $RUN_STOCK == 0:
+    assert count == 3266, f"import parity broken: {count} != 3266"
+    assert failed_imports == 314, f"unexpected import failures: {failed_imports} != 314"
+    assert failed_scans == 37, f"unexpected class-scan failures: {failed_scans} != 37"
 PYEOF
 
 if [[ "$RUN_SUITE" -eq 1 ]]; then
@@ -123,7 +134,7 @@ print(f"config load ok: {cfg.model_type}")
 PYEOF
     (
         cd "$CHECKOUT"
-        PYTHONPATH="$HERE" "$VENV/bin/python" -m pytest \
+        PYTHONPATH="$HERE/../dataclass-compat:$HERE" "$VENV/bin/python" -m pytest \
             -p shim_install_transformers_plugin -p no:cacheprovider \
             tests/test_configuration_common.py tests/tokenization -q
     )
