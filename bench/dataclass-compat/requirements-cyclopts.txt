@@ -1,0 +1,8 @@
+attrs==26.1.0
+docstring-parser==0.18.0
+docutils==0.23
+markdown-it-py==4.2.0
+mdurl==0.1.2
+pygments==2.21.0
+rich==15.0.0
+rich-rst==2.1.0

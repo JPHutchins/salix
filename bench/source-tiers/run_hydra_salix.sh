@@ -2,6 +2,7 @@
 set -euo pipefail
 
 PYTHON_VERSION=3.13
+SALIX_VERSION=0.1.0
 
 usage() {
     echo "usage: $0 --salix-wheel <wheel-or-dir> [--workdir <dir>] [--keep-venv]" >&2
@@ -27,6 +28,12 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 CHECKOUT="$HERE/vendor/hydra"
 [[ -e "$CHECKOUT/.git" ]] || { echo "submodule not initialized: $CHECKOUT" >&2; exit 1; }
 
+PIN_SHA="$(git -C "$HERE" ls-tree HEAD bench/source-tiers/vendor/hydra | awk '{print $3}')"
+[[ "$(git -C "$CHECKOUT" rev-parse HEAD)" == "$PIN_SHA" ]] || {
+    echo "checkout is not at the pinned commit: expected $PIN_SHA, at $(git -C "$CHECKOUT" rev-parse HEAD)" >&2
+    exit 1
+}
+
 if [[ -z "$WORKDIR" ]]; then
     WORKDIR="$(mktemp -d)"
     OWNED_WORKDIR=1
@@ -34,12 +41,19 @@ fi
 VENV="$WORKDIR/venv"
 
 cleanup() {
+    status=$?
+
     if [[ "$KEEP_VENV" -eq 0 ]]; then
         rm -rf "$VENV"
-        [[ "$OWNED_WORKDIR" -eq 1 ]] && rm -rf "$WORKDIR"
+
+        if [[ "$OWNED_WORKDIR" -eq 1 ]]; then
+            rm -rf "$WORKDIR"
+        fi
     elif [[ "$OWNED_WORKDIR" -eq 1 ]]; then
         echo "venv kept: $VENV"
     fi
+
+    exit "$status"
 }
 trap cleanup EXIT
 
@@ -54,7 +68,7 @@ if [[ -d "$SALIX_WHEEL" ]]; then
 else
     WHEEL_LINKS="$(dirname "$SALIX_WHEEL")"
 fi
-uv pip install --python "$VENV" --no-index --find-links "$WHEEL_LINKS" --reinstall salix==0.1.0
+uv pip install --python "$VENV" --no-index --find-links "$WHEEL_LINKS" --reinstall "salix==$SALIX_VERSION"
 
 if command -v java >/dev/null 2>&1; then
     ( cd "$CHECKOUT" && "$VENV/bin/python" setup.py antlr )
@@ -64,5 +78,5 @@ fi
 
 (
     cd "$CHECKOUT"
-    PYTHONPATH="$HERE/../dataclass-compat:$HERE" "$VENV/bin/python" -m pytest -p shim_install_plugin tests/ -q
+    PYTHONPATH="$HERE/../dataclass-compat:$HERE" "$VENV/bin/python" -m pytest -p shim_install_plugin -p no:cacheprovider tests/ -q
 )

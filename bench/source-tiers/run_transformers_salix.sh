@@ -2,6 +2,7 @@
 set -euo pipefail
 
 PYTHON_VERSION=3.13
+SALIX_VERSION=0.1.0
 
 usage() {
     echo "usage: $0 --salix-wheel <wheel-or-dir> [--workdir <dir>] [--keep-venv] [--suite]" >&2
@@ -29,6 +30,12 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 CHECKOUT="$HERE/vendor/transformers-salix"
 [[ -e "$CHECKOUT/.git" ]] || { echo "submodule not initialized: $CHECKOUT" >&2; exit 1; }
 
+PIN_SHA="$(git -C "$HERE" ls-tree HEAD bench/source-tiers/vendor/transformers-salix | awk '{print $3}')"
+[[ "$(git -C "$CHECKOUT" rev-parse HEAD)" == "$PIN_SHA" ]] || {
+    echo "checkout is not at the pinned commit: expected $PIN_SHA, at $(git -C "$CHECKOUT" rev-parse HEAD)" >&2
+    exit 1
+}
+
 if [[ -z "$WORKDIR" ]]; then
     WORKDIR="$(mktemp -d)"
     OWNED_WORKDIR=1
@@ -36,46 +43,68 @@ fi
 VENV="$WORKDIR/venv"
 
 cleanup() {
+    status=$?
+
     if [[ "$KEEP_VENV" -eq 0 ]]; then
         rm -rf "$VENV"
-        [[ "$OWNED_WORKDIR" -eq 1 ]] && rm -rf "$WORKDIR"
+
+        if [[ "$OWNED_WORKDIR" -eq 1 ]]; then
+            rm -rf "$WORKDIR"
+        fi
     elif [[ "$OWNED_WORKDIR" -eq 1 ]]; then
         echo "venv kept: $VENV"
     fi
+
+    exit "$status"
 }
 trap cleanup EXIT
 
 if [[ ! -d "$VENV" ]]; then
     uv venv --python "$PYTHON_VERSION" "$VENV"
 fi
-uv pip install --python "$VENV" -e "$CHECKOUT"
+# torch is what the model modules import at module scope; the testing extra
+# carries pytest and its plugins. The shim itself lives in dataclass-compat
+# and rides PYTHONPATH, so the pinned checkout is never written to.
+uv pip install --python "$VENV" -e "$CHECKOUT[testing]" torch
 if [[ -d "$SALIX_WHEEL" ]]; then
     WHEEL_LINKS="$SALIX_WHEEL"
 else
     WHEEL_LINKS="$(dirname "$SALIX_WHEEL")"
 fi
-uv pip install --python "$VENV" --no-index --find-links "$WHEEL_LINKS" --reinstall salix==0.1.0
+uv pip install --python "$VENV" --no-index --find-links "$WHEEL_LINKS" --reinstall "salix==$SALIX_VERSION"
 
-# The pin's proof: every public class imports with the shim active and its
-# dataclass fields read back. The suite subset exercises the config path.
+# The pin's proof: the fork's own shim patches only transformers (the
+# dependencies stay stock, so dependency drift cannot break the proof), and
+# every public class imports with its dataclass fields read back. The suite
+# subset exercises the config path.
 "$VENV/bin/python" - <<PYEOF
 import importlib
 import pkgutil
 
 import transformers
+from transformers import _salix_shim
+
+_salix_shim.install(include_prefixes=("transformers",))
+
 import transformers.models
 
 count = 0
 failed = 0
+seen: set[int] = set()
 for module in pkgutil.walk_packages(transformers.models.__path__, "transformers.models."):
     try:
         imported = importlib.import_module(module.name)
-    except ImportError:
+    except Exception:
         failed += 1
         continue
-    for name, value in vars(imported).items():
-        if isinstance(value, type) and hasattr(value, "config_class"):
-            count += 1
+    try:
+        for name, value in vars(imported).items():
+            if isinstance(value, type) and hasattr(value, "config_class") and id(value) not in seen:
+                seen.add(id(value))
+                count += 1
+    except Exception:
+        failed += 1
+        continue
 print(f"model classes with config_class: {count}")
 print(f"modules whose import failed: {failed}")
 assert count == 782, f"import parity broken: {count} != 782"
@@ -90,6 +119,8 @@ print(f"config load ok: {cfg.model_type}")
 PYEOF
     (
         cd "$CHECKOUT"
-        "$VENV/bin/python" -m pytest tests/test_configuration_common.py tests/tokenization -q
+        PYTHONPATH="$HERE" "$VENV/bin/python" -m pytest \
+            -p shim_install_transformers_plugin -p no:cacheprovider \
+            tests/test_configuration_common.py tests/tokenization -q
     )
 fi
