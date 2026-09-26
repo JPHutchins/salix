@@ -18,7 +18,7 @@ RUN_STOCK=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --salix-wheel) [[ $# -ge 2 && $2 != -* ]] || usage; SALIX_WHEEL="$2"; shift 2 ;;
-        --workdir) [[ $# -ge 2 && $2 != -* ]] || usage; WORKDIR="$2"; shift 2 ;;
+        --workdir) [[ $# -ge 2 && $2 != -* ]] || usage; WORKDIR="$(realpath "$2")"; shift 2 ;;
         --keep-venv) KEEP_VENV=1; shift ;;
         --suite) RUN_SUITE=1; shift ;;
         --stock) RUN_STOCK=1; shift ;;
@@ -80,53 +80,19 @@ else
 fi
 uv pip install --python "$VENV" --no-index --find-links "$WHEEL_LINKS" --reinstall "salix==$SALIX_VERSION"
 
-# The pin's proof: the repo-local shim patches only transformers (the
-# dependencies stay stock, so dependency drift cannot break the proof), and
-# every public class imports with its dataclass fields read back. --stock
-# runs the same count without the shim for the baseline column. The suite
-# subset exercises the config path.
-PYTHONPATH="$HERE/../dataclass-compat" "$VENV/bin/python" - <<PYEOF
-import importlib
-import pkgutil
-
-import transformers
-
-if $RUN_STOCK == 0:
-    import _shim
-
-    _shim.install(include_prefixes=("transformers",))
-
-import transformers.models
-
-count = 0
-failed_imports = 0
-failed_scans = 0
-seen: set[int] = set()
-for module in pkgutil.walk_packages(transformers.models.__path__, "transformers.models."):
-    try:
-        imported = importlib.import_module(module.name)
-    except Exception:
-        failed_imports += 1
-        continue
-    try:
-        for name, value in vars(imported).items():
-            if isinstance(value, type) and hasattr(value, "config_class") and id(value) not in seen:
-                seen.add(id(value))
-                count += 1
-    except Exception:
-        failed_scans += 1
-        continue
-print(f"model classes with config_class: {count}")
-print(f"modules whose import failed: {failed_imports}")
-print(f"modules whose class scan failed: {failed_scans}")
-if $RUN_STOCK == 0:
-    assert count == 3266, f"import parity broken: {count} != 3266"
-    assert failed_imports == 314, f"unexpected import failures: {failed_imports} != 314"
-    assert failed_scans == 37, f"unexpected class-scan failures: {failed_scans} != 37"
-PYEOF
+# The pin's proof, in a module the repo's checkers see: the repo-local shim
+# patches only transformers (the dependencies stay stock, so dependency
+# drift cannot break the proof), and every public class imports with its
+# dataclass fields read back. --stock runs the same count without the shim
+# for the baseline column. The suite subset exercises the config path.
+PYTHONPATH="$HERE/../dataclass-compat:$HERE" "$VENV/bin/python" -m transformers_parity "$([[ "$RUN_STOCK" -eq 1 ]] && echo --stock)"
 
 if [[ "$RUN_SUITE" -eq 1 ]]; then
-    "$VENV/bin/python" - <<PYEOF
+    PYTHONPATH="$HERE/../dataclass-compat" "$VENV/bin/python" - <<PYEOF
+import _shim
+
+_shim.install(include_prefixes=("transformers",))
+
 from transformers import AutoConfig
 
 cfg = AutoConfig.from_pretrained("hf-internal-testing/tiny-bert")

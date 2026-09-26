@@ -16,7 +16,7 @@ OWNED_WORKDIR=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --salix-wheel) [[ $# -ge 2 && $2 != -* ]] || usage; SALIX_WHEEL="$2"; shift 2 ;;
-        --workdir) [[ $# -ge 2 && $2 != -* ]] || usage; WORKDIR="$2"; shift 2 ;;
+        --workdir) [[ $# -ge 2 && $2 != -* ]] || usage; WORKDIR="$(realpath "$2")"; shift 2 ;;
         --keep-venv) KEEP_VENV=1; shift ;;
         *) usage ;;
     esac
@@ -49,7 +49,7 @@ cleanup() {
         if [[ "$OWNED_WORKDIR" -eq 1 ]]; then
             rm -rf "$WORKDIR"
         fi
-    elif [[ "$OWNED_WORKDIR" -eq 1 ]]; then
+    elif [[ "$KEEP_VENV" -eq 1 ]]; then
         echo "venv kept: $VENV"
     fi
 
