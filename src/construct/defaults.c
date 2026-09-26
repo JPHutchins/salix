@@ -16,7 +16,7 @@ static PyObject * copy_list(PyObject * const declared) {
 	return PyList_GetSlice(declared, 0, PyList_GET_SIZE(declared));
 }
 
-static default_copier copies_default(PyTypeObject const * const kind) {
+static default_copier copies_default(PyTypeObject * const kind) {
 	if (kind == &PyList_Type) {
 		return copy_list;
 	}
@@ -36,7 +36,7 @@ static default_copier copies_default(PyTypeObject const * const kind) {
 	return NULL;
 }
 
-bool struct_copies_default(PyTypeObject const * const kind) {
+bool struct_copies_default(PyTypeObject * const kind) {
 	return copies_default(kind) != NULL;
 }
 

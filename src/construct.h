@@ -23,6 +23,6 @@ PyObject * Struct_set_field(PyObject * module, PyObject * arguments);
 
 PyObject * Struct_from_mapping(PyObject * module, PyObject * arguments);
 
-bool struct_copies_default(PyTypeObject const * kind);
+bool struct_copies_default(PyTypeObject * kind);
 
 PyObject * struct_default_copy(PyObject * declared);
