@@ -80,6 +80,15 @@ static bool author_new_in_chain(PyTypeObject * const cls) {
 
 		int const present = dict_has_string(entry->tp_dict, "__new__");
 
+		if (present < 0) {
+			/* A probe that cannot see has not learned presence; the
+			 * conservative answer keeps the fallback, and the probe error
+			 * cannot ride the class statement. */
+			PyErr_Clear();
+
+			return false;
+		}
+
 		if (present != 0) {
 			return true;
 		}
@@ -198,6 +207,15 @@ enum result ensure_singleton(
 	PyObject * const namespace,
 	bool const bases_divert_setattro
 ) {
+	/* A body __new__ = None is the cannot-create marker, not the
+	 * slotless allocation the singleton interns; a probe error forfeits
+	 * the intern without riding the class statement. */
+	int const new_present = dict_has_string(namespace, "__new__");
+
+	if (new_present < 0) {
+		PyErr_Clear();
+	}
+
 	bool const qualifies = (
 		struct_class->struct_options.frozen &&
 		!struct_class->struct_options.weakref &&
@@ -207,9 +225,7 @@ enum result ensure_singleton(
 			struct_class->heap_type.ht_type.tp_new == NULL ||
 			struct_class->heap_type.ht_type.tp_new == PyBaseObject_Type.tp_new
 		) &&
-		/* A body __new__ = None is the cannot-create marker, not the
-		 * slotless allocation the singleton interns. */
-		dict_has_string(namespace, "__new__") == 0 &&
+		new_present == 0 &&
 		struct_class->struct_member_count == 0 &&
 		!bases_divert_setattro &&
 		Py_TYPE(struct_class)->tp_call == StructMeta_Type.tp_call

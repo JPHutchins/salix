@@ -355,7 +355,7 @@ def test_an_exception_group_struct_constructs_through_the_alloc_fallback():
     error = EG("boom")
 
     assert error.x == "boom"
-    assert error.args == ("boom",)
+    assert error.args == ("boom", ())
     assert str(error) == "boom (0 sub-exception)"
 
 
@@ -378,7 +378,7 @@ def test_the_fallback_arm_writes_args_before_the_hook():
     error = HookEG(1)
 
     assert error.x == 1
-    assert error.args == (1,)
+    assert error.args == ("1", ())
 
 
 if sys.version_info >= (3, 11):
@@ -613,6 +613,10 @@ if sys.version_info >= (3, 11):
             self.message = message
             self.exceptions = exceptions
 
+    class ReversedGroup(ExceptionGroup, Struct, frozen=False):
+        exceptions: list
+        message: str
+
 
 @pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
 def test_replace_runs_on_an_own_init_group_struct():
@@ -736,3 +740,59 @@ def test_a_message_only_replace_keeps_the_payload_with_the_members():
     assert replaced.args[0] == "m"
     assert len(replaced.args[1]) == 1
     assert replaced.args[1][0].args == ("q",)
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
+def test_from_mapping_runs_the_own_init_groups_author_init():
+    import salix
+
+    class ValidatingGroup(ExceptionGroup, Struct, frozen=False):
+        message: str
+        exceptions: list
+
+        def __init__(self, message, exceptions):
+            if message.startswith("bad"):
+                raise TypeError("rejected message")
+            self.message = message
+            self.exceptions = exceptions
+
+    error = salix.from_mapping(ValidatingGroup, {"message": "ok", "exceptions": [ValueError()]})
+
+    assert error.message == "ok"
+    assert str(error) == "ok (1 sub-exception)"
+
+    with pytest.raises(TypeError, match="rejected message"):
+        salix.from_mapping(ValidatingGroup, {"message": "bad", "exceptions": [ValueError()]})
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
+def test_an_unbound_message_field_is_not_a_null_message():
+    import salix
+
+    class LazyInitGroup(ExceptionGroup, Struct, frozen=False):
+        message: str
+        exceptions: list
+
+        def __init__(self, message, exceptions):
+            self.exceptions = exceptions
+
+    group = LazyInitGroup("m", [ValueError("q")])
+    replaced = salix.replace(group, exceptions=[ValueError("z")])
+
+    assert str(replaced) == " (1 sub-exception)"
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
+def test_group_args_are_the_members_whatever_the_field_order():
+    import pickle
+
+    group = ReversedGroup(message="m", exceptions=[ValueError("q")])
+
+    assert str(group) == "m (1 sub-exception)"
+    assert group.args[0] == "m"
+    assert len(group.args[1]) == 1
+    assert group.args[1][0].args == ("q",)
+
+    restored = pickle.loads(pickle.dumps(group))
+
+    assert str(restored) == "m (1 sub-exception)"

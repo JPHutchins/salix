@@ -2,6 +2,7 @@
 
 #include <Python.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 #include "meta.h"
 #include "options.h"
@@ -55,9 +56,22 @@ typedef struct StructType {
  * hands it out, so a subclass of it whose metaclass is plain `type` reaches
  * every slot the mixin installs while being no such thing.
  */
+static inline bool group_layout_has_excs_str(void) {
+#if PY_VERSION_HEX >= 0x030D0C00
+	/* 3.13.12+ backported the cached string; a wheel built on newer headers
+	 * can run on an older 3.13 patch whose group layout is shorter, and
+	 * Py_Version is a build-time macro off the limited API -- the runtime
+	 * basicsize answers what a version compare cannot. */
+	return ((PyTypeObject *) PyExc_BaseExceptionGroup)->tp_basicsize >=
+		(Py_ssize_t) (offsetof(PyBaseExceptionGroupObject, excs_str) + sizeof(PyObject *));
+#endif
+
+	return false;
+}
+
 static inline PyObject * group_excs_str(PyObject * const source) {
 #if PY_VERSION_HEX >= 0x030D0C00
-	if (Py_Version >= 0x030D0C00) {
+	if (group_layout_has_excs_str()) {
 		/* Borrowed: the carry takes its own reference, and a new one here
 		 * leaks the intermediate. */
 		return ((PyBaseExceptionGroupObject *) source)->excs_str;

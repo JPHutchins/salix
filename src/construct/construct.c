@@ -85,7 +85,9 @@ static enum result group_members_from_fields(
 	PY_MOVABLE(msg, NULL);
 
 	if (type->struct_message_index >= 0) {
-		msg = PyObject_Str(*struct_slot(type, self, type->struct_message_index));
+		PyObject * const bound = *struct_slot(type, self, type->struct_message_index);
+
+		msg = bound != NULL ? PyObject_Str(bound) : PyUnicode_FromString("");
 	} else if (msg_fallback != NULL) {
 		msg = msg_fallback;
 	} else {
@@ -172,12 +174,13 @@ enum result carry_group_members(
 		bool complete = group->msg != NULL && group->excs != NULL;
 
 #	if PY_VERSION_HEX >= 0x030D0C00
-		if (Py_Version >= 0x030D0C00) {
+		if (group_layout_has_excs_str()) {
 			/* 3.13.12+ backported the cached excs string: its repr
 			 * dereferences it on 3.14 and, without it, reads args[1] past a
-			 * one-item payload on 3.13.12+. The runtime check keeps a wheel
-			 * built here off an older patch's shorter layout. The source's
-			 * cache answers when one exists; the repr is the rebuild. */
+			 * one-item payload on 3.13.12+. The layout probe keeps a wheel
+			 * built on newer headers off an older patch's shorter object.
+			 * The source's cache answers when one exists; the repr is the
+			 * rebuild. */
 			Py_XSETREF(group->excs_str, (
 				excs_str != NULL ? Py_NewRef(excs_str) :
 				group->excs != NULL ? PyObject_Repr(group->excs) :
@@ -559,20 +562,6 @@ PyObject * Struct_vectorcall(
 		}
 	}
 
-	/* An author __new__ may return any object; the slot writes that
-	 * follow assume the struct's own layout, so the type_call guard
-	 * answers here. */
-	if (self != NULL && !PyObject_TypeCheck(self, python_class)) {
-		PyErr_Format(
-			PyExc_TypeError,
-			"%s.__new__(%s) is not safe, use %s.__new__()",
-			Py_TYPE(self)->tp_name,
-			python_class->tp_name,
-			python_class->tp_name
-		);
-		Py_CLEAR(self);
-	}
-
 	if (self == NULL) {
 		return NULL;
 	}
@@ -635,11 +624,24 @@ PyObject * Struct_vectorcall(
 		return NULL;
 	}
 
-	if (
-		exception_struct &&
-		set_exception_args_from_fields(type, self, explicit_count) != RESULT_OK
-	) {
-		return NULL;
+	if (exception_struct) {
+#if PY_VERSION_HEX >= 0x030B0000
+		if (type->struct_group_family) {
+			/* args mirror the members the carry installed, whatever the
+			 * field-declaration order. */
+			PyBaseExceptionGroupObject * const group = (PyBaseExceptionGroupObject *) self;
+			PY_MOVABLE(packed_args, PyTuple_Pack(2, group->msg, group->excs));
+
+			if (packed_args == NULL) {
+				return NULL;
+			}
+
+			store_exception_args(self, py_move(&packed_args));
+		} else
+#endif
+		if (set_exception_args_from_fields(type, self, explicit_count) != RESULT_OK) {
+			return NULL;
+		}
 	}
 
 	return py_move(&self);
@@ -757,7 +759,7 @@ PyObject * Struct_replace(
 			bool allocated_route = false;
 
 			if (PyTuple_GET_SIZE(positionals) > 0) {
-				replaced = PyObject_Call((PyObject *) cls, positionals, NULL);
+				replaced = cls->tp_new(cls, positionals, NULL);
 
 				if (
 					replaced == NULL &&
@@ -768,10 +770,15 @@ PyObject * Struct_replace(
 					 * exact two, an author init's narrower shape -- takes the
 					 * allocation instead, the vectorcall's fallback pattern;
 					 * the members and args below answer what the family's
-					 * parse would have written. */
+					 * parse would have written. Only tp_new's own rejection
+					 * falls back: an author init's TypeError propagates. */
 					PyErr_Clear();
 					allocated_route = true;
 					replaced = cls->tp_alloc(cls, 0);
+				} else if (replaced != NULL) {
+					if (cls->tp_init != NULL && cls->tp_init(replaced, positionals, NULL) < 0) {
+						Py_CLEAR(replaced);
+					}
 				}
 			} else {
 				/* An empty payload marks a from_mapping-built source: the
@@ -1051,7 +1058,8 @@ PyObject * Struct_replace(
 #if PY_VERSION_HEX >= 0x030B0000
 	if (type->struct_group_family) {
 		/* The payload mirrors the carried or rebuilt members, so args and
-		 * str() never disagree about the message. */
+		 * str() never disagree about the message. The locked store answers
+		 * because the post-init hook may have published the copy. */
 		PyBaseExceptionGroupObject * const group = (PyBaseExceptionGroupObject *) copy;
 		PY_MOVABLE(packed_args, PyTuple_Pack(2, group->msg, group->excs));
 
@@ -1059,7 +1067,7 @@ PyObject * Struct_replace(
 			return NULL;
 		}
 
-		Py_XSETREF(((PyBaseExceptionObject *) copy)->args, py_move(&packed_args));
+		store_exception_args(copy, py_move(&packed_args));
 	}
 #endif
 
@@ -1149,22 +1157,22 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 		}
 	}
 
-	if (type->struct_own_init && !type->struct_family_owned && !type->struct_group_family) {
-		PY_MOVABLE(keywords, NULL);
+	PY_MOVABLE(init_keywords, NULL);
 
+	if (type->struct_own_init && !type->struct_family_owned) {
 		if (dict_values != NULL) {
-			keywords = Py_NewRef(dict_values);
+			init_keywords = Py_NewRef(dict_values);
 		} else {
-			keywords = PyDict_New();
+			init_keywords = PyDict_New();
 
-			if (keywords == NULL) {
+			if (init_keywords == NULL) {
 				return NULL;
 			}
 
 			for (Py_ssize_t i = 0; i < PySequence_Fast_GET_SIZE(items); ++i) {
 				PyObject * const pair = PySequence_Fast_GET_ITEM(items, i);
 				PyObject * const name = PyTuple_GET_ITEM(pair, 0);
-				int const present = PyDict_Contains(keywords, name);
+				int const present = PyDict_Contains(init_keywords, name);
 
 				if (present < 0) {
 					return NULL;
@@ -1181,15 +1189,20 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 					return NULL;
 				}
 
-				if (PyDict_SetItem(keywords, name, PyTuple_GET_ITEM(pair, 1)) < 0) {
+				if (PyDict_SetItem(init_keywords, name, PyTuple_GET_ITEM(pair, 1)) < 0) {
 					return NULL;
 				}
 			}
 		}
 
-		PY_OWNED(no_arguments, PyTuple_New(0));
+		if (!type->struct_group_family) {
+			PY_OWNED(no_arguments, PyTuple_New(0));
 
-		return no_arguments != NULL ? PyObject_Call(struct_class, no_arguments, keywords) : NULL;
+			return (
+				no_arguments != NULL ? PyObject_Call(struct_class, no_arguments, init_keywords) :
+				NULL
+			);
+		}
 	}
 
 	Py_ssize_t const entry_count = (
@@ -1296,6 +1309,19 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 		) {
 			return NULL;
 		}
+
+		if (type->struct_own_init && type->struct_installed_init != NULL) {
+			/* The author's init owns validation on direct construction and
+			 * replace; the mapping's keywords reach it the same way. */
+			PY_OWNED(no_arguments, PyTuple_New(0));
+
+			if (
+				no_arguments == NULL ||
+				type->struct_installed_init(built, no_arguments, init_keywords) < 0
+			) {
+				return NULL;
+			}
+		}
 	}
 #endif
 
@@ -1303,6 +1329,21 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 		return NULL;
 	}
 
+#if PY_VERSION_HEX >= 0x030B0000
+	if (type->struct_group_family) {
+		/* args mirror the members the carry installed, whatever the
+		 * field-declaration order; the locked store answers because the
+		 * post-init hook may have published the instance. */
+		PyBaseExceptionGroupObject * const group = (PyBaseExceptionGroupObject *) built;
+		PY_MOVABLE(packed_args, PyTuple_Pack(2, group->msg, group->excs));
+
+		if (packed_args == NULL) {
+			return NULL;
+		}
+
+		store_exception_args(built, py_move(&packed_args));
+	} else
+#endif
 	if (
 		type->struct_post_init != NULL &&
 		set_exception_args_from_fields(type, built, explicit_count) != RESULT_OK
