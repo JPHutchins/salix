@@ -23,7 +23,10 @@ static PyObject * copy_declared(PyObject * const declared) {
 	return PyObject_CallOneArg((PyObject *) Py_TYPE(declared), declared);
 }
 
-static PyObject * copy_or_base(PyObject * const declared, PyObject * (*const base_copy)(PyObject *)) {
+static PyObject * copy_or_base(
+	PyObject * const declared,
+	PyObject * (* const base_copy) (PyObject *)
+) {
 	PY_MOVABLE(copied, copy_declared(declared));
 
 	if (copied != NULL) {
