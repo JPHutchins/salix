@@ -88,12 +88,13 @@ instance, not shared:
 A default of the four (and their subclasses) is copied per instance: a
 non-empty one is deep-copied, so an inner list in `x: tuple = (1, [])` is
 not shared, and an empty one copies through the declared type's own
-constructor, which preserves a subclass, falling back to a base-type copy
-when the constructor signature is not the iterable one — a `defaultdict`
-falls back and becomes a plain `dict`, its factory dropped. A value a
-deepcopy cannot carry (a writable memoryview), one whose `__deepcopy__`
-returns its argument, or one whose hash fails by recursing falls back to
-sharing the declared object. A type outside
+constructor (seeded with a base copy, so the constructor cannot retain or
+mutate the class-body object), preserving a subclass and falling back to a
+base-type copy when the constructor signature is not the iterable one — a
+`defaultdict` falls back and becomes a plain `dict`, its factory dropped.
+A value a deepcopy cannot carry (a writable memoryview — one uncarryable
+element shares the whole container) or one whose hash fails by recursing
+falls back to sharing the declared object. A type outside
 the four that declares `__hash__ = None` is shared. A field without a
 default cannot
 follow one that has it: append defaulted fields, or default the new field

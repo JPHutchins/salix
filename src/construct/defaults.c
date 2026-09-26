@@ -18,15 +18,17 @@ static PyObject * copy_list(PyObject * const declared) {
 	return PyList_GetSlice(declared, 0, PyList_GET_SIZE(declared));
 }
 
-static PyObject * copy_declared(PyObject * const declared) {
+static PyObject * copy_declared(PyObject * const declared, PyObject * const seed) {
 	/* The type's own constructor preserves the subclass, which runs the
 	 * subclass's __init__ (and __len__, at the class-statement emptiness
-	 * gate) on every copy. A constructor whose signature is not the iterable
-	 * one (a defaultdict takes a factory) raises TypeError; copy_or_base
-	 * falls back to the base copy, dropping the subclass and its extra state.
-	 * Any TypeError raised by the constructor's own code is swallowed the
-	 * same way -- the fallback cannot tell the two apart. */
-	return PyObject_CallOneArg((PyObject *) Py_TYPE(declared), declared);
+	 * gate) on every copy. The seed is a base copy of the declared value, so
+	 * the constructor cannot retain or mutate the class-body object or the
+	 * class's stored default. A constructor whose signature is not the
+	 * iterable one (a defaultdict takes a factory) raises TypeError;
+	 * copy_or_base falls back to the base copy, dropping the subclass and
+	 * its extra state. Any TypeError raised by the constructor's own code is
+	 * swallowed the same way -- the fallback cannot tell the two apart. */
+	return PyObject_CallOneArg((PyObject *) Py_TYPE(declared), seed);
 }
 
 static PyObject * copy_or_base(
@@ -54,24 +56,30 @@ static PyObject * copy_or_base(
 
 		PY_MOVABLE(deep_copied, PyObject_CallOneArg(deepcopy, declared));
 
-		if (deep_copied != NULL && deep_copied != declared) {
+		if (deep_copied != NULL) {
 			return py_move(&deep_copied);
 		}
 
-		if (deep_copied == NULL && !PyErr_ExceptionMatches(PyExc_TypeError)) {
+		/* A TypeError is the deepcopy refusal shape (a memoryview); the old
+		 * rule shared those, so share them still. Anything else propagates.
+		 * A __deepcopy__ that returns its argument comes back through the
+		 * call itself: copy.deepcopy hands it over as the copy. */
+		if (!PyErr_ExceptionMatches(PyExc_TypeError)) {
 			return NULL;
 		}
 
-		/* A TypeError is the deepcopy refusal shape (a memoryview), and a
-		 * __deepcopy__ that returns its argument is the refusal by protocol;
-		 * the old rule shared those, so share them still. Anything else
-		 * propagates. */
 		PyErr_Clear();
 
 		return Py_NewRef(declared);
 	}
 
-	PY_MOVABLE(copied, copy_declared(declared));
+	PY_MOVABLE(seed, base_copy(declared));
+
+	if (seed == NULL) {
+		return NULL;
+	}
+
+	PY_MOVABLE(copied, copy_declared(declared, seed));
 
 	/* A constructor that returns its argument is a caching or delegating
 	 * __new__; the result would re-alias the declared default, so it takes
@@ -220,17 +228,16 @@ PyObject * struct_default_copy(PyObject * const declared) {
 	 * disjoint copies. */
 	PY_MOVABLE(copied, PyObject_CallOneArg(deepcopy, declared));
 
-	if (copied != NULL && copied != declared) {
+	if (copied != NULL) {
 		return py_move(&copied);
 	}
 
-	if (copied == NULL && !PyErr_ExceptionMatches(PyExc_TypeError)) {
+	/* A TypeError is the deepcopy refusal shape (a memoryview); the old rule
+	 * shared those, so share them still. Anything else propagates. */
+	if (!PyErr_ExceptionMatches(PyExc_TypeError)) {
 		return NULL;
 	}
 
-	/* A TypeError is the deepcopy refusal shape (a memoryview), and a
-	 * __deepcopy__ that returns its argument is the refusal by protocol; the
-	 * old rule shared those, so share them still. Anything else propagates. */
 	PyErr_Clear();
 
 	return Py_NewRef(declared);

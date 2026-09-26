@@ -489,10 +489,11 @@ class TestMutableDefaults:
         with pytest.raises(RuntimeError, match="boom"):
             Holder()
 
-    def test_a_deepcopy_that_returns_its_argument_falls_back_to_sharing(self):
-        """A __deepcopy__ returning self is the refusal by protocol; the
-        stored default stays the declared object rather than masquerading as
-        a severed copy. Both the size-gated path and the probe path share."""
+    def test_a_deepcopy_that_returns_its_argument_shares_the_declared_object(self):
+        """copy.deepcopy hands the argument back as the copy for a
+        __deepcopy__ returning self; salix cannot distinguish it from a real
+        copy, so the declared object is what instances share. Pinned as the
+        accepted outcome of the protocol, not a severing guarantee."""
 
         class Selfie(list):
             def __deepcopy__(self, memo):
