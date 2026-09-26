@@ -280,26 +280,15 @@ class TestMutableDefaults:
         [
             pytest.param(__import__("array").array("i", [1, 2]), id="array"),
             pytest.param(__import__("collections").deque([1, 2]), id="deque"),
-            pytest.param(__import__("collections").defaultdict(list), id="defaultdict"),
             pytest.param(Mutable(1), id="a_mutable_struct"),
-            *(
-                pytest.param(subclass_of(kind)(NON_EMPTY[kind]), id=f"a_{kind.__name__}_subclass")
-                for kind in COPIED_WHEN_EMPTY
-            ),
         ],
     )
     def test_a_mutable_container_outside_the_four_is_shared_and_not_refused(self, value):
-        """The boundary is the four exact types, not mutability, so these are
-        neither copied nor refused. Every one of these declares `__hash__` is
-        None -- it says it does not hash before being asked -- which is what
-        #51's rule leaves alone; salix's own `frozen=False` struct included,
-        since `eq` without `frozen` sets `__hash__` to None.
-
-        The four subclasses are the sharpest of them: a *non-empty* subclass of
-        a type the refusal covers is shared outright, which is the aliasing bug
-        this file is otherwise about. It is the price of copying by exact type,
-        since `PyDict_Copy` of a defaultdict is a dict, and it is deliberate
-        rather than missed.
+        """The boundary is the four types and their subclasses, not mutability,
+        so these are neither copied nor refused. Every one of these declares
+        `__hash__` is None -- it says it does not hash before being asked --
+        which is what #51's rule leaves alone; salix's own `frozen=False`
+        struct included, since `eq` without `frozen` sets `__hash__` to None.
 
         `hash(value)` rather than `isinstance(value, Hashable)`: the ABC asks
         whether `__hash__` is non-None, and a writable memoryview has one that
@@ -314,6 +303,45 @@ class TestMutableDefaults:
 
         assert Holder().v is Holder().v
         assert Holder._struct_defaults_[0] is value
+
+    @pytest.mark.parametrize(
+        "factory",
+        [
+            *(
+                pytest.param(subclass_of(kind), id=f"a_{kind.__name__}_subclass")
+                for kind in COPIED_WHEN_EMPTY
+            ),
+            pytest.param(__import__("collections").defaultdict, id="a_defaultdict"),
+        ],
+        ids=lambda factory: getattr(factory, "__name__", factory.id),
+    )
+    def test_a_subclass_of_one_of_the_four_is_copied_too(self, factory):
+        """#163: the boundary widened from the four exact types to their
+        subclasses, so a defaultdict default is not shared across instances."""
+
+        class Holder(Struct):
+            v: object = factory()
+
+        first, second = Holder(), Holder()
+
+        assert first.v is not second.v
+        assert first.v == second.v
+
+    @pytest.mark.parametrize(
+        "seed",
+        [
+            *(pytest.param(subclass_of(kind)(NON_EMPTY[kind]), id=f"a_{kind.__name__}_subclass") for kind in COPIED_WHEN_EMPTY),
+            pytest.param(__import__("collections").defaultdict(list, {"k": [1]}), id="a_defaultdict"),
+        ],
+    )
+    def test_a_non_empty_subclass_of_one_of_the_four_is_refused(self, seed):
+        """The refusal covers the subclasses too -- the same shallow-copy
+        argument applies."""
+
+        with pytest.raises(TypeError, match="non-empty"):
+
+            class Holder(Struct):
+                v: object = seed
 
     @pytest.mark.parametrize(
         "value",
@@ -515,17 +543,18 @@ class TestMutableDefaults:
         assert Holder._struct_defaults_[0] == ["a", "b"]
         assert WithBodyInit._struct_defaults_[0] == ["a", "b"]
 
-    def test_a_subclass_of_a_mutable_builtin_is_shared_not_copied(self):
-        """The copy has to preserve the type and PyDict_Copy of a defaultdict is
-        a dict, so subclasses are left alone -- as msgspec leaves them.
-        """
+    def test_a_subclass_of_a_mutable_builtin_is_copied(self):
+        """#163: the boundary widened from the four exact types to their
+        subclasses. A defaultdict's constructor is not the iterable one, so the
+        copy falls back to the base copy and the factory is dropped -- the
+        sharing bug is what the rule stops."""
 
         from collections import defaultdict
 
         class Holder(Struct):
             d: object = defaultdict(list)
 
-        assert Holder().d is Holder().d
+        assert Holder().d is not Holder().d
 
     def test_an_inherited_default_is_copied_as_well(self):
         class Base(Struct, frozen=False):
