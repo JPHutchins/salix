@@ -11,10 +11,11 @@ usage() {
 SALIX_WHEEL=""
 WORKDIR=""
 KEEP_VENV=0
+OWNED_WORKDIR=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --salix-wheel) SALIX_WHEEL="$2"; shift 2 ;;
-        --workdir) WORKDIR="$2"; shift 2 ;;
+        --salix-wheel) [[ $# -ge 2 && $2 != -* ]] || usage; SALIX_WHEEL="$2"; shift 2 ;;
+        --workdir) [[ $# -ge 2 && $2 != -* ]] || usage; WORKDIR="$2"; shift 2 ;;
         --keep-venv) KEEP_VENV=1; shift ;;
         *) usage ;;
     esac
@@ -22,11 +23,25 @@ done
 [[ -n "$SALIX_WHEEL" ]] || usage
 [[ -e "$SALIX_WHEEL" ]] || { echo "salix wheel not found: $SALIX_WHEEL" >&2; exit 1; }
 
-CHECKOUT="$(dirname "$0")/vendor/cyclopts-salix"
+HERE="$(cd "$(dirname "$0")" && pwd)"
+CHECKOUT="$HERE/vendor/cyclopts-salix"
 [[ -e "$CHECKOUT/.git" ]] || { echo "submodule not initialized: $CHECKOUT" >&2; exit 1; }
 
-WORKDIR="${WORKDIR:-$(mktemp -d)}"
+if [[ -z "$WORKDIR" ]]; then
+    WORKDIR="$(mktemp -d)"
+    OWNED_WORKDIR=1
+fi
 VENV="$WORKDIR/venv"
+
+cleanup() {
+    if [[ "$KEEP_VENV" -eq 0 ]]; then
+        rm -rf "$VENV"
+        [[ "$OWNED_WORKDIR" -eq 1 ]] && rm -rf "$WORKDIR"
+    elif [[ "$OWNED_WORKDIR" -eq 1 ]]; then
+        echo "venv kept: $VENV"
+    fi
+}
+trap cleanup EXIT
 
 if [[ ! -d "$VENV" ]]; then
     uv venv --python "$PYTHON_VERSION" "$VENV"
@@ -43,7 +58,3 @@ uv pip install --python "$VENV" --no-index --find-links "$WHEEL_LINKS" --reinsta
     cd "$CHECKOUT"
     "$VENV/bin/python" -m pytest tests/ -q
 )
-
-if [[ "$KEEP_VENV" -eq 0 ]]; then
-    rm -rf "$VENV"
-fi

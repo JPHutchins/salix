@@ -25,7 +25,10 @@ plus init-wrapping recorder / field aliases) and its exception
 classes, and transformers' `PretrainedConfig` family (the
 `__init_subclass__` runtime re-decoration is dataclass machinery).
 
-`run_tyro_salix.sh` and `run_cyclopts_salix.sh` reproduce the suite
-runs from this repo alone: the submodule pins the fork, the runner
-creates a 3.13 venv, installs the salix wheel passed as an argument,
-and runs the suite, removing the venv unless `--keep-venv` is given.
+Each `run_*_salix.sh` reproduces the suite run from this repo alone:
+the submodule pins the fork, the runner creates a 3.13 venv, installs
+the salix wheel passed as an argument, and runs the suite, removing
+the venv unless `--keep-venv` is given. The hydra and omegaconf legs
+generate antlr parsers first and need java (or a nix JDK); the
+transformers `--suite` leg downloads a tiny Hub config to prove
+`AutoConfig` loading.
