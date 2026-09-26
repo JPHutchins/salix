@@ -85,9 +85,10 @@ instance, not shared:
 
 ```
 
-The copy preserves the exact type or it is not a copy — a `defaultdict` copy
-would be a plain `dict` — so the rule stops at the four, and a subclass of one
-of them is stored as the class body's object itself, shared. A non-empty
+The copy preserves the declared type where it can: a subclass of one of the
+four copies through its own constructor, and falls back to a base-type copy
+when the constructor signature is not the iterable one — a `defaultdict`
+falls back and becomes a plain `dict`, its factory dropped. A non-empty
 default of the four is refused at class creation, because a copy can only be
 shallow and the contents would still be shared: default it empty and fill it
 in `__post_init__` with `set_field` — unless the body writes its own

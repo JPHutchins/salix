@@ -17,9 +17,13 @@ static PyObject * copy_list(PyObject * const declared) {
 }
 
 static PyObject * copy_declared(PyObject * const declared) {
-	/* The type's own constructor preserves the subclass. A constructor whose
-	 * signature is not the iterable one (a defaultdict takes a factory)
-	 * raises; the caller falls back to the base copy. */
+	/* The type's own constructor preserves the subclass, which runs the
+	 * subclass's __init__ (and __len__, at the class-statement emptiness
+	 * gate) on every copy. A constructor whose signature is not the iterable
+	 * one (a defaultdict takes a factory) raises TypeError; the caller falls
+	 * back to the base copy, dropping the subclass and its extra state. Any
+	 * TypeError raised by the constructor's own code is swallowed the same
+	 * way — the fallback cannot tell the two apart. */
 	return PyObject_CallOneArg((PyObject *) Py_TYPE(declared), declared);
 }
 
@@ -29,11 +33,14 @@ static PyObject * copy_or_base(
 ) {
 	PY_MOVABLE(copied, copy_declared(declared));
 
-	if (copied != NULL) {
+	/* A constructor that returns its argument is a caching or delegating
+	 * __new__; the result would re-alias the declared default, so it takes
+	 * the base-copy path like a rejecting constructor. */
+	if (copied != NULL && copied != declared) {
 		return py_move(&copied);
 	}
 
-	if (!PyErr_ExceptionMatches(PyExc_TypeError)) {
+	if (copied == NULL && !PyErr_ExceptionMatches(PyExc_TypeError)) {
 		return NULL;
 	}
 
@@ -59,6 +66,22 @@ static PyObject * copy_bytearray_or_base(PyObject * const declared) {
 }
 
 static default_copier copies_default(PyTypeObject * const kind) {
+	if (kind == &PyList_Type) {
+		return copy_list;
+	}
+
+	if (kind == &PyDict_Type) {
+		return PyDict_Copy;
+	}
+
+	if (kind == &PySet_Type) {
+		return PySet_New;
+	}
+
+	if (kind == &PyByteArray_Type) {
+		return PyByteArray_FromObject;
+	}
+
 	if (PyType_IsSubtype(kind, &PyList_Type)) {
 		return copy_list_or_base;
 	}

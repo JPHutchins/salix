@@ -104,11 +104,12 @@ def test_the_class_is_callable_through_the_slow_path_too():
 
 class TestMutableDefaults:
     """`xs: list = []` reads as an empty list per instance, and that is what it
-    gets. Exactly four builtins are copied at construction, and everything else
-    is shared -- which is cheaper and indistinguishable for a value that cannot
-    be mutated, and simply sharing for one that can. `array.array`, `deque`, a
-    writable `memoryview` and the subclasses of the four are all in the second
-    group; #51 argues for hashability as the test that would replace the list.
+    gets. The four builtins and their subclasses are copied at construction,
+    and everything else is shared -- which is cheaper and indistinguishable
+    for a value that cannot be mutated, and simply sharing for one that can.
+    `array.array`, `deque` and a writable `memoryview` are all in the second
+    group; #51 argues for hashability as the test that would replace the
+    list.
     """
 
     def test_a_list_default_is_not_shared(self):
@@ -307,11 +308,12 @@ class TestMutableDefaults:
             ),
             pytest.param(__import__("collections").defaultdict, id="a_defaultdict"),
         ],
-        ids=lambda factory: getattr(factory, "__name__", factory.id),
     )
     def test_a_subclass_of_one_of_the_four_is_copied_too(self, factory):
         """#163: the boundary widened from the four exact types to their
-        subclasses, so a defaultdict default is not shared across instances."""
+        subclasses, so a defaultdict default is not shared across instances.
+        The constructor copy preserves the subclass; the defaultdict falls
+        back to the base copy (factory dropped)."""
 
         class Holder(Struct):
             v: object = factory()
@@ -320,6 +322,11 @@ class TestMutableDefaults:
 
         assert first.v is not second.v
         assert first.v == second.v
+
+        if factory is __import__("collections").defaultdict:
+            assert type(first.v) is dict
+        else:
+            assert type(first.v) is factory
 
     @pytest.mark.parametrize(
         "seed",
