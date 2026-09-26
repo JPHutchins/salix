@@ -40,35 +40,52 @@ static PyObject * interned_value(StructType const * const type, bool const no_ar
 	return (singleton != NULL && no_arguments) ? Py_NewRef(singleton) : NULL;
 }
 
-static enum result initialize_exception_args(
-	PyTypeObject * const python_class,
-	PyObject * const self,
-	PyObject * const * const arguments,
-	Py_ssize_t const positional_count
-) {
+enum result set_exception_args_from_fields(StructType * const type, PyObject * const self) {
+	PyTypeObject * const cls = &type->heap_type.ht_type;
+
 	if (
-		!PyType_FastSubclass(python_class, Py_TPFLAGS_BASE_EXC_SUBCLASS) ||
-		!PyType_FastSubclass(python_class->tp_base, Py_TPFLAGS_BASE_EXC_SUBCLASS)
+		!PyType_FastSubclass(cls, Py_TPFLAGS_BASE_EXC_SUBCLASS) ||
+		!PyType_FastSubclass(cls->tp_base, Py_TPFLAGS_BASE_EXC_SUBCLASS)
 	) {
 		return RESULT_OK;
 	}
 
 	/* The exception's C-level args member sits at offset zero when the first
-	 * base is the exception. BaseException_new would have set it from the
-	 * positional tuple, and str()/repr()/__reduce__ read it without a NULL
-	 * check. `arguments` is the vectorcall array, not a tuple -- the tuple is
-	 * built from it. */
-	PY_MOVABLE(args, PyTuple_New(arguments != NULL ? positional_count : 0));
+	 * base is the exception; str()/repr()/__reduce__ read it without a NULL
+	 * check. The fields are the payload: the field constructor binds them in
+	 * order, so args carries them, and __reduce__'s (cls, args) reconstructs
+	 * the fields positionally -- keyword-constructed instances included. */
+	PY_MOVABLE(args, PyTuple_New(type->struct_field_count));
 
 	if (args == NULL) {
 		return RESULT_ERROR;
 	}
 
-	for (Py_ssize_t i = 0; i < positional_count; ++i) {
-		PyTuple_SET_ITEM(args, i, Py_NewRef(arguments[i]));
+	for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
+		PyTuple_SET_ITEM(args, i, Py_XNewRef(*struct_slot(type, self, i)));
 	}
 
 	((PyBaseExceptionObject *) self)->args = py_move(&args);
+
+	return RESULT_OK;
+}
+
+static enum result set_exception_args_from_positionals(
+	PyTypeObject * const cls,
+	PyObject * const self,
+	PyObject * const positionals
+) {
+	if (
+		!PyType_FastSubclass(cls, Py_TPFLAGS_BASE_EXC_SUBCLASS) ||
+		!PyType_FastSubclass(cls->tp_base, Py_TPFLAGS_BASE_EXC_SUBCLASS)
+	) {
+		return RESULT_OK;
+	}
+
+	/* The own-init path runs the author's __init__ after the allocation, so
+	 * the fields are not bound here; BaseException_new's contract holds: the
+	 * positional tuple is the payload. */
+	((PyBaseExceptionObject *) self)->args = Py_XNewRef(positionals);
 
 	return RESULT_OK;
 }
@@ -112,16 +129,13 @@ PyObject * Struct_vectorcall(
 		return NULL;
 	}
 
-	if (initialize_exception_args(python_class, self, arguments, positional_count) != RESULT_OK) {
-		return NULL;
-	}
-
 	bind_positional(type, self, arguments, positional_count);
 
 	if (
 		bind_keywords(type, self, arguments, positional_count, keyword_names) != RESULT_OK ||
 		fill_defaults(type, self, positional_count) != RESULT_OK ||
-		run_post_init(type, self) != RESULT_OK
+		run_post_init(type, self) != RESULT_OK ||
+		set_exception_args_from_fields(type, self) != RESULT_OK
 	) {
 		return NULL;
 	}
@@ -142,10 +156,14 @@ PyObject * Struct_new(
 		return NULL;
 	}
 
-	return (
-		fill_defaults(type, self, struct_required_count(type)) == RESULT_OK ? py_move(&self) :
-		NULL
-	);
+	if (
+		fill_defaults(type, self, struct_required_count(type)) != RESULT_OK ||
+		set_exception_args_from_positionals(struct_class, self, arguments) != RESULT_OK
+	) {
+		return NULL;
+	}
+
+	return py_move(&self);
 }
 PyObject * Struct_replace(
 	PyObject * const self,
@@ -281,10 +299,6 @@ PyObject * Struct_replace(
 		return NULL;
 	}
 
-	if (initialize_exception_args(cls, copy, NULL, 0) != RESULT_OK) {
-		return NULL;
-	}
-
 	if (bind_keywords(type, copy, arguments, 0, keyword_names) != RESULT_OK) {
 		return NULL;
 	}
@@ -292,7 +306,10 @@ PyObject * Struct_replace(
 	PY_MOVABLE(source_dict, NULL);
 	struct_slots_copy_into(type, self, copy, &source_dict);
 
-	if (run_post_init(type, copy) != RESULT_OK) {
+	if (
+		run_post_init(type, copy) != RESULT_OK ||
+		set_exception_args_from_fields(type, copy) != RESULT_OK
+	) {
 		return NULL;
 	}
 
@@ -458,10 +475,6 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 		return NULL;
 	}
 
-	if (initialize_exception_args(cls, built, NULL, 0) != RESULT_OK) {
-		return NULL;
-	}
-
 	if (dict_values != NULL) {
 		Py_ssize_t position = 0;
 		PyObject * key;
@@ -496,7 +509,13 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 			type,
 			built,
 			0
-		) == RESULT_OK && run_post_init(type, built) == RESULT_OK ? py_move(&built) :
+		) == RESULT_OK && run_post_init(
+			type,
+			built
+		) == RESULT_OK && set_exception_args_from_fields(
+			type,
+			built
+		) == RESULT_OK ? py_move(&built) :
 		NULL
 	);
 }

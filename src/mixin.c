@@ -445,7 +445,10 @@ static PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 	PY_MOVABLE(dict, NULL);
 	struct_slots_copy_into(type, self, copy, &dict);
 
-	if (dict != NULL && struct_dict_copy_merged(dict, copy) < 0) {
+	if (
+		(dict != NULL && struct_dict_copy_merged(dict, copy) < 0) ||
+		set_exception_args_from_fields(type, copy) != RESULT_OK
+	) {
 		return NULL;
 	}
 
@@ -624,6 +627,10 @@ static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) 
 		}
 	}
 
+	if (set_exception_args_from_fields(type, copy) != RESULT_OK) {
+		return memo_failure(memo, key);
+	}
+
 	return py_move(&copy);
 }
 
@@ -759,8 +766,15 @@ PyObject * Struct_get_signature(PyObject * const self, void * const closure) {
 
 	for (Py_ssize_t i = 1; i < mixin; i += 1) {
 		PyObject * const entry = PyTuple_GET_ITEM(mro, i);
+		PyTypeObject * const entry_type = (PyTypeObject *) entry;
 
-		PY_OWNED(entry_dict, struct_type_dict((PyTypeObject *) entry));
+		if (PyType_FastSubclass(entry_type, Py_TPFLAGS_BASE_EXC_SUBCLASS)) {
+			/* The exception family carries its own signatures; the field
+			 * constructor's answers instead. */
+			continue;
+		}
+
+		PY_OWNED(entry_dict, struct_type_dict(entry_type));
 
 		if (entry_dict == NULL) {
 			return NULL;

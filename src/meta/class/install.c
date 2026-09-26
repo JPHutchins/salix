@@ -135,6 +135,57 @@ enum result ensure_singleton(
 	return RESULT_OK;
 }
 
+enum init_owner { INIT_OWNER_NONE, INIT_OWNER_AUTHOR, INIT_OWNER_FIELD_CONSTRUCTOR };
+
+static enum init_owner base_init_owner(PyTypeObject * const base) {
+	PyObject * const dict = base->tp_dict;
+
+	if (dict == NULL) {
+		/* Static builtin exceptions expose no tp_dict to C; their init is
+		 * their own C init, which the field constructor answers beside. A
+		 * NULL-dict base with any other init owns it. */
+		if (PyType_FastSubclass(base, Py_TPFLAGS_BASE_EXC_SUBCLASS)) {
+			return INIT_OWNER_FIELD_CONSTRUCTOR;
+		}
+
+		if (base->tp_init != PyBaseObject_Type.tp_init) {
+			return INIT_OWNER_AUTHOR;
+		}
+
+		return INIT_OWNER_NONE;
+	}
+
+	if (base->tp_init == PyBaseObject_Type.tp_init) {
+		/* Whatever the dict says, the effective init is object's -- the
+		 * generated-constructor case. */
+		return INIT_OWNER_NONE;
+	}
+
+	PY_OWNED(init_value, Py_XNewRef(dict_get_string(dict, "__init__")));
+
+	if (init_value == NULL) {
+		if (PyErr_Occurred()) {
+			/* A probe that cannot see has not learned absence; the
+			 * conservative answer owns the construction, with the probe
+			 * error cleared so it cannot ride the class statement. */
+			PyErr_Clear();
+
+			return INIT_OWNER_AUTHOR;
+		}
+
+		return INIT_OWNER_NONE;
+	}
+
+	if (PyFunction_Check(init_value)) {
+		return INIT_OWNER_AUTHOR;
+	}
+
+	return (
+		PyType_FastSubclass(base, Py_TPFLAGS_BASE_EXC_SUBCLASS) ? INIT_OWNER_FIELD_CONSTRUCTOR :
+		INIT_OWNER_AUTHOR
+	);
+}
+
 bool defines_own_init(
 	StructType * const struct_class,
 	PyObject * const namespace,
@@ -151,64 +202,44 @@ bool defines_own_init(
 	 * slot_tp_init. An author __init__ is a Python function in the dict; an
 	 * exception's own init is a wrapper descriptor and the field constructor
 	 * answers beside it; anything else owns it too. */
-	PyTypeObject * first = type;
-
 	if (namespace != NULL) {
 		/* The type being built has no ready tp_dict or tp_base; the
 		 * namespace is the class body and the declared bases carry the MRO
 		 * walk. */
-		int const present = dict_has_string(namespace, "__init__");
-
-		if (present < 0) {
+		if (dict_has_string(namespace, "__init__") > 0) {
 			return true;
 		}
 
-		if (present == 1) {
-			return true;
+		for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(bases); ++i) {
+			for (
+				PyTypeObject * base = (PyTypeObject *) PyTuple_GET_ITEM(bases, i);
+				base != NULL;
+				base = base->tp_base
+			) {
+				enum init_owner const owner = base_init_owner(base);
+
+				if (owner != INIT_OWNER_NONE) {
+					return owner == INIT_OWNER_AUTHOR;
+				}
+			}
 		}
 
-		first = (PyTypeObject *) PyTuple_GET_ITEM(bases, 0);
+		return false;
 	}
 
-	for (PyTypeObject * base = first; base != NULL; base = base->tp_base) {
-		PyObject * const dict = base->tp_dict;
+	PyObject * const mro = type->tp_mro;
 
-		if (dict == NULL) {
-			/* Static builtin exceptions expose no tp_dict to C; their init
-			 * is their own C init, which the field constructor answers
-			 * beside. A NULL-dict base with any other init owns it. */
-			if (PyType_FastSubclass(base, Py_TPFLAGS_BASE_EXC_SUBCLASS)) {
-				return false;
-			}
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); ++i) {
+		enum init_owner const owner = base_init_owner((PyTypeObject *) PyTuple_GET_ITEM(mro, i));
 
-			if (base->tp_init != PyBaseObject_Type.tp_init) {
-				return true;
-			}
-
-			continue;
-		}
-
-		int const present = dict_has_string(dict, "__init__");
-
-		if (present < 0) {
-			return true;
-		}
-
-		if (present == 1) {
-			PY_OWNED(init_value, Py_XNewRef(dict_get_string(dict, "__init__")));
-
-			if (init_value == NULL) {
-				return true;
-			}
-
-			return (
-				PyFunction_Check(init_value) ||
-				!PyType_FastSubclass(base, Py_TPFLAGS_BASE_EXC_SUBCLASS)
-			);
+		if (owner != INIT_OWNER_NONE) {
+			return owner == INIT_OWNER_AUTHOR;
 		}
 	}
 
-	return true;
+	/* Nothing in the chain defines an init: the generated constructor is
+	 * what answers. */
+	return false;
 }
 
 enum result install_post_init(StructType * const struct_class) {
