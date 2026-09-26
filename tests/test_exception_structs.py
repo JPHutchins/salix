@@ -617,6 +617,17 @@ if sys.version_info >= (3, 11):
         exceptions: list
         message: str
 
+    class ExceptionsOnly(ExceptionGroup, Struct, frozen=False):
+        exceptions: list
+
+    class PrefixedExceptions(ExceptionGroup, Struct, frozen=False):
+        flag: bool = False
+        exceptions: list = ()
+
+    class PrefixedMessage(ExceptionGroup, Struct, frozen=False):
+        flag: bool = False
+        message: str = ""
+
 
 @pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
 def test_replace_runs_on_an_own_init_group_struct():
@@ -856,6 +867,58 @@ def test_from_mapping_skips_post_init_for_an_own_init_group_struct():
     salix.from_mapping(LoggingGroup, {"message": "m", "exceptions": [ValueError()]})
 
     assert calls == ["init"]
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
+def test_replace_of_a_memberless_own_init_group_writes_args():
+    import copy
+
+    import salix
+
+    class PlainGroup(ExceptionGroup, Struct, frozen=False):
+        x: int = 0
+
+        def __init__(self, x):
+            self.x = x
+
+    group = salix.from_mapping(PlainGroup, {"x": 5})
+    replaced = salix.replace(group, x=9)
+
+    assert replaced.args == (5,)
+    assert copy.copy(replaced).args == (5,)
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
+def test_an_exceptions_only_group_struct_pickles_round_trip():
+    import pickle
+
+    for group in (ExceptionsOnly([ValueError("q")]), PrefixedExceptions(exceptions=[ValueError("q")])):
+        restored = pickle.loads(pickle.dumps(group))
+
+        assert len(restored.exceptions) == 1
+        assert restored.exceptions[0].args == ("q",)
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
+def test_a_message_only_group_struct_with_a_leading_field_pickles_round_trip():
+    import pickle
+
+    group = PrefixedMessage(message="m")
+    restored = pickle.loads(pickle.dumps(group))
+
+    assert restored.message == "m"
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
+def test_a_group_with_required_fields_before_the_members_still_reports_them():
+    class LedGroup(ExceptionGroup, Struct, frozen=False):
+        x: int
+        y: str
+        message: str
+        exceptions: list
+
+    with pytest.raises(TypeError, match="missing required argument 'x'"):
+        LedGroup("m", [ValueError()])
 
 
 @pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")

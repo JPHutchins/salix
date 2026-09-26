@@ -10,7 +10,8 @@ static void bind_positional(
 	StructType const * type,
 	PyObject * self,
 	PyObject * const * arguments,
-	Py_ssize_t positional_count
+	Py_ssize_t positional_count,
+	bool family_constructed
 );
 static enum result bind_keywords(
 	StructType const * type,
@@ -23,15 +24,10 @@ static enum result bind_named(
 	StructType const * type,
 	PyObject * self,
 	PyObject * name,
-	PyObject * value,
-	Py_ssize_t positional_count
+	PyObject * value
 );
 static struct field_lookup named_field(StructType const * type, PyObject * name);
-static enum result fill_defaults(
-	StructType const * type,
-	PyObject * self,
-	Py_ssize_t positional_count
-);
+static enum result fill_defaults(StructType const * type, PyObject * self, bool require_all);
 static enum result run_post_init(StructType const * type, PyObject * self);
 
 static PyObject * interned_value(StructType const * const type, bool const no_arguments) {
@@ -218,25 +214,55 @@ static void store_exception_args(PyObject * const self, PyObject * const args) {
 }
 
 #if PY_VERSION_HEX >= 0x030B0000
-static enum result store_group_args(StructType * const type, PyObject * const self) {
+static enum result store_group_args(
+	StructType * const type,
+	PyObject * const self,
+	bool const from_fields
+) {
 	/* The group payload is the members' shape -- (msg, excs) when both
-	 * fields exist, the single member otherwise -- so pickle's positional
-	 * reconstruction binds them by index back onto the same fields. A
-	 * struct without either member field keeps the field-value payload the
-	 * explicit-prefix writer produced. */
+	 * member fields exist, the single member otherwise -- so pickle's
+	 * positional reconstruction binds them by index back onto the same
+	 * fields. Construction packs the bound field values, the family's own
+	 * args shape; replace packs the carried members, whose state the
+	 * fields may diverge from by contract. A struct without either member
+	 * field keeps the field-value payload the explicit-prefix writer
+	 * produced. */
 	bool const has_message = type->struct_message_index >= 0;
 	bool const has_exceptions = type->struct_exceptions_index >= 0;
+	PY_MOVABLE(packed, NULL);
 
-	if (!has_message && !has_exceptions) {
-		return RESULT_OK;
+	if (from_fields) {
+		PyObject * const message = (
+			has_message ? *struct_slot(type, self, type->struct_message_index) :
+			NULL
+		);
+		PyObject * const exceptions = (
+			has_exceptions ? *struct_slot(type, self, type->struct_exceptions_index) :
+			NULL
+		);
+
+		if (message != NULL && exceptions != NULL) {
+			packed = PyTuple_Pack(2, message, exceptions);
+		} else if (message != NULL) {
+			packed = PyTuple_Pack(1, message);
+		} else if (exceptions != NULL) {
+			packed = PyTuple_Pack(1, exceptions);
+		} else {
+			return RESULT_OK;
+		}
+	} else {
+		PyBaseExceptionGroupObject * const group = (PyBaseExceptionGroupObject *) self;
+
+		if (has_message && has_exceptions) {
+			packed = PyTuple_Pack(2, group->msg, group->excs);
+		} else if (has_message) {
+			packed = PyTuple_Pack(1, group->msg);
+		} else if (has_exceptions) {
+			packed = PyTuple_Pack(1, group->excs);
+		} else {
+			return RESULT_OK;
+		}
 	}
-
-	PyBaseExceptionGroupObject * const group = (PyBaseExceptionGroupObject *) self;
-	PY_MOVABLE(packed, (
-		has_message && has_exceptions ? PyTuple_Pack(2, group->msg, group->excs) :
-		has_message ? PyTuple_Pack(1, group->msg) :
-		PyTuple_Pack(1, group->excs)
-	));
 
 	if (packed == NULL) {
 		return RESULT_ERROR;
@@ -501,6 +527,7 @@ PyObject * Struct_vectorcall(
 	}
 
 	PY_MOVABLE(self, NULL);
+	bool fallback_allocated = false;
 
 	if (exception_struct) {
 		/* The inherited tp_new is the exception family's construction: it
@@ -556,6 +583,7 @@ PyObject * Struct_vectorcall(
 			 * the C members zeroed. */
 			if (!author_new) {
 				PyErr_Clear();
+				fallback_allocated = true;
 				self = python_class->tp_alloc(python_class, 0);
 
 				if (self != NULL) {
@@ -597,11 +625,11 @@ PyObject * Struct_vectorcall(
 		return NULL;
 	}
 
-	bind_positional(type, self, arguments, positional_count);
+	bind_positional(type, self, arguments, positional_count, !fallback_allocated);
 
 	if (
 		bind_keywords(type, self, arguments, positional_count, keyword_names) != RESULT_OK ||
-		fill_defaults(type, self, positional_count) != RESULT_OK
+		fill_defaults(type, self, true) != RESULT_OK
 	) {
 		return NULL;
 	}
@@ -661,7 +689,7 @@ PyObject * Struct_vectorcall(
 			type->struct_group_family &&
 			(type->struct_message_index >= 0 || type->struct_exceptions_index >= 0)
 		) {
-			if (store_group_args(type, self) != RESULT_OK) {
+			if (store_group_args(type, self, true) != RESULT_OK) {
 				return NULL;
 			}
 		} else
@@ -682,7 +710,7 @@ int Struct_init_wrapper(
 	StructType * const type = (StructType *) Py_TYPE(self);
 	PyTypeObject * const cls = &type->heap_type.ht_type;
 
-	if (fill_defaults(type, self, struct_required_count(type)) != RESULT_OK) {
+	if (fill_defaults(type, self, false) != RESULT_OK) {
 		return -1;
 	}
 
@@ -885,7 +913,7 @@ PyObject * Struct_replace(
 							return NULL;
 						}
 
-						if (store_group_args(type, replaced) != RESULT_OK) {
+						if (store_group_args(type, replaced, false) != RESULT_OK) {
 							return NULL;
 						}
 					} else if (allocated_route) {
@@ -899,6 +927,17 @@ PyObject * Struct_replace(
 								NULL,
 								NULL
 							) !=
+							RESULT_OK
+						) {
+							return NULL;
+						}
+
+						/* The allocation wrote no args -- the family's parse
+						 * never ran -- so the source's payload answers; a
+						 * member-less struct whose graded pack no-ops keeps
+						 * its args here. */
+						if (
+							set_exception_args_from_original(type, replaced, self, NULL, NULL) !=
 							RESULT_OK
 						) {
 							return NULL;
@@ -1090,7 +1129,7 @@ PyObject * Struct_replace(
 		 * member field keeps the field-value payload written above. The
 		 * locked store answers because the post-init hook may have
 		 * published the copy. */
-		if (store_group_args(type, copy) != RESULT_OK) {
+		if (store_group_args(type, copy, false) != RESULT_OK) {
 			return NULL;
 		}
 	}
@@ -1269,7 +1308,7 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 		PyObject * value;
 
 		while (PyDict_Next(dict_values, &position, &key, &value)) {
-			if (bind_named(type, built, key, value, 0) != RESULT_OK) {
+			if (bind_named(type, built, key, value) != RESULT_OK) {
 				return NULL;
 			}
 		}
@@ -1278,13 +1317,7 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 			PyObject * const pair = PySequence_Fast_GET_ITEM(items, i);
 
 			if (
-				bind_named(
-					type,
-					built,
-					PyTuple_GET_ITEM(pair, 0),
-					PyTuple_GET_ITEM(pair, 1),
-					0
-				) !=
+				bind_named(type, built, PyTuple_GET_ITEM(pair, 0), PyTuple_GET_ITEM(pair, 1)) !=
 				RESULT_OK
 			) {
 				return NULL;
@@ -1306,7 +1339,7 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 		return NULL;
 	}
 
-	if (fill_defaults(type, built, 0) != RESULT_OK) {
+	if (fill_defaults(type, built, true) != RESULT_OK) {
 		return NULL;
 	}
 
@@ -1366,7 +1399,7 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 		type->struct_group_family &&
 		(type->struct_message_index >= 0 || type->struct_exceptions_index >= 0)
 	) {
-		if (store_group_args(type, built) != RESULT_OK) {
+		if (store_group_args(type, built, true) != RESULT_OK) {
 			return NULL;
 		}
 	} else
@@ -1395,18 +1428,31 @@ static void bind_positional(
 	StructType const * const type,
 	PyObject * const self,
 	PyObject * const * const arguments,
-	Py_ssize_t const positional_count
+	Py_ssize_t const positional_count,
+	bool const family_constructed
 ) {
 #if PY_VERSION_HEX >= 0x030B0000
 	if (type->struct_group_family) {
-		/* A group struct's positional shape is the family's -- (msg, excs)
-		 * -- so the first two positionals bind by the resolved member
-		 * indexes, whatever the declaration order; further positionals bind
-		 * in declaration order, and a slot already written keeps its value. */
+		/* The family's accepted shape is (msg, excs), so the positionals
+		 * bind by the resolved member indexes whatever the declaration
+		 * order; a one-item payload -- the graded pack's single-member
+		 * shape a pickle reconstructs through the fallback -- binds its
+		 * member field the same way. Rejected shapes with more positionals
+		 * are field values in declaration order, and a slot already
+		 * written keeps its value. */
+		bool const member_shape = family_constructed || positional_count == 1;
+
 		for (Py_ssize_t i = 0; i < positional_count; ++i) {
 			Py_ssize_t const target = (
-				i == 0 && type->struct_message_index >= 0 ? type->struct_message_index :
-				i == 1 && type->struct_exceptions_index >= 0 ? type->struct_exceptions_index :
+				member_shape ? (
+					i == 0 ? (
+						type->struct_message_index >= 0 ? type->struct_message_index :
+						type->struct_exceptions_index >= 0 ? type->struct_exceptions_index :
+						0
+					) :
+					i == 1 && type->struct_exceptions_index >= 0 ? type->struct_exceptions_index :
+					i
+				) :
 				i
 			);
 
@@ -1439,8 +1485,7 @@ static enum result bind_keywords(
 				type,
 				self,
 				PyTuple_GET_ITEM(keyword_names, i),
-				arguments[positional_count + i],
-				positional_count
+				arguments[positional_count + i]
 			) !=
 			RESULT_OK
 		) {
@@ -1455,8 +1500,7 @@ static enum result bind_named(
 	StructType const * const type,
 	PyObject * const self,
 	PyObject * const name,
-	PyObject * const value,
-	Py_ssize_t const positional_count
+	PyObject * const value
 ) {
 	struct field_lookup const found = named_field(type, name);
 
@@ -1468,9 +1512,12 @@ static enum result bind_named(
 			break;
 	}
 
+	/* The slot itself answers whether a positional bound the field -- a
+	 * member-index mapping can leave leading slots untouched, so a count
+	 * cannot. */
 	PyObject * * const slot = struct_slot(type, self, found.index);
 
-	if (*slot != NULL || found.index < positional_count) {
+	if (*slot != NULL) {
 		PyErr_Format(
 			PyExc_TypeError,
 			"%.200s() got multiple values for argument '%U'",
@@ -1503,11 +1550,16 @@ static struct field_lookup named_field(StructType const * const type, PyObject *
 static enum result fill_defaults(
 	StructType const * const type,
 	PyObject * const self,
-	Py_ssize_t const positional_count
+	bool const require_all
 ) {
+	/* Slot-state driven: whatever bound each slot -- a positional, a
+	 * keyword, a member-index mapping -- a NULL slot is what needs a
+	 * default or the missing-required error. The wrapper passes false: on
+	 * the own-init path the author's init owns the required fields and an
+	 * unbound one is its state, not a call error. */
 	Py_ssize_t const required_count = struct_required_count(type);
 
-	for (Py_ssize_t i = positional_count; i < type->struct_field_count; ++i) {
+	for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
 		PyObject * * const slot = struct_slot(type, self, i);
 
 		if (*slot != NULL) {
@@ -1515,6 +1567,10 @@ static enum result fill_defaults(
 		}
 
 		if (i < required_count) {
+			if (!require_all) {
+				continue;
+			}
+
 			PyErr_Format(
 				PyExc_TypeError,
 				"%.200s() missing required argument '%U'",
