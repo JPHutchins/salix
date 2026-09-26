@@ -250,12 +250,13 @@ class OwnInit(Exception, Struct, frozen=False):
             self.x = kwargs["x"]
 
 
-def test_replace_represents_the_own_init_positionals():
+def test_replace_reconstructs_an_author_init_with_the_field_keywords():
     import salix
 
-    error = OwnInit(3)
+    replaced = salix.replace(OwnInit(3), x=5)
 
-    assert salix.replace(error, x=5).args == (3,)
+    assert replaced.x == 5
+    assert replaced.args == ()
 
 
 class NewRefuser(Exception):
@@ -411,3 +412,100 @@ def test_the_family_new_receives_the_call_keywords():
 
     assert error.seen == {"x": 1}
     assert error.x == 1
+
+
+def test_copy_arms_carry_the_family_members():
+    import copy
+
+    file_error = FileError(2, "msg")
+    syntax_error = SE("hello")
+    decode_error = UDE("ascii", b"x", 0, 1, "why")
+
+    for copier in (copy.copy, copy.deepcopy):
+        assert copier(file_error).errno == 2
+        assert copier(file_error).strerror == "msg"
+        assert copier(syntax_error).msg == "hello"
+        assert copier(decode_error).encoding == "ascii"
+
+
+def test_replace_and_from_mapping_run_on_family_owned_structs():
+    import salix
+
+    assert salix.replace(FileError(2, "msg"), code=9).code == 9
+    assert salix.replace(SE("hello"), detail="d").detail == "d"
+    assert salix.from_mapping(FileError, {"code": 9}).code == 9
+
+
+class FieldNamedAuthor(Exception, Struct, frozen=False):
+    msg: str
+
+    def __init__(self, msg):
+        self.msg = msg
+
+
+def test_replace_on_a_field_named_author_parameter_binds_once():
+    import salix
+
+    assert salix.replace(FieldNamedAuthor("a"), msg="b").msg == "b"
+
+
+if sys.version_info >= (3, 11):
+    class NewMixin:
+        def __new__(cls, *args, **kwargs):
+            return super().__new__(cls)
+
+    class EGX(ExceptionGroup, NewMixin, Struct, frozen=False):
+        x: int = 0
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
+def test_a_new_defining_mixin_does_not_disable_the_group_fallback():
+    error = EGX("boom")
+
+    assert error.x == "boom"
+    assert str(error) == "boom (0 sub-exception)"
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
+def test_group_copy_arms_carry_the_members():
+    import copy
+
+    import salix
+
+    error = EG("boom")
+
+    assert str(copy.copy(error)) == "boom (0 sub-exception)"
+    assert str(copy.deepcopy(error)) == "boom (0 sub-exception)"
+    assert str(salix.replace(error, x=2)) == "boom (0 sub-exception)"
+    assert str(salix.from_mapping(EG, {"x": 2})) == "2 (0 sub-exception)"
+
+
+class BodyNew(Struct, frozen=False):
+    a: int
+    b: int = 5
+
+    def __new__(cls, *args, **kwargs):
+        return super().__new__(cls)
+
+    def __init__(self, a):
+        self.a = a
+
+
+def test_a_body_new_keeps_the_defaults_and_the_required_validation():
+    instance = BodyNew(1)
+
+    assert instance.a == 1
+    assert instance.b == 5
+
+    with pytest.raises(TypeError):
+        BodyNew()
+
+
+class Uninstantiable(Exception, Struct, frozen=False):
+    x: int = 0
+    __new__ = None
+
+
+def test_a_none_new_is_the_cannot_create_refusal():
+    with pytest.raises(TypeError, match="cannot create"):
+        Uninstantiable(1)

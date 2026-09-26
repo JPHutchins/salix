@@ -40,6 +40,9 @@ typedef struct StructType {
 
 	bool struct_resolves_body_eq;
 	bool struct_author_new;
+	bool struct_family_owned;
+	newfunc struct_installed_new;
+	initproc struct_installed_init;
 } StructType;
 
 /*

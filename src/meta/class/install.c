@@ -68,14 +68,14 @@ enum result install_fields(
 	return RESULT_OK;
 }
 
-static bool author_new_in_mro(PyTypeObject * const cls) {
-	PyObject * const mro = cls->tp_mro;
-
-	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); ++i) {
-		PyTypeObject * const entry = (PyTypeObject *) PyTuple_GET_ITEM(mro, i);
-
+static bool author_new_in_chain(PyTypeObject * const cls) {
+	/* The effective tp_new comes down the solid-base chain (type_new copies
+	 * it from the first solid base), so the first heap entry in that chain
+	 * whose dict defines __new__ is the one whose __new__ answers; a static
+	 * builtin ends the chain and its tp_new is the family's. */
+	for (PyTypeObject * entry = cls; entry != NULL; entry = entry->tp_base) {
 		if ((entry->tp_flags & Py_TPFLAGS_HEAPTYPE) == 0) {
-			continue;
+			break;
 		}
 
 		int const present = dict_has_string(entry->tp_dict, "__new__");
@@ -88,30 +88,66 @@ static bool author_new_in_mro(PyTypeObject * const cls) {
 	return false;
 }
 
+static bool family_owns_in_mro(PyTypeObject * const cls);
+
 enum result install_constructor(
 	StructType * const struct_class,
 	PyObject * const namespace,
 	bool const bases_divert_setattro
 ) {
 	if (defines_own_init(struct_class, namespace)) {
-		/* A body __new__ owns the allocation: the author's slot stays, and
-		 * its super() chain reaches the family's __new__. The probe error
-		 * keeps the slot too -- the conservative answer runs the author's. */
-		int const defines_new = dict_has_string(namespace, "__new__");
+		if (dict_has_string(namespace, "__new__") == 1) {
+			/* A body __new__ keeps its slot -- object_new's own guard
+			 * refuses object.__new__(cls) on a class whose tp_new is
+			 * Struct_new, and the body's super() chain ends there. The
+			 * wrapped init fills the defaults the allocation used to. */
+			struct_class->struct_installed_init = struct_class->heap_type.ht_type.tp_init;
+			struct_class->heap_type.ht_type.tp_init = Struct_init_wrapper;
+		} else {
+			/* Struct_new answers as tp_new, invoking the captured
+			 * pre-install slot: the family's constructs the C members, and
+			 * nothing re-walks per construction. A struct base that is
+			 * itself own-init hands down Struct_new, so the capture resolves
+			 * through the struct ancestors to the slot the first own-init
+			 * ancestor captured. */
+			newfunc captured_new = struct_class->heap_type.ht_type.tp_new;
 
-		if (defines_new == 0) {
+			for (
+				PyTypeObject * chain = struct_class->heap_type.ht_type.tp_base;
+				captured_new == Struct_new &&
+					chain != NULL &&
+					is_struct_class((PyObject *) chain);
+				chain = chain->tp_base
+			) {
+				captured_new = ((StructType *) chain)->struct_installed_new;
+			}
+
+			struct_class->struct_installed_new = captured_new;
 			struct_class->heap_type.ht_type.tp_new = Struct_new;
 		}
 
 		struct_class->heap_type.ht_type.tp_vectorcall = NULL;
 	} else {
+		/* The root inherits the mixin's NULL tp_new, which object_new's
+		 * guard refuses on a body __new__'s super() chain; object's own
+		 * answers. A body __new__ = None stays the cannot-create marker as
+		 * a NULL slot, the vectorcall's guard reads it. */
+		PyObject * const new_entry = dict_get_string(namespace, "__new__");
+
+		if (struct_class->heap_type.ht_type.tp_new == NULL || new_entry == Py_None) {
+			struct_class->heap_type.ht_type.tp_new = (
+				new_entry == Py_None ? NULL :
+				PyBaseObject_Type.tp_new
+			);
+		}
+
 		struct_class->heap_type.ht_type.tp_vectorcall = Struct_vectorcall;
 	}
 
-	/* The vectorcall's TypeError fallback must not swallow an author
-	 * __new__'s refusal; the answer is fixed at class creation, so the
-	 * construction path reads it instead of re-walking the MRO. */
-	struct_class->struct_author_new = author_new_in_mro(&struct_class->heap_type.ht_type);
+	/* Both answers are fixed at class creation, so the construction and
+	 * copy paths read them instead of re-walking per call. */
+	struct_class->struct_author_new = author_new_in_chain(&struct_class->heap_type.ht_type);
+	struct_class->struct_family_owned = family_owns_in_mro(&struct_class->heap_type.ht_type);
 
 	if (install_post_init(struct_class) != RESULT_OK) {
 		return RESULT_ERROR;
@@ -130,7 +166,10 @@ enum result ensure_singleton(
 		!struct_class->struct_options.weakref &&
 		struct_class->struct_field_count == 0 &&
 		!defines_own_init(struct_class, namespace) &&
-		struct_class->heap_type.ht_type.tp_new == NULL &&
+		(
+			struct_class->heap_type.ht_type.tp_new == NULL ||
+			struct_class->heap_type.ht_type.tp_new == PyBaseObject_Type.tp_new
+		) &&
 		struct_class->struct_member_count == 0 &&
 		!bases_divert_setattro &&
 		Py_TYPE(struct_class)->tp_call == StructMeta_Type.tp_call
@@ -260,6 +299,27 @@ static enum init_owner namespace_init_owner(PyTypeObject * const type, PyObject 
 	}
 
 	return present == 1 ? INIT_OWNER_AUTHOR : INIT_OWNER_NONE;
+}
+
+static bool family_owns_in_mro(PyTypeObject * const cls) {
+	PyObject * const mro = cls->tp_mro;
+
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); ++i) {
+		PyTypeObject * const entry = (PyTypeObject *) PyTuple_GET_ITEM(mro, i);
+		enum init_owner const owner = base_init_owner(entry);
+
+		if (owner == INIT_OWNER_NONE) {
+			continue;
+		}
+
+		return (
+			(entry->tp_flags & Py_TPFLAGS_HEAPTYPE) == 0 &&
+			PyType_FastSubclass(entry, Py_TPFLAGS_BASE_EXC_SUBCLASS) &&
+			owner == INIT_OWNER_AUTHOR
+		);
+	}
+
+	return false;
 }
 
 bool defines_own_init(StructType * const struct_class, PyObject * const namespace) {

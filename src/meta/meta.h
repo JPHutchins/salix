@@ -97,6 +97,15 @@ enum result set_exception_args_from_original(
 	PyObject * deepcopier,
 	PyObject * memo
 );
+bool is_group_family(PyTypeObject const * cls);
+enum result carry_group_members(
+	StructType * type,
+	PyObject * self,
+	PyObject * msg,
+	PyObject * excs,
+	PyObject * deepcopier,
+	PyObject * memo
+);
 PyModuleDef * salix_module_def(void);
 bool any_base_diverts_setattro(PyObject * bases);
 bool carries_weakref_slot(PyTypeObject const * type);

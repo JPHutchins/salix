@@ -436,7 +436,38 @@ static PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 		return py_move(&short_circuit);
 	}
 
-	PY_MOVABLE(copy, cls->tp_alloc(cls, 0));
+	PY_MOVABLE(copy, NULL);
+
+	if (type->struct_family_owned) {
+		/* The family's construction is its C members' only writer --
+		 * OSError's live in __new__ and its init no-ops without it -- so
+		 * the copy is the construction itself, with the source's
+		 * positional payload. */
+		PyObject * args;
+
+		STRUCT_BEGIN_CRITICAL_SECTION(self);
+		args = Py_XNewRef(((PyBaseExceptionObject *) self)->args);
+		STRUCT_END_CRITICAL_SECTION();
+
+		if (args == NULL) {
+			args = PyTuple_New(0);
+		}
+
+		if (args == NULL) {
+			return NULL;
+		}
+
+		PY_MOVABLE(rebuilt, PyObject_Call((PyObject *) cls, args, NULL));
+		Py_DECREF(args);
+
+		if (rebuilt == NULL) {
+			return NULL;
+		}
+
+		copy = py_move(&rebuilt);
+	} else {
+		copy = cls->tp_alloc(cls, 0);
+	}
 
 	if (copy == NULL) {
 		return NULL;
@@ -444,6 +475,14 @@ static PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 
 	PY_MOVABLE(dict, NULL);
 	struct_slots_copy_into(type, self, copy, &dict);
+
+#if PY_VERSION_HEX >= 0x030B0000
+	if (is_group_family(cls)) {
+		PyBaseExceptionGroupObject * const source_group = (PyBaseExceptionGroupObject *) self;
+
+		carry_group_members(type, copy, source_group->msg, source_group->excs, NULL, NULL);
+	}
+#endif
 
 	if (
 		(dict != NULL && struct_dict_copy_merged(dict, copy) < 0) ||
@@ -553,7 +592,38 @@ static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) 
 		return py_move(&short_circuit);
 	}
 
-	PY_MOVABLE(copy, cls->tp_alloc(cls, 0));
+	PY_MOVABLE(copy, NULL);
+
+	if (type->struct_family_owned) {
+		/* The family's construction is its C members' only writer --
+		 * OSError's live in __new__ and its init no-ops without it -- so
+		 * the copy is the construction itself, with the source's
+		 * positional payload. */
+		PyObject * args;
+
+		STRUCT_BEGIN_CRITICAL_SECTION(self);
+		args = Py_XNewRef(((PyBaseExceptionObject *) self)->args);
+		STRUCT_END_CRITICAL_SECTION();
+
+		if (args == NULL) {
+			args = PyTuple_New(0);
+		}
+
+		if (args == NULL) {
+			return NULL;
+		}
+
+		PY_MOVABLE(rebuilt, PyObject_Call((PyObject *) cls, args, NULL));
+		Py_DECREF(args);
+
+		if (rebuilt == NULL) {
+			return NULL;
+		}
+
+		copy = py_move(&rebuilt);
+	} else {
+		copy = cls->tp_alloc(cls, 0);
+	}
 
 	if (copy == NULL) {
 		return NULL;
@@ -626,6 +696,14 @@ static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) 
 			return memo_failure(memo, key);
 		}
 	}
+
+#if PY_VERSION_HEX >= 0x030B0000
+	if (is_group_family(cls)) {
+		PyBaseExceptionGroupObject * const source_group = (PyBaseExceptionGroupObject *) self;
+
+		carry_group_members(type, copy, source_group->msg, source_group->excs, deepcopy, memo);
+	}
+#endif
 
 	if (set_exception_args_from_original(type, copy, self, deepcopy, memo) != RESULT_OK) {
 		return memo_failure(memo, key);
