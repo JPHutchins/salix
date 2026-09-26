@@ -555,8 +555,7 @@ def _rebind_class_cells(built: type[Any], old_cls: type[Any]) -> None:
 
 # A namespace __setattr__ flips salix's hash plan to unhashable, so the shim
 # does not inject one: unfrozen structs already accept plain assignment via
-# salix's C setattro, and frozen structs refuse it (AttributeError instead of
-# stock's FrozenInstanceError — a message-parity gap only).
+# salix's C setattro, and frozen structs raise stock's FrozenInstanceError.
 def _exec_name(base: str, taken: set[str]) -> str:
     candidate = base
     counter = 0

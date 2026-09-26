@@ -1,5 +1,6 @@
 import pickle
 import sys
+from dataclasses import FrozenInstanceError
 
 import pytest
 
@@ -209,7 +210,7 @@ def test_a_frozen_struct_with_a_body_init_cannot_write_its_fields():
         def __init__(self) -> None:
             self.x = 1
 
-    with pytest.raises(AttributeError, match="cannot assign to field 'x'"):
+    with pytest.raises(FrozenInstanceError, match="cannot assign to field 'x'"):
         Frozen()
 
 

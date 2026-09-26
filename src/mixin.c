@@ -912,6 +912,41 @@ int Struct_set_signature(PyObject * const self, PyObject * const value, void * c
 	return 0;
 }
 
+static PyObject * frozen_instance_error(void) {
+	static bool resolved;
+	static PyObject * cached;
+
+	if (resolved) {
+		return cached;
+	}
+
+	resolved = true;
+	PY_OWNED(module, PyImport_ImportModule("dataclasses"));
+
+	if (module == NULL) {
+		if (
+			!PyErr_ExceptionMatches(PyExc_ImportError) &&
+			!PyErr_ExceptionMatches(PyExc_AttributeError)
+		) {
+			return NULL;
+		}
+
+		PyErr_Clear();
+
+		return NULL;
+	}
+
+	PY_MOVABLE(frozen_error, optional_attribute(module, "FrozenInstanceError"));
+
+	if (frozen_error == NULL || !PyExceptionClass_Check(frozen_error)) {
+		return NULL;
+	}
+
+	cached = Py_NewRef(frozen_error);
+
+	return py_move(&frozen_error);
+}
+
 static int Struct_set_attribute(
 	PyObject * const self,
 	PyObject * const name,
@@ -925,23 +960,19 @@ static int Struct_set_attribute(
 		return 0;
 	}
 
-	if (value != NULL && struct_type_of(self)->struct_options.frozen) {
-		/* Stock frozen dataclasses raise FrozenInstanceError; it subclasses
-		 * AttributeError, so generic catchers still work. */
-		PY_OWNED(module, PyImport_ImportModule("dataclasses"));
+	/* Stock frozen dataclasses raise FrozenInstanceError; it subclasses
+	 * AttributeError, so generic catchers still work. */
+	if (value != NULL && PyUnicode_Check(name) && struct_type_of(self)->struct_options.frozen) {
+		PyObject * const frozen_error = frozen_instance_error();
 
-		if (module != NULL) {
-			PY_OWNED(frozen_error, PyObject_GetAttrString(module, "FrozenInstanceError"));
+		if (frozen_error != NULL) {
+			PyErr_Format(frozen_error, "cannot assign to field %R", name);
 
-			if (frozen_error != NULL) {
-				PyErr_Format(frozen_error, "cannot assign to field '%U'", name);
+			return RESULT_ERROR;
+		}
 
-				return RESULT_ERROR;
-			}
-
-			PyErr_Clear();
-		} else {
-			PyErr_Clear();
+		if (PyErr_Occurred()) {
+			return RESULT_ERROR;
 		}
 	}
 

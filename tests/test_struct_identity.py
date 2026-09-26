@@ -1,5 +1,6 @@
 import collections.abc
 import weakref
+from dataclasses import FrozenInstanceError
 
 import pytest
 
@@ -609,7 +610,7 @@ class TestAMetaclassSubclass:
 
         Built = META("Built", (Base,), {"__annotations__": {}}, frozen=True)
 
-        with pytest.raises(AttributeError, match="cannot assign to field 'x'"):
+        with pytest.raises(FrozenInstanceError, match="cannot assign to field 'x'"):
             Built(1).x = 9
 
     def test_a_delegate_that_swallows_the_options_gets_the_displaced_slot_advice(self):
