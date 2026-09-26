@@ -409,6 +409,16 @@ static PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 
 	StructType * const type = struct_type_of(self);
 	PyTypeObject * const cls = &type->heap_type.ht_type;
+
+	/* A body __new__ = None is the cannot-create marker; the cached flag
+	 * answers at every construction entry point, the metatype's dispatch
+	 * included. */
+	if (type->struct_cannot_create) {
+		PyErr_Format(PyExc_TypeError, "cannot create '%.100s' instances", cls->tp_name);
+
+		return NULL;
+	}
+
 	PY_MOVABLE(copy_module, NULL);
 	PY_MOVABLE(copier, NULL);
 	PY_MOVABLE(
@@ -436,7 +446,69 @@ static PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 		return py_move(&short_circuit);
 	}
 
-	PY_MOVABLE(copy, cls->tp_alloc(cls, 0));
+	PY_MOVABLE(copy, NULL);
+
+	if (type->struct_family_owned) {
+		/* The family's construction is its C members' only writer --
+		 * OSError's live in __new__ and its init no-ops without it -- so
+		 * the copy is the construction itself, with the source's
+		 * positional payload. The constructor pre-filled the defaults;
+		 * the source's values -- mutations and prior replaces included --
+		 * overwrite them, releasing the pre-filled references. */
+		PY_OWNED(values_snapshot, PyTuple_New(type->struct_field_count));
+
+		if (values_snapshot == NULL) {
+			return NULL;
+		}
+
+		struct_slots_ref_into(type, self, values_snapshot, NULL);
+
+		PyObject * args;
+
+		STRUCT_BEGIN_CRITICAL_SECTION(self);
+		args = Py_XNewRef(((PyBaseExceptionObject *) self)->args);
+		STRUCT_END_CRITICAL_SECTION();
+
+		if (args == NULL) {
+			args = PyTuple_New(0);
+		}
+
+		if (args == NULL) {
+			return NULL;
+		}
+
+		if (PyTuple_GET_SIZE(args) > 0) {
+			PY_MOVABLE(rebuilt, PyObject_Call((PyObject *) cls, args, NULL));
+			Py_DECREF(args);
+
+			if (rebuilt == NULL) {
+				return NULL;
+			}
+
+			copy = py_move(&rebuilt);
+		} else {
+			/* An empty payload marks a from_mapping-built source: the
+			 * family's parse has nothing to reconstruct, and the plain
+			 * allocation keeps the members exactly as the source left
+			 * them -- unset, not fabricated. */
+			Py_DECREF(args);
+			copy = cls->tp_alloc(cls, 0);
+
+			if (copy == NULL) {
+				return NULL;
+			}
+		}
+
+		for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
+			PyObject * const value = PyTuple_GET_ITEM(values_snapshot, i);
+
+			if (value != NULL) {
+				Py_XSETREF(*struct_slot(type, copy, i), Py_NewRef(value));
+			}
+		}
+	} else {
+		copy = cls->tp_alloc(cls, 0);
+	}
 
 	if (copy == NULL) {
 		return NULL;
@@ -445,7 +517,31 @@ static PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 	PY_MOVABLE(dict, NULL);
 	struct_slots_copy_into(type, self, copy, &dict);
 
-	if (dict != NULL && struct_dict_copy_merged(dict, copy) < 0) {
+#if PY_VERSION_HEX >= 0x030B0000
+	if (type->struct_group_family) {
+		PyBaseExceptionGroupObject * const source_group = (PyBaseExceptionGroupObject *) self;
+
+		if (
+			carry_group_members(
+				type,
+				copy,
+				source_group->msg,
+				source_group->excs,
+				group_excs_str(self),
+				NULL,
+				NULL
+			) !=
+			RESULT_OK
+		) {
+			return NULL;
+		}
+	}
+#endif
+
+	if (
+		(dict != NULL && struct_dict_copy_merged(dict, copy) < 0) ||
+		set_exception_args_from_original(type, copy, self, NULL, NULL) != RESULT_OK
+	) {
 		return NULL;
 	}
 
@@ -506,6 +602,16 @@ static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) 
 
 	StructType * const type = struct_type_of(self);
 	PyTypeObject * const cls = &type->heap_type.ht_type;
+
+	/* A body __new__ = None is the cannot-create marker; the cached flag
+	 * answers at every construction entry point, the metatype's dispatch
+	 * included. */
+	if (type->struct_cannot_create) {
+		PyErr_Format(PyExc_TypeError, "cannot create '%.100s' instances", cls->tp_name);
+
+		return NULL;
+	}
+
 	PY_MOVABLE(copy_module, NULL);
 	PY_MOVABLE(copier, NULL);
 	PY_MOVABLE(
@@ -550,7 +656,121 @@ static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) 
 		return py_move(&short_circuit);
 	}
 
-	PY_MOVABLE(copy, cls->tp_alloc(cls, 0));
+	PY_OWNED(deepcopy, PyObject_GetAttrString(copy_module, "deepcopy"));
+
+	if (deepcopy == NULL) {
+		return memo_failure(memo, key);
+	}
+
+	PY_MOVABLE(copy, NULL);
+
+	if (type->struct_family_owned) {
+		/* The family's construction is its C members' only writer --
+		 * OSError's live in __new__ and its init no-ops without it -- so
+		 * the copy is the construction itself, with the source's
+		 * positional payload deep-copied first: the C members hold the
+		 * detached elements, not the original's. The constructor
+		 * pre-filled the defaults; the source's values -- mutations and
+		 * prior replaces included -- overwrite them, releasing the
+		 * pre-filled references. */
+		PY_OWNED(values_snapshot, PyTuple_New(type->struct_field_count));
+
+		if (values_snapshot == NULL) {
+			return NULL;
+		}
+
+		struct_slots_ref_into(type, self, values_snapshot, NULL);
+
+		PyObject * args;
+
+		STRUCT_BEGIN_CRITICAL_SECTION(self);
+		args = Py_XNewRef(((PyBaseExceptionObject *) self)->args);
+		STRUCT_END_CRITICAL_SECTION();
+
+		if (args == NULL) {
+			args = PyTuple_New(0);
+		}
+
+		if (args == NULL) {
+			return NULL;
+		}
+
+		if (PyTuple_GET_SIZE(args) > 0) {
+			/* The shell registers before the payload's deep copy, so a
+			 * self-referential args tuple resolves to it instead of
+			 * re-entering deepcopy on the source forever; the memo entry
+			 * then moves to the rebuilt copy. The family's construction
+			 * formats the payload, and the self-reference the memo resolves
+			 * to the shell may be the element it formats: the shell carries
+			 * an empty payload so the NULL-args read every version guards
+			 * against never fires. */
+			PY_MOVABLE(shell, cls->tp_alloc(cls, 0));
+
+			if (shell == NULL) {
+				Py_DECREF(args);
+
+				return NULL;
+			}
+
+			PY_MOVABLE(empty_payload, PyTuple_New(0));
+
+			if (empty_payload == NULL) {
+				Py_DECREF(args);
+
+				return NULL;
+			}
+
+			((PyBaseExceptionObject *) shell)->args = py_move(&empty_payload);
+
+			if (PyDict_SetItem(memo, key, shell) < 0) {
+				Py_DECREF(args);
+
+				return NULL;
+			}
+
+			PY_MOVABLE(deep_args, PyObject_CallFunctionObjArgs(deepcopy, args, memo, NULL));
+			Py_DECREF(args);
+
+			if (deep_args == NULL) {
+				return memo_failure(memo, key);
+			}
+
+			PY_MOVABLE(rebuilt, PyObject_Call((PyObject *) cls, deep_args, NULL));
+
+			if (rebuilt == NULL) {
+				return memo_failure(memo, key);
+			}
+
+			copy = py_move(&rebuilt);
+
+			if (PyDict_SetItem(memo, key, copy) < 0) {
+				Py_CLEAR(copy);
+
+				return NULL;
+			}
+		} else {
+			/* An empty payload marks a from_mapping-built source: the
+			 * family's parse has nothing to reconstruct, and the plain
+			 * allocation keeps the members exactly as the source left
+			 * them -- unset, not fabricated. */
+			Py_DECREF(args);
+			copy = cls->tp_alloc(cls, 0);
+
+			if (copy == NULL) {
+				return NULL;
+			}
+		}
+
+		for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
+			PyObject * const value = PyTuple_GET_ITEM(values_snapshot, i);
+
+			if (value != NULL) {
+				Py_XSETREF(*struct_slot(type, copy, i), Py_NewRef(value));
+			}
+		}
+	} else {
+		copy = cls->tp_alloc(cls, 0);
+	}
 
 	if (copy == NULL) {
 		return NULL;
@@ -566,12 +786,6 @@ static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) 
 
 	PY_MOVABLE(dict, NULL);
 	struct_slots_copy_into(type, self, copy, &dict);
-
-	PY_OWNED(deepcopy, PyObject_GetAttrString(copy_module, "deepcopy"));
-
-	if (deepcopy == NULL) {
-		return memo_failure(memo, key);
-	}
 
 	/* Each shallow copy is replaced by its deep copy, made outside the
 	 * section because copy.deepcopy runs arbitrary Python. */
@@ -622,6 +836,34 @@ static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) 
 		if (PyObject_GenericSetDict(copy, deep_dict, NULL) < 0) {
 			return memo_failure(memo, key);
 		}
+	}
+
+#if PY_VERSION_HEX >= 0x030B0000
+	if (type->struct_group_family) {
+		PyBaseExceptionGroupObject * const source_group = (PyBaseExceptionGroupObject *) self;
+
+		if (
+			carry_group_members(
+				type,
+				copy,
+				source_group->msg,
+				source_group->excs,
+				/* The body is a fresh deep copy, so the source's cached repr
+				 * would describe members the copy does not hold; NULL
+				 * rebuilds it from the detached body. */
+				NULL,
+				deepcopy,
+				memo
+			) !=
+			RESULT_OK
+		) {
+			return memo_failure(memo, key);
+		}
+	}
+#endif
+
+	if (set_exception_args_from_original(type, copy, self, deepcopy, memo) != RESULT_OK) {
+		return memo_failure(memo, key);
 	}
 
 	return py_move(&copy);
@@ -748,7 +990,7 @@ PyObject * Struct_get_signature(PyObject * const self, void * const closure) {
 		return NULL;
 	}
 
-	if (defines_own_init(type)) {
+	if (type->struct_own_init) {
 		PyErr_SetString(
 			PyExc_AttributeError,
 			"the class defines its own __init__, whose signature answers instead"
@@ -759,8 +1001,69 @@ PyObject * Struct_get_signature(PyObject * const self, void * const closure) {
 
 	for (Py_ssize_t i = 1; i < mixin; i += 1) {
 		PyObject * const entry = PyTuple_GET_ITEM(mro, i);
+		PyTypeObject * const entry_type = (PyTypeObject *) entry;
 
-		PY_OWNED(entry_dict, struct_type_dict((PyTypeObject *) entry));
+		if (PyType_FastSubclass(entry_type, Py_TPFLAGS_BASE_EXC_SUBCLASS)) {
+			/* The exception family carries its own signatures; the field
+			 * constructor's answers instead. A user-authored binding on an
+			 * exception-struct ancestor is redefined, not inherited, and
+			 * answers. */
+			PY_OWNED(entry_dict, struct_type_dict(entry_type));
+
+			if (entry_dict == NULL) {
+				if (PyErr_Occurred()) {
+					return NULL;
+				}
+
+				continue;
+			}
+
+			PY_MOVABLE(entry_binding, dict_value_ref(entry_dict, binding_name));
+
+			if (entry_binding == NULL) {
+				if (PyErr_Occurred()) {
+					return NULL;
+				}
+
+				continue;
+			}
+
+			/* None declares 'no signature' -- the uniform loop keeps
+			 * looking, and so does this branch. A heap entry's binding is
+			 * definitionally its own redefinition and answers. */
+			if (entry_binding == Py_None) {
+				continue;
+			}
+
+			if ((entry_type->tp_flags & Py_TPFLAGS_HEAPTYPE) != 0) {
+				return py_move(&entry_binding);
+			}
+
+			PyTypeObject * const parent_type = (PyTypeObject *) PyTuple_GET_ITEM(mro, i + 1);
+			PY_OWNED(parent_dict, struct_type_dict(parent_type));
+
+			if (parent_dict == NULL) {
+				if (PyErr_Occurred()) {
+					return NULL;
+				}
+
+				continue;
+			}
+
+			PY_OWNED(parent_binding, dict_value_ref(parent_dict, binding_name));
+
+			if (parent_binding == NULL && PyErr_Occurred()) {
+				return NULL;
+			}
+
+			if (entry_binding != parent_binding) {
+				return py_move(&entry_binding);
+			}
+
+			continue;
+		}
+
+		PY_OWNED(entry_dict, struct_type_dict(entry_type));
 
 		if (entry_dict == NULL) {
 			return NULL;

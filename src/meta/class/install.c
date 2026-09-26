@@ -68,28 +68,212 @@ enum result install_fields(
 	return RESULT_OK;
 }
 
-enum result install_constructor(StructType * const struct_class, bool const bases_divert_setattro) {
-	if (defines_own_init(struct_class)) {
-		struct_class->heap_type.ht_type.tp_new = Struct_new;
+static bool author_new_in_chain(PyTypeObject * const cls) {
+	/* The effective tp_new comes down the solid-base chain (type_new copies
+	 * it from the first solid base), so the first heap entry in that chain
+	 * whose dict defines __new__ is the one whose __new__ answers; a static
+	 * builtin ends the chain and its tp_new is the family's. */
+	for (PyTypeObject * entry = cls; entry != NULL; entry = entry->tp_base) {
+		if ((entry->tp_flags & Py_TPFLAGS_HEAPTYPE) == 0) {
+			break;
+		}
+
+		int const present = dict_has_string(entry->tp_dict, "__new__");
+
+		if (present < 0) {
+			/* A probe that cannot see has not learned presence; the
+			 * conservative answer keeps the fallback, and the probe error
+			 * cannot ride the class statement. */
+			PyErr_Clear();
+
+			return false;
+		}
+
+		if (present != 0) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+static bool family_owns_in_mro(PyTypeObject * const cls);
+static bool group_family_in_mro(PyTypeObject * const cls);
+
+enum result install_constructor(
+	StructType * const struct_class,
+	PyObject * const namespace,
+	bool const bases_divert_setattro
+) {
+	bool const own_init = defines_own_init(struct_class, namespace);
+	struct_class->struct_own_init = own_init;
+
+	/* A body __new__ = None is the cannot-create marker; the flag is the
+	 * one record of it, so a subclass inheriting the NULL slot inherits
+	 * the refusal instead of the mixin's slotless NULL being re-set to
+	 * object's own. The class's own dict is the record -- the settle may
+	 * move the body's entries out of the original namespace before this
+	 * probe runs. */
+	PyObject * const new_entry = dict_get_string(
+		struct_class->heap_type.ht_type.tp_dict,
+		"__new__"
+	);
+
+	if (new_entry == NULL && PyErr_Occurred()) {
+		/* A probe that cannot see has not learned a marker; the error
+		 * cannot ride the class statement. */
+		PyErr_Clear();
+	}
+
+	bool cannot_create = new_entry == Py_None;
+
+	/* The nearest struct class whose dict defines __new__ decides the
+	 * marker, CPython's own slot semantics: a body __new__ overrides it
+	 * and the override is inheritable. The ancestors answer only when
+	 * the class's own dict carries no entry. */
+	if (new_entry == NULL) {
+		for (
+			PyTypeObject * chain = struct_class->heap_type.ht_type.tp_base;
+			chain != NULL && is_struct_class((PyObject *) chain);
+			chain = chain->tp_base
+		) {
+			PyObject * const entry = dict_get_string(chain->tp_dict, "__new__");
+
+			if (entry == NULL && PyErr_Occurred()) {
+				PyErr_Clear();
+
+				continue;
+			}
+
+			if (entry == Py_None) {
+				cannot_create = true;
+			}
+
+			break;
+		}
+	}
+
+	struct_class->struct_cannot_create = cannot_create;
+
+	if (own_init) {
+		/* The wrapped init fills the defaults and writes the positional
+		 * payload before the author's or the family's own init answers;
+		 * tp_new stays the pre-install slot -- the body's, the family's
+		 * (whose C member writes are the construction), or object's own.
+		 * No class ever carries a salix slot as tp_new, so a body
+		 * __new__'s super() chain passes object_new's own guard in every
+		 * subclass shape. A struct base that is itself own-init hands
+		 * down the wrapper, so the capture resolves through the struct
+		 * ancestors to the init the first own-init ancestor captured. */
+		initproc captured_init = struct_class->heap_type.ht_type.tp_init;
+
+		for (
+			PyTypeObject * chain = struct_class->heap_type.ht_type.tp_base;
+			captured_init == Struct_init_wrapper &&
+				chain != NULL &&
+				is_struct_class((PyObject *) chain);
+			chain = chain->tp_base
+		) {
+			captured_init = ((StructType *) chain)->struct_installed_init;
+		}
+
+		struct_class->struct_installed_init = captured_init;
+		struct_class->heap_type.ht_type.tp_init = Struct_init_wrapper;
 		struct_class->heap_type.ht_type.tp_vectorcall = NULL;
+
+		/* A marker class keeps the slot type_new gave it, CPython's own
+		 * shape: the plain class's dispatch slot, which subtype_new's
+		 * staticbase walk climbs past. The construction guards read the
+		 * cached flag instead of the slot. */
 	} else {
+		/* The root inherits the mixin's NULL tp_new, which object_new's
+		 * guard refuses on a body __new__'s super() chain; object's own
+		 * answers. The marker's slot stays whatever type_new gave it, the
+		 * same rule the own-init arm follows. */
+		if (!cannot_create && struct_class->heap_type.ht_type.tp_new == NULL) {
+			struct_class->heap_type.ht_type.tp_new = PyBaseObject_Type.tp_new;
+		}
+
 		struct_class->heap_type.ht_type.tp_vectorcall = Struct_vectorcall;
+	}
+
+	/* Both answers are fixed at class creation, so the construction and
+	 * copy paths read them instead of re-walking per call. */
+	struct_class->struct_author_new = author_new_in_chain(&struct_class->heap_type.ht_type);
+	struct_class->struct_family_owned = family_owns_in_mro(&struct_class->heap_type.ht_type);
+	struct_class->struct_group_family = group_family_in_mro(&struct_class->heap_type.ht_type);
+
+	/* The group members' field sources resolve once: the carry reads the
+	 * bound message and exceptions fields by index, so no construction
+	 * allocates the names or re-scans the field table. */
+	struct_class->struct_message_index = -1;
+	struct_class->struct_exceptions_index = -1;
+
+	if (struct_class->struct_field_names != NULL) {
+		PY_OWNED(message_name, PyUnicode_FromString("message"));
+		PY_OWNED(exceptions_name, PyUnicode_FromString("exceptions"));
+
+		if (message_name == NULL || exceptions_name == NULL) {
+			return RESULT_ERROR;
+		}
+
+		for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(struct_class->struct_field_names); ++i) {
+			PyObject * const name = PyTuple_GET_ITEM(struct_class->struct_field_names, i);
+
+			if (struct_class->struct_message_index < 0) {
+				int const matches = PyObject_RichCompareBool(name, message_name, Py_EQ);
+
+				if (matches < 0) {
+					return RESULT_ERROR;
+				}
+
+				struct_class->struct_message_index = matches == 1 ? i : -1;
+			}
+
+			if (struct_class->struct_exceptions_index < 0) {
+				int const matches = PyObject_RichCompareBool(name, exceptions_name, Py_EQ);
+
+				if (matches < 0) {
+					return RESULT_ERROR;
+				}
+
+				struct_class->struct_exceptions_index = matches == 1 ? i : -1;
+			}
+		}
 	}
 
 	if (install_post_init(struct_class) != RESULT_OK) {
 		return RESULT_ERROR;
 	}
 
-	return ensure_singleton(struct_class, bases_divert_setattro);
+	return ensure_singleton(struct_class, namespace, bases_divert_setattro);
 }
 
-enum result ensure_singleton(StructType * const struct_class, bool const bases_divert_setattro) {
+enum result ensure_singleton(
+	StructType * const struct_class,
+	PyObject * const namespace,
+	bool const bases_divert_setattro
+) {
+	/* A body __new__ = None is the cannot-create marker, not the
+	 * slotless allocation the singleton interns; a probe error forfeits
+	 * the intern without riding the class statement. */
+	int const new_present = dict_has_string(namespace, "__new__");
+
+	if (new_present < 0) {
+		PyErr_Clear();
+	}
+
 	bool const qualifies = (
 		struct_class->struct_options.frozen &&
 		!struct_class->struct_options.weakref &&
 		struct_class->struct_field_count == 0 &&
-		!defines_own_init(struct_class) &&
-		struct_class->heap_type.ht_type.tp_new == NULL &&
+		!struct_class->struct_own_init &&
+		!struct_class->struct_cannot_create &&
+		(
+			struct_class->heap_type.ht_type.tp_new == NULL ||
+			struct_class->heap_type.ht_type.tp_new == PyBaseObject_Type.tp_new
+		) &&
+		new_present == 0 &&
 		struct_class->struct_member_count == 0 &&
 		!bases_divert_setattro &&
 		Py_TYPE(struct_class)->tp_call == StructMeta_Type.tp_call
@@ -125,8 +309,171 @@ enum result ensure_singleton(StructType * const struct_class, bool const bases_d
 	return RESULT_OK;
 }
 
-bool defines_own_init(StructType const * const struct_class) {
-	return struct_class->heap_type.ht_type.tp_init != PyBaseObject_Type.tp_init;
+enum init_owner { INIT_OWNER_NONE, INIT_OWNER_AUTHOR, INIT_OWNER_FIELD_CONSTRUCTOR };
+
+static enum init_owner static_exception_owner(PyTypeObject * const base) {
+	if (base->tp_init == PyBaseObject_Type.tp_init) {
+		return INIT_OWNER_NONE;
+	}
+
+	PyTypeObject * const base_exception = (PyTypeObject *) PyExc_BaseException;
+	bool const args_only_init = (base->tp_init == NULL || base->tp_init == base_exception->tp_init);
+	bool const group_new =
+#if PY_VERSION_HEX >= 0x030B0000
+		PyExc_BaseExceptionGroup != NULL &&
+		base->tp_new == ((PyTypeObject *) PyExc_BaseExceptionGroup)->tp_new
+#else
+		false
+#endif
+		;
+
+	/* The field constructor answers beside the args-only construction --
+	 * BaseException's own init, or the inherited NULL slot -- and beside
+	 * BaseExceptionGroup's two-argument __new__, which is the construction
+	 * itself: the vectorcall invokes it with the real shape and the rejected
+	 * shapes fall back to the allocation. A family whose own C init writes
+	 * members (SyntaxError, UnicodeDecodeError, OSError, ...) owns the
+	 * construction. */
+	return (args_only_init || group_new) ? INIT_OWNER_FIELD_CONSTRUCTOR : INIT_OWNER_AUTHOR;
+}
+
+static enum init_owner base_init_owner(PyTypeObject * const base) {
+	PyObject * const dict = base->tp_dict;
+
+	if (dict == NULL) {
+		/* Static builtins expose no tp_dict to C; their C slots carry the
+		 * classification. */
+		if (PyType_FastSubclass(base, Py_TPFLAGS_BASE_EXC_SUBCLASS)) {
+			return static_exception_owner(base);
+		}
+
+		if (base->tp_init != PyBaseObject_Type.tp_init) {
+			return INIT_OWNER_AUTHOR;
+		}
+
+		return INIT_OWNER_NONE;
+	}
+
+	if (base->tp_init == PyBaseObject_Type.tp_init) {
+		/* Whatever the dict says, the effective init is object's -- the
+		 * generated-constructor case. */
+		return INIT_OWNER_NONE;
+	}
+
+	PY_OWNED(init_value, Py_XNewRef(dict_get_string(dict, "__init__")));
+
+	if (init_value == NULL) {
+		if (PyErr_Occurred()) {
+			/* A probe that cannot see has not learned absence; the
+			 * conservative answer owns the construction, with the probe
+			 * error cleared so it cannot ride the class statement. */
+			PyErr_Clear();
+
+			return INIT_OWNER_AUTHOR;
+		}
+
+		/* No entry: an exception base keeps walking toward the family; any
+		 * other base with a non-object init owns it -- the same answer the
+		 * NULL-dict branch gives, so a static C base whose dict is readable
+		 * on one version and not on another flips nothing. */
+		return PyType_FastSubclass(base, Py_TPFLAGS_BASE_EXC_SUBCLASS) ? INIT_OWNER_NONE :
+			INIT_OWNER_AUTHOR;
+	}
+
+	if (PyType_FastSubclass(base, Py_TPFLAGS_BASE_EXC_SUBCLASS)) {
+		/* A heap-type exception base carries only its own members: the
+		 * entry is the author's. A static builtin's entry is the family's
+		 * own wrapper, which the family's C slots classify. */
+		return (base->tp_flags & Py_TPFLAGS_HEAPTYPE) != 0 ? INIT_OWNER_AUTHOR :
+			static_exception_owner(base);
+	}
+
+	return INIT_OWNER_AUTHOR;
+}
+
+static enum init_owner namespace_init_owner(PyTypeObject * const type, PyObject * const namespace) {
+	int const present = dict_has_string(namespace, "__init__");
+
+	if (present < 0) {
+		/* The probe error cannot ride the class statement; the conservative
+		 * answer owns the construction. */
+		PyErr_Clear();
+
+		return INIT_OWNER_AUTHOR;
+	}
+
+	return present == 1 ? INIT_OWNER_AUTHOR : INIT_OWNER_NONE;
+}
+
+static bool group_family_in_mro(PyTypeObject * const cls) {
+#if PY_VERSION_HEX >= 0x030B0000
+	PyObject * const mro = cls->tp_mro;
+
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); ++i) {
+		if (
+			PyExc_BaseExceptionGroup != NULL &&
+			(PyTypeObject *) PyTuple_GET_ITEM(mro, i) == (PyTypeObject *) PyExc_BaseExceptionGroup
+		) {
+			return true;
+		}
+	}
+#endif
+
+	return false;
+}
+
+static bool family_owns_in_mro(PyTypeObject * const cls) {
+	PyObject * const mro = cls->tp_mro;
+
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); ++i) {
+		PyTypeObject * const entry = (PyTypeObject *) PyTuple_GET_ITEM(mro, i);
+		enum init_owner const owner = base_init_owner(entry);
+
+		if (owner == INIT_OWNER_NONE) {
+			continue;
+		}
+
+		return (
+			(entry->tp_flags & Py_TPFLAGS_HEAPTYPE) == 0 &&
+			PyType_FastSubclass(entry, Py_TPFLAGS_BASE_EXC_SUBCLASS) &&
+			owner == INIT_OWNER_AUTHOR
+		);
+	}
+
+	return false;
+}
+
+bool defines_own_init(StructType * const struct_class, PyObject * const namespace) {
+	PyTypeObject * const type = &struct_class->heap_type.ht_type;
+
+	if (type->tp_init == PyBaseObject_Type.tp_init) {
+		return false;
+	}
+
+	/* One C3 walk answers creation and runtime alike: the nearest class
+	 * whose dict defines __init__ owns the construction sequence. Pointer
+	 * identity cannot find it: every Python __init__ shares slot_tp_init.
+	 * An author __init__ is a Python function in the dict; an exception's
+	 * own init is a wrapper descriptor whose family the C slots classify;
+	 * anything else owns it too. The class body is the namespace while the
+	 * type is being built, the installed tp_dict after. */
+	PyObject * const mro = type->tp_mro;
+
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); ++i) {
+		PyTypeObject * const entry = (PyTypeObject *) PyTuple_GET_ITEM(mro, i);
+		enum init_owner const owner = (
+			i == 0 && namespace != NULL ? namespace_init_owner(entry, namespace) :
+			base_init_owner(entry)
+		);
+
+		if (owner != INIT_OWNER_NONE) {
+			return owner == INIT_OWNER_AUTHOR;
+		}
+	}
+
+	/* Nothing in the chain defines an init: the generated constructor is
+	 * what answers. */
+	return false;
 }
 
 enum result install_post_init(StructType * const struct_class) {
