@@ -670,6 +670,11 @@ def test_a_replaced_from_mapping_built_family_struct_formats_and_pickles():
     assert repr(replaced) == repr(error)
     assert pickle.loads(pickle.dumps(replaced)).errno is None
 
+    # The family arm's payload is the family's shape, not the field
+    # values: pickle reconstructs from args, so a field change does not
+    # survive the round-trip -- the documented contract.
+    assert pickle.loads(pickle.dumps(replaced)).code == 0
+
 
 @pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
 def test_keyword_construction_validates_the_group_body():
@@ -983,6 +988,38 @@ def test_a_subclass_of_a_none_new_struct_refuses_every_entry_point():
 
     with pytest.raises(TypeError, match="cannot create"):
         salix.from_mapping(PB, {"x": 5})
+
+
+def test_a_frozen_zero_field_subclass_of_a_none_new_struct_defines_and_refuses():
+    class FrozenNoneNew(Exception, Struct, frozen=True):
+        __new__ = None
+
+    class FB(FrozenNoneNew):
+        pass
+
+    with pytest.raises(TypeError, match="cannot create"):
+        FB()
+
+
+def test_a_body_new_overrides_the_inherited_none_new_marker():
+    class A(Struct):
+        __new__ = None
+
+    class B(A):
+        def __new__(cls):
+            return object.__new__(cls)
+
+        def __init__(self):
+            pass
+
+    class C(B):
+        pass
+
+    with pytest.raises(TypeError, match="cannot create"):
+        A()
+
+    assert isinstance(B(), B)
+    assert isinstance(C(), C)
 
 
 @pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")

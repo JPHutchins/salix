@@ -524,9 +524,16 @@ PyObject * Struct_vectorcall(
 	PyTypeObject * const python_class = &type->heap_type.ht_type;
 	bool const exception_struct = is_exception_struct(python_class);
 
-	/* A body __new__ = None is the cannot-create marker the install
-	 * normalized to a NULL slot; every struct reads it, exception or
-	 * not. */
+	/* A body __new__ = None is the cannot-create marker; the cached flag
+	 * answers here too, because a class carrying the vectorcall flag is
+	 * called through its slot directly, past the metatype's dispatch. */
+	if (type->struct_cannot_create) {
+		PyErr_Format(PyExc_TypeError, "cannot create '%.100s' instances", python_class->tp_name);
+
+		return NULL;
+	}
+
+	/* A genuinely NULL slot is the same refusal, whatever path left it. */
 	if (python_class->tp_new == NULL) {
 		PyErr_Format(PyExc_TypeError, "cannot create '%.100s' instances", python_class->tp_name);
 
@@ -776,10 +783,10 @@ PyObject * Struct_replace(
 	StructType * const type = struct_type_of(self);
 	Py_ssize_t const change_count = keyword_names != NULL ? PyTuple_GET_SIZE(keyword_names) : 0;
 
-	/* A body __new__ = None is the cannot-create marker the install
-	 * normalized to a NULL slot; every construction entry point reads it,
-	 * the vectorcall's guard included. */
-	if (type->heap_type.ht_type.tp_new == NULL) {
+	/* A body __new__ = None is the cannot-create marker; the cached flag
+	 * answers at every construction entry point, the metatype's dispatch
+	 * included. */
+	if (type->struct_cannot_create) {
 		PyErr_Format(PyExc_TypeError, "cannot create '%.100s' instances", struct_type_name(type));
 
 		return NULL;
@@ -1178,10 +1185,10 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 
 	StructType * const type = (StructType *) struct_class;
 
-	/* A body __new__ = None is the cannot-create marker the install
-	 * normalized to a NULL slot; every construction entry point reads it,
-	 * the vectorcall's guard included. */
-	if (type->heap_type.ht_type.tp_new == NULL) {
+	/* A body __new__ = None is the cannot-create marker; the cached flag
+	 * answers at every construction entry point, the metatype's dispatch
+	 * included. */
+	if (type->struct_cannot_create) {
 		PyErr_Format(PyExc_TypeError, "cannot create '%.100s' instances", struct_type_name(type));
 
 		return NULL;

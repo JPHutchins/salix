@@ -111,8 +111,13 @@ enum result install_constructor(
 	/* A body __new__ = None is the cannot-create marker; the flag is the
 	 * one record of it, so a subclass inheriting the NULL slot inherits
 	 * the refusal instead of the mixin's slotless NULL being re-set to
-	 * object's own. */
-	PyObject * const new_entry = dict_get_string(namespace, "__new__");
+	 * object's own. The class's own dict is the record -- the settle may
+	 * move the body's entries out of the original namespace before this
+	 * probe runs. */
+	PyObject * const new_entry = dict_get_string(
+		struct_class->heap_type.ht_type.tp_dict,
+		"__new__"
+	);
 
 	if (new_entry == NULL && PyErr_Occurred()) {
 		/* A probe that cannot see has not learned a marker; the error
@@ -122,13 +127,28 @@ enum result install_constructor(
 
 	bool cannot_create = new_entry == Py_None;
 
-	for (
-		PyTypeObject * chain = struct_class->heap_type.ht_type.tp_base;
-		chain != NULL && is_struct_class((PyObject *) chain);
-		chain = chain->tp_base
-	) {
-		if (((StructType *) chain)->struct_cannot_create) {
-			cannot_create = true;
+	/* The nearest struct class whose dict defines __new__ decides the
+	 * marker, CPython's own slot semantics: a body __new__ overrides it
+	 * and the override is inheritable. The ancestors answer only when
+	 * the class's own dict carries no entry. */
+	if (new_entry == NULL) {
+		for (
+			PyTypeObject * chain = struct_class->heap_type.ht_type.tp_base;
+			chain != NULL && is_struct_class((PyObject *) chain);
+			chain = chain->tp_base
+		) {
+			PyObject * const entry = dict_get_string(chain->tp_dict, "__new__");
+
+			if (entry == NULL && PyErr_Occurred()) {
+				PyErr_Clear();
+
+				continue;
+			}
+
+			if (entry == Py_None) {
+				cannot_create = true;
+			}
+
 			break;
 		}
 	}
@@ -161,34 +181,17 @@ enum result install_constructor(
 		struct_class->heap_type.ht_type.tp_init = Struct_init_wrapper;
 		struct_class->heap_type.ht_type.tp_vectorcall = NULL;
 
-		/* A body __new__ = None is the cannot-create marker on this arm
-		 * too; the pre-install slot dispatches to the None, and the
-		 * refusal must read as the NULL slot every construction entry
-		 * point checks. type_new gives a subclass slot_tp_new again
-		 * instead of propagating the base's NULL, so the inherited flag
-		 * answers here. */
-		if (new_entry == Py_None || (new_entry == NULL && cannot_create)) {
-			struct_class->heap_type.ht_type.tp_new = NULL;
-		}
+		/* A marker class keeps the slot type_new gave it, CPython's own
+		 * shape: the plain class's dispatch slot, which subtype_new's
+		 * staticbase walk climbs past. The construction guards read the
+		 * cached flag instead of the slot. */
 	} else {
 		/* The root inherits the mixin's NULL tp_new, which object_new's
 		 * guard refuses on a body __new__'s super() chain; object's own
-		 * answers. A body __new__ = None stays the cannot-create marker as
-		 * a NULL slot -- and an inherited marker stays one too, instead of
-		 * the NULL being re-set to object's own. type_new hands a subclass
-		 * slot_tp_new again, so the inherited flag re-applies the NULL
-		 * here; a body __new__ of its own overrides the inherited marker. */
-		bool const inherited_marker = new_entry == NULL && cannot_create;
-
-		if (
-			struct_class->heap_type.ht_type.tp_new == NULL ||
-			new_entry == Py_None ||
-			inherited_marker
-		) {
-			struct_class->heap_type.ht_type.tp_new = (
-				new_entry == Py_None || inherited_marker ? NULL :
-				PyBaseObject_Type.tp_new
-			);
+		 * answers. The marker's slot stays whatever type_new gave it, the
+		 * same rule the own-init arm follows. */
+		if (!cannot_create && struct_class->heap_type.ht_type.tp_new == NULL) {
+			struct_class->heap_type.ht_type.tp_new = PyBaseObject_Type.tp_new;
 		}
 
 		struct_class->heap_type.ht_type.tp_vectorcall = Struct_vectorcall;
@@ -265,6 +268,7 @@ enum result ensure_singleton(
 		!struct_class->struct_options.weakref &&
 		struct_class->struct_field_count == 0 &&
 		!struct_class->struct_own_init &&
+		!struct_class->struct_cannot_create &&
 		(
 			struct_class->heap_type.ht_type.tp_new == NULL ||
 			struct_class->heap_type.ht_type.tp_new == PyBaseObject_Type.tp_new

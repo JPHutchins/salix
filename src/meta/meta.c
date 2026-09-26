@@ -191,6 +191,15 @@ static PyObject * StructMeta_call(
 	PyObject * const keywords
 ) {
 	PyTypeObject * const type = (PyTypeObject *) self;
+
+	/* A body __new__ = None is the cannot-create marker; the cached flag
+	 * refuses at the one dispatch both construction arms share. */
+	if (((StructType *) self)->struct_cannot_create) {
+		PyErr_Format(PyExc_TypeError, "cannot create '%.100s' instances", type->tp_name);
+
+		return NULL;
+	}
+
 	PY_MOVABLE(result, type->tp_vectorcall != NULL ? PyVectorcall_Call(self, args, keywords) :
 		PyType_Type.tp_call(self, args, keywords));
 

@@ -410,10 +410,10 @@ static PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 	StructType * const type = struct_type_of(self);
 	PyTypeObject * const cls = &type->heap_type.ht_type;
 
-	/* A body __new__ = None is the cannot-create marker the install
-	 * normalized to a NULL slot; every construction entry point reads it,
-	 * the vectorcall's guard included. */
-	if (cls->tp_new == NULL) {
+	/* A body __new__ = None is the cannot-create marker; the cached flag
+	 * answers at every construction entry point, the metatype's dispatch
+	 * included. */
+	if (type->struct_cannot_create) {
 		PyErr_Format(PyExc_TypeError, "cannot create '%.100s' instances", cls->tp_name);
 
 		return NULL;
@@ -603,10 +603,10 @@ static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) 
 	StructType * const type = struct_type_of(self);
 	PyTypeObject * const cls = &type->heap_type.ht_type;
 
-	/* A body __new__ = None is the cannot-create marker the install
-	 * normalized to a NULL slot; every construction entry point reads it,
-	 * the vectorcall's guard included. */
-	if (cls->tp_new == NULL) {
+	/* A body __new__ = None is the cannot-create marker; the cached flag
+	 * answers at every construction entry point, the metatype's dispatch
+	 * included. */
+	if (type->struct_cannot_create) {
 		PyErr_Format(PyExc_TypeError, "cannot create '%.100s' instances", cls->tp_name);
 
 		return NULL;
@@ -699,7 +699,11 @@ static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) 
 			/* The shell registers before the payload's deep copy, so a
 			 * self-referential args tuple resolves to it instead of
 			 * re-entering deepcopy on the source forever; the memo entry
-			 * then moves to the rebuilt copy. */
+			 * then moves to the rebuilt copy. The family's construction
+			 * formats the payload, and the self-reference the memo resolves
+			 * to the shell may be the element it formats: the shell carries
+			 * an empty payload so the NULL-args read every version guards
+			 * against never fires. */
 			PY_MOVABLE(shell, cls->tp_alloc(cls, 0));
 
 			if (shell == NULL) {
@@ -708,7 +712,19 @@ static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) 
 				return NULL;
 			}
 
+			PY_MOVABLE(empty_payload, PyTuple_New(0));
+
+			if (empty_payload == NULL) {
+				Py_DECREF(args);
+
+				return NULL;
+			}
+
+			((PyBaseExceptionObject *) shell)->args = py_move(&empty_payload);
+
 			if (PyDict_SetItem(memo, key, shell) < 0) {
+				Py_DECREF(args);
+
 				return NULL;
 			}
 
@@ -728,6 +744,8 @@ static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) 
 			copy = py_move(&rebuilt);
 
 			if (PyDict_SetItem(memo, key, copy) < 0) {
+				Py_CLEAR(copy);
+
 				return NULL;
 			}
 		} else {
