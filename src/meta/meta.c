@@ -4,6 +4,7 @@
 
 #include "meta.h"
 #include "../mixin.h"
+#include "../owned.h"
 #include "../result.h"
 #include "../types.h"
 
@@ -189,10 +190,26 @@ static PyObject * StructMeta_call(
 	PyObject * const args,
 	PyObject * const keywords
 ) {
-	return (
-		((PyTypeObject *) self)->tp_vectorcall != NULL ? PyVectorcall_Call(self, args, keywords) :
-		PyType_Type.tp_call(self, args, keywords)
-	);
+	PyTypeObject * const type = (PyTypeObject *) self;
+	PY_MOVABLE(result, type->tp_vectorcall != NULL ? PyVectorcall_Call(self, args, keywords) :
+		PyType_Type.tp_call(self, args, keywords));
+
+	/* An author __new__ may return any object; 3.14's type_call hands a
+	 * non-instance back silently, and the slot writes that would follow
+	 * assume the struct's own layout. The guard answers here, once, for
+	 * both construction arms. */
+	if (result != NULL && !PyObject_TypeCheck(result, type)) {
+		PyErr_Format(
+			PyExc_TypeError,
+			"%s.__new__(%s) is not safe, use %s.__new__()",
+			Py_TYPE(result)->tp_name,
+			type->tp_name,
+			type->tp_name
+		);
+		Py_CLEAR(result);
+	}
+
+	return py_move(&result);
 }
 
 struct member_lookup find_member(

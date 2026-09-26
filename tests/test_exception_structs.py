@@ -509,3 +509,80 @@ class Uninstantiable(Exception, Struct, frozen=False):
 def test_a_none_new_is_the_cannot_create_refusal():
     with pytest.raises(TypeError, match="cannot create"):
         Uninstantiable(1)
+
+
+class MutableFileError(OSError, Struct, frozen=False):
+    code: int = 0
+
+
+def test_copy_arms_keep_family_field_mutations():
+    import copy
+
+    import salix
+
+    error = MutableFileError(2, "msg")
+    error.code = 9
+
+    assert copy.copy(error).code == 9
+    assert copy.deepcopy(error).code == 9
+    assert salix.replace(error).code == 9
+    assert salix.replace(error, code=5).code == 5
+
+
+class SubclassBase(Struct, frozen=False):
+    a: int
+    b: int = 5
+
+    def __init__(self, a):
+        self.a = a
+
+
+class SubclassNew(SubclassBase):
+    def __new__(cls, *args, **kwargs):
+        return super().__new__(cls)
+
+
+class SubclassInit(SubclassNew):
+    def __init__(self, a):
+        self.a = a
+
+
+class SubclassPlain(SubclassNew):
+    pass
+
+
+def test_subclasses_of_own_init_structs_construct():
+    assert SubclassNew(1).b == 5
+    assert SubclassInit(1).a == 1
+    assert SubclassPlain(1).a == 1
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
+def test_from_mapping_carries_the_group_body():
+    import salix
+
+    error = salix.from_mapping(EG2, {"message": "m", "exceptions": [ValueError("q")]})
+
+    assert len(error.exceptions) == 1
+    assert str(error) == "m (1 sub-exception)"
+
+
+class FrozenNoneNew(Exception, Struct, frozen=True):
+    __new__ = None
+
+
+def test_a_frozen_none_new_struct_defines_but_does_not_construct():
+    assert FrozenNoneNew.__name__ == "FrozenNoneNew"
+
+    with pytest.raises(TypeError, match="cannot create"):
+        FrozenNoneNew()
+
+
+class PlainNoneNew(Struct):
+    x: int = 0
+    __new__ = None
+
+
+def test_a_plain_none_new_struct_refuses_construction():
+    with pytest.raises(TypeError, match="cannot create"):
+        PlainNoneNew(5)

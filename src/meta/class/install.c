@@ -96,36 +96,29 @@ enum result install_constructor(
 	bool const bases_divert_setattro
 ) {
 	if (defines_own_init(struct_class, namespace)) {
-		if (dict_has_string(namespace, "__new__") == 1) {
-			/* A body __new__ keeps its slot -- object_new's own guard
-			 * refuses object.__new__(cls) on a class whose tp_new is
-			 * Struct_new, and the body's super() chain ends there. The
-			 * wrapped init fills the defaults the allocation used to. */
-			struct_class->struct_installed_init = struct_class->heap_type.ht_type.tp_init;
-			struct_class->heap_type.ht_type.tp_init = Struct_init_wrapper;
-		} else {
-			/* Struct_new answers as tp_new, invoking the captured
-			 * pre-install slot: the family's constructs the C members, and
-			 * nothing re-walks per construction. A struct base that is
-			 * itself own-init hands down Struct_new, so the capture resolves
-			 * through the struct ancestors to the slot the first own-init
-			 * ancestor captured. */
-			newfunc captured_new = struct_class->heap_type.ht_type.tp_new;
+		/* The wrapped init fills the defaults and writes the positional
+		 * payload before the author's or the family's own init answers;
+		 * tp_new stays the pre-install slot -- the body's, the family's
+		 * (whose C member writes are the construction), or object's own.
+		 * No class ever carries a salix slot as tp_new, so a body
+		 * __new__'s super() chain passes object_new's own guard in every
+		 * subclass shape. A struct base that is itself own-init hands
+		 * down the wrapper, so the capture resolves through the struct
+		 * ancestors to the init the first own-init ancestor captured. */
+		initproc captured_init = struct_class->heap_type.ht_type.tp_init;
 
-			for (
-				PyTypeObject * chain = struct_class->heap_type.ht_type.tp_base;
-				captured_new == Struct_new &&
-					chain != NULL &&
-					is_struct_class((PyObject *) chain);
-				chain = chain->tp_base
-			) {
-				captured_new = ((StructType *) chain)->struct_installed_new;
-			}
-
-			struct_class->struct_installed_new = captured_new;
-			struct_class->heap_type.ht_type.tp_new = Struct_new;
+		for (
+			PyTypeObject * chain = struct_class->heap_type.ht_type.tp_base;
+			captured_init == Struct_init_wrapper &&
+				chain != NULL &&
+				is_struct_class((PyObject *) chain);
+			chain = chain->tp_base
+		) {
+			captured_init = ((StructType *) chain)->struct_installed_init;
 		}
 
+		struct_class->struct_installed_init = captured_init;
+		struct_class->heap_type.ht_type.tp_init = Struct_init_wrapper;
 		struct_class->heap_type.ht_type.tp_vectorcall = NULL;
 	} else {
 		/* The root inherits the mixin's NULL tp_new, which object_new's
@@ -170,6 +163,9 @@ enum result ensure_singleton(
 			struct_class->heap_type.ht_type.tp_new == NULL ||
 			struct_class->heap_type.ht_type.tp_new == PyBaseObject_Type.tp_new
 		) &&
+		/* A body __new__ = None is the cannot-create marker, not the
+		 * slotless allocation the singleton interns. */
+		dict_has_string(namespace, "__new__") == 0 &&
 		struct_class->struct_member_count == 0 &&
 		!bases_divert_setattro &&
 		Py_TYPE(struct_class)->tp_call == StructMeta_Type.tp_call

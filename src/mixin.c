@@ -442,7 +442,9 @@ static PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 		/* The family's construction is its C members' only writer --
 		 * OSError's live in __new__ and its init no-ops without it -- so
 		 * the copy is the construction itself, with the source's
-		 * positional payload. */
+		 * positional payload. The constructor pre-filled the defaults;
+		 * the source's values -- mutations and prior replaces included --
+		 * overwrite them, releasing the pre-filled references. */
 		PyObject * args;
 
 		STRUCT_BEGIN_CRITICAL_SECTION(self);
@@ -465,6 +467,14 @@ static PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 		}
 
 		copy = py_move(&rebuilt);
+
+		for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
+			PyObject * const value = *struct_slot(type, self, i);
+
+			if (value != NULL) {
+				Py_XSETREF(*struct_slot(type, copy, i), Py_NewRef(value));
+			}
+		}
 	} else {
 		copy = cls->tp_alloc(cls, 0);
 	}
@@ -480,7 +490,12 @@ static PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 	if (is_group_family(cls)) {
 		PyBaseExceptionGroupObject * const source_group = (PyBaseExceptionGroupObject *) self;
 
-		carry_group_members(type, copy, source_group->msg, source_group->excs, NULL, NULL);
+		if (
+			carry_group_members(type, copy, source_group->msg, source_group->excs, NULL, NULL) !=
+			RESULT_OK
+		) {
+			return NULL;
+		}
 	}
 #endif
 
@@ -592,13 +607,23 @@ static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) 
 		return py_move(&short_circuit);
 	}
 
+	PY_OWNED(deepcopy, PyObject_GetAttrString(copy_module, "deepcopy"));
+
+	if (deepcopy == NULL) {
+		return memo_failure(memo, key);
+	}
+
 	PY_MOVABLE(copy, NULL);
 
 	if (type->struct_family_owned) {
 		/* The family's construction is its C members' only writer --
 		 * OSError's live in __new__ and its init no-ops without it -- so
 		 * the copy is the construction itself, with the source's
-		 * positional payload. */
+		 * positional payload deep-copied first: the C members hold the
+		 * detached elements, not the original's. The constructor
+		 * pre-filled the defaults; the source's values -- mutations and
+		 * prior replaces included -- overwrite them, releasing the
+		 * pre-filled references. */
 		PyObject * args;
 
 		STRUCT_BEGIN_CRITICAL_SECTION(self);
@@ -613,14 +638,28 @@ static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) 
 			return NULL;
 		}
 
-		PY_MOVABLE(rebuilt, PyObject_Call((PyObject *) cls, args, NULL));
+		PY_MOVABLE(deep_args, PyObject_CallFunctionObjArgs(deepcopy, args, memo, NULL));
 		Py_DECREF(args);
+
+		if (deep_args == NULL) {
+			return memo_failure(memo, key);
+		}
+
+		PY_MOVABLE(rebuilt, PyObject_Call((PyObject *) cls, deep_args, NULL));
 
 		if (rebuilt == NULL) {
 			return NULL;
 		}
 
 		copy = py_move(&rebuilt);
+
+		for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
+			PyObject * const value = *struct_slot(type, self, i);
+
+			if (value != NULL) {
+				Py_XSETREF(*struct_slot(type, copy, i), Py_NewRef(value));
+			}
+		}
 	} else {
 		copy = cls->tp_alloc(cls, 0);
 	}
@@ -639,12 +678,6 @@ static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) 
 
 	PY_MOVABLE(dict, NULL);
 	struct_slots_copy_into(type, self, copy, &dict);
-
-	PY_OWNED(deepcopy, PyObject_GetAttrString(copy_module, "deepcopy"));
-
-	if (deepcopy == NULL) {
-		return memo_failure(memo, key);
-	}
 
 	/* Each shallow copy is replaced by its deep copy, made outside the
 	 * section because copy.deepcopy runs arbitrary Python. */
@@ -701,7 +734,19 @@ static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) 
 	if (is_group_family(cls)) {
 		PyBaseExceptionGroupObject * const source_group = (PyBaseExceptionGroupObject *) self;
 
-		carry_group_members(type, copy, source_group->msg, source_group->excs, deepcopy, memo);
+		if (
+			carry_group_members(
+				type,
+				copy,
+				source_group->msg,
+				source_group->excs,
+				deepcopy,
+				memo
+			) !=
+			RESULT_OK
+		) {
+			return memo_failure(memo, key);
+		}
 	}
 #endif
 

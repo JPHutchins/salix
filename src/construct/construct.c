@@ -95,6 +95,8 @@ enum result carry_group_members(
 
 		if (!complete) {
 			Py_CLEAR(self);
+
+			return RESULT_ERROR;
 		}
 	}
 #endif
@@ -374,6 +376,15 @@ PyObject * Struct_vectorcall(
 		PyType_FastSubclass(python_class->tp_base, Py_TPFLAGS_BASE_EXC_SUBCLASS)
 	);
 
+	/* A body __new__ = None is the cannot-create marker the install
+	 * normalized to a NULL slot; every struct reads it, exception or
+	 * not. */
+	if (python_class->tp_new == NULL) {
+		PyErr_Format(PyExc_TypeError, "cannot create '%.100s' instances", python_class->tp_name);
+
+		return NULL;
+	}
+
 	PY_MOVABLE(self, NULL);
 
 	if (exception_struct) {
@@ -420,16 +431,6 @@ PyObject * Struct_vectorcall(
 		 * failure; the install cached the answer. */
 		bool const author_new = type->struct_author_new;
 
-		if (python_class->tp_new == NULL) {
-			PyErr_Format(
-				PyExc_TypeError,
-				"cannot create '%.100s' instances",
-				python_class->tp_name
-			);
-
-			return NULL;
-		}
-
 		self = python_class->tp_new(python_class, positionals, keywords);
 
 		if (self == NULL && PyErr_ExceptionMatches(PyExc_TypeError)) {
@@ -455,7 +456,12 @@ PyObject * Struct_vectorcall(
 					if (group_msg == NULL) {
 						Py_CLEAR(self);
 					} else {
-						carry_group_members(type, self, group_msg, NULL, NULL, NULL);
+						if (
+							carry_group_members(type, self, group_msg, NULL, NULL, NULL) !=
+							RESULT_OK
+						) {
+							return NULL;
+						}
 					}
 				}
 
@@ -531,76 +537,37 @@ PyObject * Struct_vectorcall(
 	return py_move(&self);
 }
 
-PyObject * Struct_new(
-	PyTypeObject * const struct_class,
-	PyObject * const arguments,
-	PyObject * const keywords
-) {
-	StructType const * const type = (StructType *) struct_class;
-	bool const exception_first = (
-		PyType_FastSubclass(struct_class, Py_TPFLAGS_BASE_EXC_SUBCLASS) &&
-		PyType_FastSubclass(struct_class->tp_base, Py_TPFLAGS_BASE_EXC_SUBCLASS)
-	);
-
-	PY_MOVABLE(self, NULL);
-
-	/* The captured slot is the pre-install tp_new: a body __new__ runs
-	 * with CPython's own wrapping, the family's __new__ constructs its C
-	 * members, a NULL slot is the __new__ = None refusal, and object's
-	 * means the plain allocation answers. */
-	newfunc const installed_new = type->struct_installed_new;
-
-	if (installed_new == NULL) {
-		PyErr_Format(PyExc_TypeError, "cannot create '%.100s' instances", struct_class->tp_name);
-
-		return NULL;
-	}
-
-	if (installed_new != PyBaseObject_Type.tp_new) {
-		self = installed_new(struct_class, arguments, keywords);
-	} else {
-		self = struct_class->tp_alloc(struct_class, 0);
-	}
-
-	/* An author __new__ may return any object; the slot writes that follow
-	 * assume the struct's own layout, so the type_call guard answers here. */
-	if (self != NULL && !PyObject_TypeCheck(self, struct_class)) {
-		PyErr_Format(
-			PyExc_TypeError,
-			"%s.__new__(%s) is not safe, use %s.__new__()",
-			Py_TYPE(self)->tp_name,
-			struct_class->tp_name,
-			struct_class->tp_name
-		);
-		Py_CLEAR(self);
-	}
-
-	if (self == NULL) {
-		return NULL;
-	}
-
-	if (fill_defaults(type, self, struct_required_count(type)) != RESULT_OK) {
-		return NULL;
-	}
-
-	/* The family's tp_new wrote its payload -- a keyword-shaped family call
-	 * normalizes it; the positional write answers only when nothing did. */
-	if (!exception_first || ((PyBaseExceptionObject *) self)->args == NULL) {
-		set_exception_args_from_positionals(struct_class, self, arguments);
-	}
-
-	return py_move(&self);
-}
-
 int Struct_init_wrapper(
 	PyObject * const self,
 	PyObject * const arguments,
 	PyObject * const keywords
 ) {
-	StructType const * const type = (StructType *) Py_TYPE(self);
+	StructType * const type = (StructType *) Py_TYPE(self);
+	PyTypeObject * const cls = &type->heap_type.ht_type;
 
 	if (fill_defaults(type, self, struct_required_count(type)) != RESULT_OK) {
 		return -1;
+	}
+
+	/* The own-init path runs the author's or the family's init after the
+	 * allocation, so the fields are not bound here; the positional tuple
+	 * is the payload when the family's tp_new wrote nothing (a keyword
+	 * shaped family call normalizes its own). */
+	if (
+		PyType_FastSubclass(cls, Py_TPFLAGS_BASE_EXC_SUBCLASS) &&
+		PyType_FastSubclass(cls->tp_base, Py_TPFLAGS_BASE_EXC_SUBCLASS)
+	) {
+		PyObject * args;
+
+		STRUCT_BEGIN_CRITICAL_SECTION(self);
+		args = Py_XNewRef(((PyBaseExceptionObject *) self)->args);
+		STRUCT_END_CRITICAL_SECTION();
+
+		if (args == NULL) {
+			set_exception_args_from_positionals(cls, self, arguments);
+		}
+
+		Py_XDECREF(args);
 	}
 
 	return type->struct_installed_init(self, arguments, keywords);
@@ -679,6 +646,18 @@ PyObject * Struct_replace(
 			replaced = PyObject_Call((PyObject *) cls, positionals, NULL);
 
 			if (replaced != NULL) {
+				/* The constructor pre-filled the defaults; the source's
+				 * values -- mutations and prior replaces included --
+				 * overwrite them, then the changes overwrite those, and
+				 * every overwrite releases the pre-filled reference. */
+				for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
+					PyObject * const value = PyTuple_GET_ITEM(values, i);
+
+					if (value != NULL) {
+						Py_XSETREF(*struct_slot(type, replaced, i), Py_NewRef(value));
+					}
+				}
+
 				for (Py_ssize_t i = 0; i < change_count; ++i) {
 					struct field_lookup const found = find_field(
 						type,
@@ -689,7 +668,10 @@ PyObject * Struct_replace(
 						return NULL;
 					}
 
-					*struct_slot(type, replaced, found.index) = Py_NewRef(arguments[nargs + i]);
+					Py_XSETREF(
+						*struct_slot(type, replaced, found.index),
+						Py_NewRef(arguments[nargs + i])
+					);
 				}
 			}
 		} else {
@@ -756,12 +738,14 @@ PyObject * Struct_replace(
 			return NULL;
 		}
 
-		for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
-			PyObject * const value = PyTuple_GET_ITEM(values, i);
-			PyObject * * const slot = struct_slot(type, replaced, i);
+		if (!type->struct_family_owned) {
+			for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
+				PyObject * const value = PyTuple_GET_ITEM(values, i);
+				PyObject * * const slot = struct_slot(type, replaced, i);
 
-			if (value != NULL && *slot == NULL) {
-				*slot = Py_NewRef(value);
+				if (value != NULL && *slot == NULL) {
+					*slot = Py_NewRef(value);
+				}
 			}
 		}
 
@@ -792,7 +776,12 @@ PyObject * Struct_replace(
 	if (is_group_family(cls)) {
 		PyBaseExceptionGroupObject * const source_group = (PyBaseExceptionGroupObject *) self;
 
-		carry_group_members(type, copy, source_group->msg, source_group->excs, NULL, NULL);
+		if (
+			carry_group_members(type, copy, source_group->msg, source_group->excs, NULL, NULL) !=
+			RESULT_OK
+		) {
+			return NULL;
+		}
 	}
 #endif
 
@@ -1041,7 +1030,34 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 		if (group_msg == NULL) {
 			Py_CLEAR(built);
 		} else {
-			carry_group_members(type, built, group_msg, NULL, NULL, NULL);
+			/* A field named exceptions carries the group body the mapping
+			 * supplied; nothing else could have written the member, which
+			 * is a tuple by the group's contract. */
+			PY_OWNED(exceptions_name, PyUnicode_FromString("exceptions"));
+			PY_MOVABLE(group_excs, NULL);
+
+			if (exceptions_name != NULL) {
+				struct field_lookup const found = find_field(type, exceptions_name);
+
+				if (found.tag == FIELD_LOOKUP_ERROR) {
+					return NULL;
+				}
+
+				if (found.tag == FIELD_LOOKUP_FOUND) {
+					PyObject * const body = *struct_slot(type, built, found.index);
+
+					if (body != NULL) {
+						group_excs = PyTuple_Check(body) ? Py_NewRef(body) : PySequence_Tuple(body);
+					}
+				}
+			}
+
+			if (
+				exceptions_name == NULL ||
+				carry_group_members(type, built, group_msg, group_excs, NULL, NULL) != RESULT_OK
+			) {
+				return NULL;
+			}
 		}
 	}
 
