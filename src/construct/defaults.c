@@ -24,7 +24,7 @@ static PyObject * copy_declared(PyObject * const declared) {
 }
 
 static PyObject * copy_or_base(PyObject * const declared, PyObject * (*const base_copy)(PyObject *)) {
-	PY_OWNED(copied, copy_declared(declared));
+	PY_MOVABLE(copied, copy_declared(declared));
 
 	if (copied != NULL) {
 		return py_move(&copied);
