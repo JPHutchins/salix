@@ -447,15 +447,7 @@ static PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 
 	if (
 		(dict != NULL && struct_dict_copy_merged(dict, copy) < 0) ||
-		(
-				defines_own_init(
-					type,
-					NULL,
-					NULL
-				) ? set_exception_args_from_original(type, copy, self) :
-				set_exception_args_from_fields(type, copy, type->struct_field_count)
-			) !=
-			RESULT_OK
+		set_exception_args_from_original(type, copy, self) != RESULT_OK
 	) {
 		return NULL;
 	}
@@ -635,17 +627,7 @@ static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) 
 		}
 	}
 
-	if (
-		(
-			defines_own_init(
-				type,
-				NULL,
-				NULL
-			) ? set_exception_args_from_original(type, copy, self) :
-			set_exception_args_from_fields(type, copy, type->struct_field_count)
-		) !=
-		RESULT_OK
-	) {
+	if (set_exception_args_from_original(type, copy, self) != RESULT_OK) {
 		return memo_failure(memo, key);
 	}
 
@@ -773,7 +755,7 @@ PyObject * Struct_get_signature(PyObject * const self, void * const closure) {
 		return NULL;
 	}
 
-	if (defines_own_init(type, NULL, NULL)) {
+	if (defines_own_init(type, NULL)) {
 		PyErr_SetString(
 			PyExc_AttributeError,
 			"the class defines its own __init__, whose signature answers instead"

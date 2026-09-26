@@ -56,11 +56,10 @@ enum result set_exception_args_from_fields(
 
 	/* The exception's C-level args member sits at offset zero when the first
 	 * base is the exception; str()/repr()/__reduce__ read it without a NULL
-	 * check. The leading bound field values are the payload: __reduce__'s
-	 * (cls, args) reconstructs them positionally, keyword-constructed
-	 * instances included, and the trailing auto-filled defaults stay out.
-	 * The loop stops at the first unbound slot -- nothing beyond it can
-	 * have been bound through the field constructor. */
+	 * check. The payload is the leading run of explicitly-supplied fields:
+	 * __reduce__'s (cls, args) reconstructs them positionally, and the
+	 * auto-filled defaults -- trailing or behind a gap -- stay out. Every
+	 * arm computes the same explicit prefix and this is its one writer. */
 	Py_ssize_t bound_count = 0;
 
 	while (bound_count < field_count && *struct_slot(type, self, bound_count) != NULL) {
@@ -96,8 +95,9 @@ enum result set_exception_args_from_original(
 		return RESULT_OK;
 	}
 
-	/* An own-init class's payload is whatever the author's construction
-	 * produced; the copy keeps it. */
+	/* The source's payload is the truth on every arm -- whatever produced
+	 * it, the copy keeps it, so a copied exception formats like the
+	 * original. */
 	PyObject * const args = ((PyBaseExceptionObject *) original)->args;
 
 	((PyBaseExceptionObject *) copy)->args = args != NULL ? Py_XNewRef(args) : PyTuple_New(0);
@@ -121,6 +121,95 @@ static void set_exception_args_from_positionals(
 	 * the fields are not bound here; BaseException_new's contract holds: the
 	 * positional tuple is the payload. */
 	((PyBaseExceptionObject *) self)->args = Py_XNewRef(positionals);
+}
+
+static Py_ssize_t explicit_field_prefix(
+	StructType const * const type,
+	Py_ssize_t const positional_count,
+	PyObject * const keyword_names
+) {
+	Py_ssize_t const keyword_count = keyword_names != NULL ? PyTuple_GET_SIZE(keyword_names) : 0;
+	Py_ssize_t prefix = 0;
+
+	while (prefix < type->struct_field_count) {
+		bool explicit = prefix < positional_count;
+
+		for (Py_ssize_t i = 0; !explicit && i < keyword_count; ++i) {
+			struct field_lookup const found = find_field(type, PyTuple_GET_ITEM(keyword_names, i));
+
+			if (found.tag == FIELD_LOOKUP_ERROR) {
+				return -1;
+			}
+
+			explicit = found.tag == FIELD_LOOKUP_FOUND && found.index == prefix;
+		}
+
+		if (!explicit) {
+			break;
+		}
+
+		prefix += 1;
+	}
+
+	return prefix;
+}
+
+static Py_ssize_t explicit_dict_prefix(StructType const * const type, PyObject * const values) {
+	Py_ssize_t prefix = 0;
+
+	while (prefix < type->struct_field_count) {
+		int const present = PyDict_Contains(
+			values,
+			PyTuple_GET_ITEM(type->struct_field_names, prefix)
+		);
+
+		if (present < 0) {
+			return -1;
+		}
+
+		if (present == 0) {
+			break;
+		}
+
+		prefix += 1;
+	}
+
+	return prefix;
+}
+
+static Py_ssize_t explicit_items_prefix(
+	StructType const * const type,
+	PyObject * const items,
+	Py_ssize_t const entry_count
+) {
+	Py_ssize_t prefix = 0;
+
+	while (prefix < type->struct_field_count) {
+		PyObject * const name = PyTuple_GET_ITEM(type->struct_field_names, prefix);
+		bool explicit = false;
+
+		for (Py_ssize_t i = 0; i < entry_count; ++i) {
+			PyObject * const pair = PySequence_Fast_GET_ITEM(items, i);
+			int const compared = PyObject_RichCompareBool(name, PyTuple_GET_ITEM(pair, 0), Py_EQ);
+
+			if (compared < 0) {
+				return -1;
+			}
+
+			if (compared == 1) {
+				explicit = true;
+				break;
+			}
+		}
+
+		if (!explicit) {
+			break;
+		}
+
+		prefix += 1;
+	}
+
+	return prefix;
 }
 
 PyObject * Struct_vectorcall(
@@ -165,7 +254,10 @@ PyObject * Struct_vectorcall(
 	if (exception_struct) {
 		/* The inherited tp_new is the exception family's construction: it
 		 * initializes args and the family's C members (errno, filename,
-		 * ...), which tp_alloc would leave zeroed. */
+		 * ...), which tp_alloc would leave zeroed. It receives the call's
+		 * real shape -- a user __new__ sees the keywords the caller passed,
+		 * and a family tp_new with its own arity contract is not answered by
+		 * a one-tuple. */
 		PY_OWNED(positionals, PyTuple_New(positional_count));
 
 		if (positionals == NULL) {
@@ -176,13 +268,67 @@ PyObject * Struct_vectorcall(
 			PyTuple_SET_ITEM(positionals, i, Py_NewRef(arguments[i]));
 		}
 
-		PY_OWNED(keywords, PyDict_New());
+		PY_MOVABLE(keywords, NULL);
 
-		if (keywords == NULL) {
-			return NULL;
+		if (keyword_names != NULL && PyTuple_GET_SIZE(keyword_names) > 0) {
+			keywords = PyDict_New();
+
+			if (keywords == NULL) {
+				return NULL;
+			}
+
+			for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(keyword_names); ++i) {
+				if (
+					PyDict_SetItem(
+						keywords,
+						PyTuple_GET_ITEM(keyword_names, i),
+						arguments[positional_count + i]
+					) <
+					0
+				) {
+					return NULL;
+				}
+			}
 		}
 
 		self = python_class->tp_new(python_class, positionals, keywords);
+
+		if (self == NULL && PyErr_ExceptionMatches(PyExc_TypeError)) {
+			/* A family tp_new with its own arity contract rejects the
+			 * field-constructor call shape; the allocation answers instead,
+			 * the C members zeroed. An author __new__ raising TypeError owns
+			 * the construction and the failure. */
+			if (dict_get_string(python_class->tp_dict, "__new__") == NULL) {
+				PyErr_Clear();
+				self = python_class->tp_alloc(python_class, 0);
+
+#if PY_VERSION_HEX >= 0x030B0000
+				if (
+					self != NULL &&
+					PyExc_BaseExceptionGroup != NULL &&
+					python_class->tp_new == ((PyTypeObject *) PyExc_BaseExceptionGroup)->tp_new
+				) {
+					/* The fallback bypasses __new__, the group members'
+					 * only writer; the empty group body keeps str() and the
+					 * group operations on a valid tuple, and the message
+					 * mirrors the first positional when it is one. */
+					PyBaseExceptionGroupObject * const group = (PyBaseExceptionGroupObject *) self;
+
+					group->excs = PyTuple_New(0);
+					group->msg = (
+						positional_count > 0 && PyUnicode_Check(
+							arguments[0]
+						) ? Py_NewRef(arguments[0]) :
+						NULL
+					);
+
+					if (group->excs == NULL) {
+						Py_CLEAR(self);
+					}
+				}
+#endif
+			}
+		}
 
 		if (self == NULL) {
 			return NULL;
@@ -204,15 +350,13 @@ PyObject * Struct_vectorcall(
 		return NULL;
 	}
 
-	Py_ssize_t explicit_count = positional_count;
+	Py_ssize_t explicit_count = 0;
 
-	if (keyword_names != NULL) {
-		for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(keyword_names); ++i) {
-			struct field_lookup const found = find_field(type, PyTuple_GET_ITEM(keyword_names, i));
+	if (exception_struct) {
+		explicit_count = explicit_field_prefix(type, positional_count, keyword_names);
 
-			if (found.tag == FIELD_LOOKUP_FOUND && found.index + 1 > explicit_count) {
-				explicit_count = found.index + 1;
-			}
+		if (explicit_count < 0) {
+			return NULL;
 		}
 	}
 
@@ -240,8 +384,29 @@ PyObject * Struct_new(
 	PyObject * const keywords
 ) {
 	StructType const * const type = (StructType *) struct_class;
+	bool const exception_first = (
+		PyType_FastSubclass(struct_class, Py_TPFLAGS_BASE_EXC_SUBCLASS) &&
+		PyType_FastSubclass(struct_class->tp_base, Py_TPFLAGS_BASE_EXC_SUBCLASS)
+	);
 
-	PY_MOVABLE(self, struct_class->tp_alloc(struct_class, 0));
+	PY_MOVABLE(self, NULL);
+
+	if (exception_first) {
+		/* The inherited tp_new is the family's construction: its C member
+		 * writes (OSError's errno/strerror live in __new__) are part of the
+		 * call shape. The install overwrote the slot with this function, so
+		 * the walk finds the nearest base that still carries the family's
+		 * -- or an author's -- __new__. */
+		PyTypeObject * builder = struct_class;
+
+		while (builder->tp_new == Struct_new) {
+			builder = builder->tp_base;
+		}
+
+		self = builder->tp_new(struct_class, arguments, keywords);
+	} else {
+		self = struct_class->tp_alloc(struct_class, 0);
+	}
 
 	if (self == NULL) {
 		return NULL;
@@ -290,7 +455,7 @@ PyObject * Struct_replace(
 
 	PyTypeObject * const cls = &type->heap_type.ht_type;
 
-	if (defines_own_init(type, NULL, NULL)) {
+	if (defines_own_init(type, NULL)) {
 		PY_OWNED(changed, PyDict_New());
 
 		if (changed == NULL) {
@@ -396,10 +561,16 @@ PyObject * Struct_replace(
 	PY_MOVABLE(source_dict, NULL);
 	struct_slots_copy_into(type, self, copy, &source_dict);
 
+	Py_ssize_t const explicit_count = explicit_field_prefix(type, 0, keyword_names);
+
+	if (explicit_count < 0) {
+		return NULL;
+	}
+
 	if (
-		set_exception_args_from_fields(type, copy, type->struct_field_count) != RESULT_OK ||
+		set_exception_args_from_fields(type, copy, explicit_count) != RESULT_OK ||
 		run_post_init(type, copy) != RESULT_OK ||
-		set_exception_args_from_fields(type, copy, type->struct_field_count) != RESULT_OK
+		set_exception_args_from_fields(type, copy, explicit_count) != RESULT_OK
 	) {
 		return NULL;
 	}
@@ -490,7 +661,7 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 		}
 	}
 
-	if (defines_own_init(type, NULL, NULL)) {
+	if (defines_own_init(type, NULL)) {
 		PY_MOVABLE(keywords, NULL);
 
 		if (dict_values != NULL) {
@@ -595,6 +766,15 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 		}
 	}
 
+	Py_ssize_t const explicit_count = (
+		dict_values != NULL ? explicit_dict_prefix(type, dict_values) :
+		explicit_items_prefix(type, items, entry_count)
+	);
+
+	if (explicit_count < 0) {
+		return NULL;
+	}
+
 	return (
 		fill_defaults(
 			type,
@@ -603,14 +783,14 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 		) == RESULT_OK && set_exception_args_from_fields(
 			type,
 			built,
-			type->struct_field_count
+			explicit_count
 		) == RESULT_OK && run_post_init(
 			type,
 			built
 		) == RESULT_OK && set_exception_args_from_fields(
 			type,
 			built,
-			type->struct_field_count
+			explicit_count
 		) == RESULT_OK ? py_move(&built) :
 		NULL
 	);

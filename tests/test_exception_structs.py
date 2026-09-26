@@ -1,5 +1,6 @@
 import inspect
 import pickle
+import sys
 
 import pytest
 
@@ -42,22 +43,53 @@ def test_multiple_positionals_follow_field_order():
 
 
 class FileError(OSError, Struct, frozen=True):
-    code: int
+    code: int = 0
 
 
-def test_an_exception_family_base_gets_the_field_constructor_too():
-    """The carve-out used to match only BaseException's own init; OSError and
-    its family install their own, so the field constructor was displaced."""
+def test_an_exception_family_init_owns_construction():
+    """A family init that populates C members (OSError's errno/strerror) is
+    the construction's owner; the field constructor does not displace it."""
 
-    error = FileError(7)
+    error = FileError(2, "msg")
 
-    assert error.code == 7
+    assert error.errno == 2
+    assert error.strerror == "msg"
+    assert error.code == 0
+    assert str(error) == "[Errno 2] msg"
+
+    single = FileError("plain")
+
+    assert single.errno is None
+    assert single.strerror is None
+    assert str(single) == "plain"
 
 
-def test_an_exception_family_base_takes_keywords():
-    error = FileError(code=9)
+class SE(SyntaxError, Struct, frozen=True):
+    detail: str = ""
 
-    assert error.code == 9
+
+def test_the_syntax_error_family_init_owns_construction():
+    error = SE("hello")
+
+    assert error.msg == "hello"
+    assert str(error) == "hello"
+    assert error.args == ("hello",)
+    assert error.detail == ""
+
+
+class UDE(UnicodeDecodeError, Struct, frozen=True):
+    x: int = 0
+
+
+def test_the_unicode_decode_error_family_init_owns_construction():
+    error = UDE("ascii", b"x", 0, 1, "why")
+
+    assert error.encoding == "ascii"
+    assert error.object == b"x"
+    assert error.start == 0
+    assert error.end == 1
+    assert error.reason == "why"
+    assert error.x == 0
 
 def test_the_exception_contract_reads_the_c_level_args():
     """str()/repr()/pickle all read the C-level args member without a NULL
@@ -142,3 +174,98 @@ def test_a_struct_first_exception_base_gets_the_field_constructor_too():
     assert instance.x == 1
     assert str(instance) == "1"
     assert str(inspect.signature(StructFirst)) == "(x: int)"
+
+
+class PlainMid(Exception):
+    pass
+
+
+class LateAuthor(Exception):
+    def __init__(self, value: int) -> None:
+        self.value = value * 3
+
+
+class BehindPlain(PlainMid, LateAuthor, Struct, frozen=False):
+    v: int = 0
+
+
+def test_an_author_init_behind_a_plain_exception_base_is_not_displaced():
+    instance = BehindPlain(5)
+
+    assert instance.value == 15
+    assert instance.v == 0
+
+
+def test_copy_arms_keep_the_source_payload():
+    import copy
+
+    import salix
+
+    error = CodeError(7)
+
+    assert salix.replace(error, code=5).args == (5,)
+    assert salix.from_mapping(CodeError, {"code": 5}).args == (5,)
+    assert copy.copy(error).args == (7,)
+    assert copy.deepcopy(error).args == (7,)
+
+
+class Gaps(Exception, Struct, frozen=True):
+    a: int = 1
+    b: int = 2
+
+
+def test_a_gap_default_stays_out_of_args():
+    assert Gaps(b=5).args == ()
+
+
+if sys.version_info >= (3, 11):
+    from builtins import ExceptionGroup
+
+    class EG(ExceptionGroup, Struct, frozen=False):
+        x: int = 0
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
+def test_an_exception_group_struct_constructs_through_the_alloc_fallback():
+    """The call shape BaseExceptionGroup.__new__ rejects falls back to the
+    allocation with an empty group body: the fields bind, str() and the
+    group operations see an empty group."""
+
+    error = EG("boom")
+
+    assert error.x == "boom"
+    assert error.args == ("boom",)
+    assert str(error) == "boom (0 sub-exception)"
+
+
+if sys.version_info >= (3, 11):
+    from builtins import ExceptionGroup
+
+    class EG2(ExceptionGroup, Struct, frozen=False):
+        message: str
+        exceptions: list
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
+def test_an_exception_group_struct_constructs_through_the_family_new():
+    error = EG2("boom", [ValueError()])
+
+    assert error.message == "boom"
+    assert len(error.exceptions) == 1
+    assert isinstance(error.exceptions[0], ValueError)
+
+
+class KwNew(Exception, Struct, frozen=False):
+    x: int = 0
+
+    def __new__(cls, *args, **kwargs):
+        instance = super().__new__(cls, *args, **kwargs)
+        instance.seen = kwargs
+        return instance
+
+
+def test_the_family_new_receives_the_call_keywords():
+    error = KwNew(x=1)
+
+    assert error.seen == {"x": 1}
+    assert error.x == 1

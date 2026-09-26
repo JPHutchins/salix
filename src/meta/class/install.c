@@ -74,7 +74,7 @@ enum result install_constructor(
 	PyObject * const bases,
 	bool const bases_divert_setattro
 ) {
-	if (defines_own_init(struct_class, namespace, bases)) {
+	if (defines_own_init(struct_class, namespace)) {
 		struct_class->heap_type.ht_type.tp_new = Struct_new;
 		struct_class->heap_type.ht_type.tp_vectorcall = NULL;
 	} else {
@@ -98,7 +98,7 @@ enum result ensure_singleton(
 		struct_class->struct_options.frozen &&
 		!struct_class->struct_options.weakref &&
 		struct_class->struct_field_count == 0 &&
-		!defines_own_init(struct_class, namespace, bases) &&
+		!defines_own_init(struct_class, namespace) &&
 		struct_class->heap_type.ht_type.tp_new == NULL &&
 		struct_class->struct_member_count == 0 &&
 		!bases_divert_setattro &&
@@ -137,15 +137,40 @@ enum result ensure_singleton(
 
 enum init_owner { INIT_OWNER_NONE, INIT_OWNER_AUTHOR, INIT_OWNER_FIELD_CONSTRUCTOR };
 
+static enum init_owner static_exception_owner(PyTypeObject * const base) {
+	if (base->tp_init == PyBaseObject_Type.tp_init) {
+		return INIT_OWNER_NONE;
+	}
+
+	PyTypeObject * const base_exception = (PyTypeObject *) PyExc_BaseException;
+	bool const args_only_init = (base->tp_init == NULL || base->tp_init == base_exception->tp_init);
+	bool const group_new =
+#if PY_VERSION_HEX >= 0x030B0000
+		PyExc_BaseExceptionGroup != NULL &&
+		base->tp_new == ((PyTypeObject *) PyExc_BaseExceptionGroup)->tp_new
+#else
+		false
+#endif
+		;
+
+	/* The field constructor answers beside the args-only construction --
+	 * BaseException's own init, or the inherited NULL slot -- and beside
+	 * BaseExceptionGroup's two-argument __new__, which is the construction
+	 * itself: the vectorcall invokes it with the real shape and the rejected
+	 * shapes fall back to the allocation. A family whose own C init writes
+	 * members (SyntaxError, UnicodeDecodeError, OSError, ...) owns the
+	 * construction. */
+	return (args_only_init || group_new) ? INIT_OWNER_FIELD_CONSTRUCTOR : INIT_OWNER_AUTHOR;
+}
+
 static enum init_owner base_init_owner(PyTypeObject * const base) {
 	PyObject * const dict = base->tp_dict;
 
 	if (dict == NULL) {
-		/* Static builtin exceptions expose no tp_dict to C; their init is
-		 * their own C init, which the field constructor answers beside. A
-		 * NULL-dict base with any other init owns it. */
+		/* Static builtins expose no tp_dict to C; their C slots carry the
+		 * classification. */
 		if (PyType_FastSubclass(base, Py_TPFLAGS_BASE_EXC_SUBCLASS)) {
-			return INIT_OWNER_FIELD_CONSTRUCTOR;
+			return static_exception_owner(base);
 		}
 
 		if (base->tp_init != PyBaseObject_Type.tp_init) {
@@ -179,69 +204,50 @@ static enum init_owner base_init_owner(PyTypeObject * const base) {
 	if (PyType_FastSubclass(base, Py_TPFLAGS_BASE_EXC_SUBCLASS)) {
 		/* A heap-type exception base carries only its own members: the
 		 * entry is the author's. A static builtin's entry is the family's
-		 * own init, which the field constructor answers beside. */
+		 * own wrapper, which the family's C slots classify. */
 		return (base->tp_flags & Py_TPFLAGS_HEAPTYPE) != 0 ? INIT_OWNER_AUTHOR :
-			INIT_OWNER_FIELD_CONSTRUCTOR;
+			static_exception_owner(base);
 	}
 
 	return INIT_OWNER_AUTHOR;
 }
 
-bool defines_own_init(
-	StructType * const struct_class,
-	PyObject * const namespace,
-	PyObject * const bases
-) {
+static enum init_owner namespace_init_owner(PyTypeObject * const type, PyObject * const namespace) {
+	int const present = dict_has_string(namespace, "__init__");
+
+	if (present < 0) {
+		/* The probe error cannot ride the class statement; the conservative
+		 * answer owns the construction. */
+		PyErr_Clear();
+
+		return INIT_OWNER_AUTHOR;
+	}
+
+	return present == 1 ? INIT_OWNER_AUTHOR : INIT_OWNER_NONE;
+}
+
+bool defines_own_init(StructType * const struct_class, PyObject * const namespace) {
 	PyTypeObject * const type = &struct_class->heap_type.ht_type;
 
 	if (type->tp_init == PyBaseObject_Type.tp_init) {
 		return false;
 	}
 
-	/* The nearest class whose dict defines __init__ owns the construction
-	 * sequence. Pointer identity cannot find it: every Python __init__ shares
-	 * slot_tp_init. An author __init__ is a Python function in the dict; an
-	 * exception's own init is a wrapper descriptor and the field constructor
-	 * answers beside it; anything else owns it too. */
-	if (namespace != NULL) {
-		/* The type being built has no ready tp_dict or tp_base; the
-		 * namespace is the class body and the declared bases carry the MRO
-		 * walk. */
-		int const namespace_present = dict_has_string(namespace, "__init__");
-
-		if (namespace_present < 0) {
-			/* The probe error cannot ride the class statement; the
-			 * conservative answer owns the construction. */
-			PyErr_Clear();
-
-			return true;
-		}
-
-		if (namespace_present == 1) {
-			return true;
-		}
-
-		for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(bases); ++i) {
-			for (
-				PyTypeObject * base = (PyTypeObject *) PyTuple_GET_ITEM(bases, i);
-				base != NULL;
-				base = base->tp_base
-			) {
-				enum init_owner const owner = base_init_owner(base);
-
-				if (owner != INIT_OWNER_NONE) {
-					return owner == INIT_OWNER_AUTHOR;
-				}
-			}
-		}
-
-		return false;
-	}
-
+	/* One C3 walk answers creation and runtime alike: the nearest class
+	 * whose dict defines __init__ owns the construction sequence. Pointer
+	 * identity cannot find it: every Python __init__ shares slot_tp_init.
+	 * An author __init__ is a Python function in the dict; an exception's
+	 * own init is a wrapper descriptor whose family the C slots classify;
+	 * anything else owns it too. The class body is the namespace while the
+	 * type is being built, the installed tp_dict after. */
 	PyObject * const mro = type->tp_mro;
 
 	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); ++i) {
-		enum init_owner const owner = base_init_owner((PyTypeObject *) PyTuple_GET_ITEM(mro, i));
+		PyTypeObject * const entry = (PyTypeObject *) PyTuple_GET_ITEM(mro, i);
+		enum init_owner const owner = (
+			i == 0 && namespace != NULL ? namespace_init_owner(entry, namespace) :
+			base_init_owner(entry)
+		);
 
 		if (owner != INIT_OWNER_NONE) {
 			return owner == INIT_OWNER_AUTHOR;
