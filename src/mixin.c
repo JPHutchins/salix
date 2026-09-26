@@ -475,6 +475,10 @@ static PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 			 * them -- unset, not fabricated. */
 			Py_DECREF(args);
 			copy = cls->tp_alloc(cls, 0);
+
+			if (copy == NULL) {
+				return NULL;
+			}
 		}
 
 		for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
@@ -677,6 +681,10 @@ static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) 
 			 * them -- unset, not fabricated. */
 			Py_DECREF(args);
 			copy = cls->tp_alloc(cls, 0);
+
+			if (copy == NULL) {
+				return NULL;
+			}
 		}
 
 		for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
@@ -766,7 +774,10 @@ static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) 
 				copy,
 				source_group->msg,
 				source_group->excs,
-				group_excs_str(self),
+				/* The body is a fresh deep copy, so the source's cached repr
+				 * would describe members the copy does not hold; NULL
+				 * rebuilds it from the detached body. */
+				NULL,
 				deepcopy,
 				memo
 			) !=

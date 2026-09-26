@@ -44,6 +44,8 @@ typedef struct StructType {
 	bool struct_group_family;
 	bool struct_own_init;
 	initproc struct_installed_init;
+	Py_ssize_t struct_message_index;
+	Py_ssize_t struct_exceptions_index;
 } StructType;
 
 /*
@@ -56,9 +58,9 @@ typedef struct StructType {
 static inline PyObject * group_excs_str(PyObject * const source) {
 #if PY_VERSION_HEX >= 0x030D0C00
 	if (Py_Version >= 0x030D0C00) {
-		PyObject * const cached = ((PyBaseExceptionGroupObject *) source)->excs_str;
-
-		return cached != NULL ? Py_XNewRef(cached) : NULL;
+		/* Borrowed: the carry takes its own reference, and a new one here
+		 * leaks the intermediate. */
+		return ((PyBaseExceptionGroupObject *) source)->excs_str;
 	}
 #endif
 

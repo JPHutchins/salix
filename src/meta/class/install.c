@@ -147,6 +147,45 @@ enum result install_constructor(
 	struct_class->struct_family_owned = family_owns_in_mro(&struct_class->heap_type.ht_type);
 	struct_class->struct_group_family = group_family_in_mro(&struct_class->heap_type.ht_type);
 
+	/* The group members' field sources resolve once: the carry reads the
+	 * bound message and exceptions fields by index, so no construction
+	 * allocates the names or re-scans the field table. */
+	struct_class->struct_message_index = -1;
+	struct_class->struct_exceptions_index = -1;
+
+	if (struct_class->struct_field_names != NULL) {
+		PY_OWNED(message_name, PyUnicode_FromString("message"));
+		PY_OWNED(exceptions_name, PyUnicode_FromString("exceptions"));
+
+		if (message_name == NULL || exceptions_name == NULL) {
+			return RESULT_ERROR;
+		}
+
+		for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(struct_class->struct_field_names); ++i) {
+			PyObject * const name = PyTuple_GET_ITEM(struct_class->struct_field_names, i);
+
+			if (struct_class->struct_message_index < 0) {
+				int const matches = PyObject_RichCompareBool(name, message_name, Py_EQ);
+
+				if (matches < 0) {
+					return RESULT_ERROR;
+				}
+
+				struct_class->struct_message_index = matches == 1 ? i : -1;
+			}
+
+			if (struct_class->struct_exceptions_index < 0) {
+				int const matches = PyObject_RichCompareBool(name, exceptions_name, Py_EQ);
+
+				if (matches < 0) {
+					return RESULT_ERROR;
+				}
+
+				struct_class->struct_exceptions_index = matches == 1 ? i : -1;
+			}
+		}
+	}
+
 	if (install_post_init(struct_class) != RESULT_OK) {
 		return RESULT_ERROR;
 	}

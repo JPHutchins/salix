@@ -635,3 +635,57 @@ def test_a_from_mapping_built_family_struct_copies_without_fabricated_members():
     assert copy.copy(error).errno is None
     assert copy.deepcopy(error).errno is None
     assert salix.replace(error, code=5).errno is None
+
+
+def test_a_replaced_from_mapping_built_family_struct_formats_and_pickles():
+    import pickle
+
+    import salix
+
+    error = salix.from_mapping(FileError, {"code": 9})
+    replaced = salix.replace(error, code=5)
+
+    assert replaced.errno is None
+    assert replaced.args == ()
+    assert str(replaced) == str(error)
+    assert repr(replaced) == repr(error)
+    assert pickle.loads(pickle.dumps(replaced)).errno is None
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
+def test_keyword_construction_validates_the_group_body():
+    for body in (["hello"], "xyz"):
+        with pytest.raises(ValueError, match="Item 0 of second argument"):
+            EG2(message="m", exceptions=body)
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
+def test_from_mapping_validates_the_group_body():
+    import salix
+
+    with pytest.raises(ValueError, match="Item 0 of second argument"):
+        salix.from_mapping(EG2, {"message": "m", "exceptions": ["hello"]})
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
+def test_replace_changes_the_raised_group_body():
+    import salix
+
+    for group in (EG2("m", [ValueError("q")]), OwnInitGroup("m", [ValueError("q")])):
+        replaced = salix.replace(group, exceptions=[ValueError("z")])
+
+        assert str(replaced) == "m (1 sub-exception)"
+        assert replaced.subgroup(ValueError).exceptions[0].args == ("z",)
+
+        try:
+            raise replaced
+        except ExceptionGroup as caught:
+            assert caught.exceptions[0].args == ("z",)
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
+def test_the_group_message_comes_from_the_bound_field_not_the_call_order():
+    error = EG2(exceptions=[ValueError("q")], message="m")
+
+    assert error.message == "m"
+    assert str(error) == "m (1 sub-exception)"

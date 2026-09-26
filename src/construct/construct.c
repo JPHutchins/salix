@@ -41,21 +41,96 @@ static PyObject * interned_value(StructType const * const type, bool const no_ar
 }
 
 #if PY_VERSION_HEX >= 0x030B0000
-static PyObject * group_body_from_field(StructType * const type, PyObject * const self) {
-	/* A field named exceptions carries the group body; nothing else could
-	 * have written the member, which is a tuple by the group's contract.
-	 * NULL without an error means no body; the tuple conversion's failure
-	 * keeps its error for the caller. */
-	PY_OWNED(exceptions_name, PyUnicode_FromString("exceptions"));
-	struct field_lookup const found = find_field(type, exceptions_name);
-
-	if (found.tag != FIELD_LOOKUP_FOUND) {
-		return NULL;
+static int change_names_touch(
+	StructType * const type,
+	PyObject * const keyword_names,
+	Py_ssize_t const change_count,
+	Py_ssize_t const field_index
+) {
+	if (field_index < 0 || keyword_names == NULL) {
+		return 0;
 	}
 
-	PyObject * const body = *struct_slot(type, self, found.index);
+	PyObject * const name = PyTuple_GET_ITEM(type->struct_field_names, field_index);
 
-	return body == NULL ? NULL : (PyTuple_Check(body) ? Py_NewRef(body) : PySequence_Tuple(body));
+	for (Py_ssize_t i = 0; i < change_count; ++i) {
+		int const matches = PyObject_RichCompareBool(
+			PyTuple_GET_ITEM(keyword_names, i),
+			name,
+			Py_EQ
+		);
+
+		if (matches < 0) {
+			return -1;
+		}
+
+		if (matches == 1) {
+			return 1;
+		}
+	}
+
+	return 0;
+}
+
+static enum result group_members_from_fields(
+	StructType * const type,
+	PyObject * const self,
+	PyObject * const msg_fallback
+) {
+	/* The members' one writer for field-built instances: the message and
+	 * the body come from the bound fields, and every body item is an
+	 * exception -- the invariant the family's own __new__ enforces on its
+	 * shapes, which the allocation fallbacks never reached. The fallback
+	 * answers for a struct without a message field; it is consumed. */
+	PY_MOVABLE(msg, NULL);
+
+	if (type->struct_message_index >= 0) {
+		msg = PyObject_Str(*struct_slot(type, self, type->struct_message_index));
+	} else if (msg_fallback != NULL) {
+		msg = msg_fallback;
+	} else {
+		msg = PyUnicode_FromString("");
+	}
+
+	if (msg == NULL) {
+		return RESULT_ERROR;
+	}
+
+	PY_MOVABLE(excs, NULL);
+
+	if (type->struct_exceptions_index >= 0) {
+		PyObject * const bound = *struct_slot(type, self, type->struct_exceptions_index);
+
+		if (bound != NULL) {
+			excs = PyTuple_Check(bound) ? Py_NewRef(bound) : PySequence_Tuple(bound);
+
+			if (excs == NULL) {
+				return RESULT_ERROR;
+			}
+
+			for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(excs); ++i) {
+				if (!PyExceptionInstance_Check(PyTuple_GET_ITEM(excs, i))) {
+					PyErr_Format(
+						PyExc_ValueError,
+						"Item %zd of second argument (exceptions) is not an exception",
+						i
+					);
+
+					return RESULT_ERROR;
+				}
+			}
+		}
+	}
+
+	if (excs == NULL) {
+		excs = PyTuple_New(0);
+
+		if (excs == NULL) {
+			return RESULT_ERROR;
+		}
+	}
+
+	return carry_group_members(type, self, py_move(&msg), py_move(&excs), NULL, NULL, NULL);
 }
 #endif
 
@@ -75,20 +150,23 @@ enum result carry_group_members(
 		 * NULL. The deep copy detaches the body through the memo. */
 		PyBaseExceptionGroupObject * const group = (PyBaseExceptionGroupObject *) self;
 
-		group->msg = (
+		/* The overwrites release what the family's own __new__ wrote on a
+		 * rebuild; a field-built shell's members are NULL, where a set is
+		 * the same store. */
+		Py_XSETREF(group->msg, (
 			msg != NULL ? (
 				deepcopier != NULL ? PyObject_CallFunctionObjArgs(deepcopier, msg, memo, NULL) :
 				Py_XNewRef(msg)
 			) :
 			PyUnicode_FromString("")
-		);
-		group->excs = (
+		));
+		Py_XSETREF(group->excs, (
 			excs != NULL ? (
 				deepcopier != NULL ? PyObject_CallFunctionObjArgs(deepcopier, excs, memo, NULL) :
 				Py_XNewRef(excs)
 			) :
 			PyTuple_New(0)
-		);
+		));
 		bool complete = group->msg != NULL && group->excs != NULL;
 
 #	if PY_VERSION_HEX >= 0x030D0C00
@@ -98,11 +176,11 @@ enum result carry_group_members(
 			 * one-item payload on 3.13.12+. The runtime check keeps a wheel
 			 * built here off an older patch's shorter layout. The source's
 			 * cache answers when one exists; the repr is the rebuild. */
-			group->excs_str = (
+			Py_XSETREF(group->excs_str, (
 				excs_str != NULL ? Py_NewRef(excs_str) :
 				group->excs != NULL ? PyObject_Repr(group->excs) :
 				NULL
-			);
+			));
 			complete = complete && group->excs_str != NULL;
 		}
 #	endif
@@ -488,31 +566,30 @@ PyObject * Struct_vectorcall(
 
 #if PY_VERSION_HEX >= 0x030B0000
 	if (type->struct_group_family && ((PyBaseExceptionGroupObject *) self)->msg == NULL) {
-		/* The family's __new__ is the group members' only writer; a
+		/* The family's __new__ is the group members' one writer; a
 		 * construction that reached the allocation without it -- the
-		 * fallback, or an author __new__ that allocated elsewhere -- still
-		 * carries them, so str()/repr()/raise never read NULL. The
-		 * message mirrors the first supplied value, and a bound field
-		 * named exceptions carries the body the caller supplied. */
-		PY_MOVABLE(group_msg, (
-			positional_count > 0 ? PyObject_Str(arguments[0]) :
-			keyword_names != NULL && PyTuple_GET_SIZE(
-				keyword_names
-			) > 0 ? PyObject_Str(arguments[positional_count]) :
-			PyUnicode_FromString("")
-		));
-		PY_MOVABLE(group_excs, group_body_from_field(type, self));
+		 * fallback, or an author __new__ that allocated elsewhere -- carries
+		 * the members from the bound fields, validated, so str()/repr()/
+		 * raise never read NULL and never see a non-exception body. A
+		 * struct without a message field mirrors the first supplied value. */
+		PY_MOVABLE(group_msg_fallback, NULL);
 
-		if (group_msg == NULL || (group_excs == NULL && PyErr_Occurred())) {
-			Py_CLEAR(self);
-		} else if (
-			carry_group_members(type, self, group_msg, group_excs, NULL, NULL, NULL) !=
-			RESULT_OK
-		) {
-			return NULL;
+		if (type->struct_message_index < 0) {
+			group_msg_fallback = (
+				positional_count > 0 ? PyObject_Str(arguments[0]) :
+				keyword_names != NULL && PyTuple_GET_SIZE(
+					keyword_names
+				) > 0 ? PyObject_Str(arguments[positional_count]) :
+				PyUnicode_FromString("")
+			);
 		}
 
-		if (self == NULL) {
+		if (
+			(group_msg_fallback == NULL && PyErr_Occurred()) ||
+			group_members_from_fields(type, self, py_move(&group_msg_fallback)) != RESULT_OK
+		) {
+			Py_CLEAR(self);
+
 			return NULL;
 		}
 	}
@@ -655,13 +732,31 @@ PyObject * Struct_replace(
 				return NULL;
 			}
 
+			bool allocated_route = false;
+
 			if (PyTuple_GET_SIZE(positionals) > 0) {
 				replaced = PyObject_Call((PyObject *) cls, positionals, NULL);
+
+				if (
+					replaced == NULL &&
+					PyErr_ExceptionMatches(PyExc_TypeError) &&
+					!type->struct_author_new
+				) {
+					/* A payload the family's arity rejects -- the group's
+					 * exact two, an author init's narrower shape -- takes the
+					 * allocation instead, the vectorcall's fallback pattern;
+					 * the members and args below answer what the family's
+					 * parse would have written. */
+					PyErr_Clear();
+					allocated_route = true;
+					replaced = cls->tp_alloc(cls, 0);
+				}
 			} else {
 				/* An empty payload marks a from_mapping-built source: the
 				 * family's parse has nothing to reconstruct, and the plain
 				 * allocation keeps the members exactly as the source left
 				 * them -- unset, not fabricated. */
+				allocated_route = true;
 				replaced = cls->tp_alloc(cls, 0);
 			}
 
@@ -692,6 +787,71 @@ PyObject * Struct_replace(
 						*struct_slot(type, replaced, found.index),
 						Py_NewRef(arguments[nargs + i])
 					);
+				}
+#if PY_VERSION_HEX >= 0x030B0000
+				if (type->struct_group_family) {
+					PyBaseExceptionGroupObject * const source_group =
+						(PyBaseExceptionGroupObject *) self;
+					int const touched = change_names_touch(
+						type,
+						keyword_names,
+						change_count,
+						type->struct_exceptions_index
+					);
+
+					if (touched < 0) {
+						return NULL;
+					}
+
+					if (touched == 1) {
+						if (
+							group_members_from_fields(
+								type,
+								replaced,
+								Py_XNewRef(source_group->msg)
+							) !=
+							RESULT_OK
+						) {
+							return NULL;
+						}
+
+						PyBaseExceptionGroupObject * const rebuilt_group =
+							(PyBaseExceptionGroupObject *) replaced;
+						PY_OWNED(
+							packed_args,
+							PyTuple_Pack(2, rebuilt_group->msg, rebuilt_group->excs)
+						);
+
+						if (packed_args == NULL) {
+							return NULL;
+						}
+
+						Py_SETREF(((PyBaseExceptionObject *) replaced)->args, packed_args);
+					} else if (allocated_route) {
+						if (
+							carry_group_members(
+								type,
+								replaced,
+								source_group->msg,
+								source_group->excs,
+								group_excs_str(self),
+								NULL,
+								NULL
+							) !=
+							RESULT_OK
+						) {
+							return NULL;
+						}
+					}
+				} else
+#endif
+				if (allocated_route) {
+					if (
+						set_exception_args_from_original(type, replaced, self, NULL, NULL) !=
+						RESULT_OK
+					) {
+						return NULL;
+					}
 				}
 			}
 		} else {
@@ -795,8 +955,25 @@ PyObject * Struct_replace(
 #if PY_VERSION_HEX >= 0x030B0000
 	if (type->struct_group_family) {
 		PyBaseExceptionGroupObject * const source_group = (PyBaseExceptionGroupObject *) self;
+		int const touched = change_names_touch(
+			type,
+			keyword_names,
+			change_count,
+			type->struct_exceptions_index
+		);
 
-		if (
+		if (touched < 0) {
+			return NULL;
+		}
+
+		if (touched == 1) {
+			/* An exceptions change replaces what is raised, so the members
+			 * rebuild from the resulting fields instead of carrying the
+			 * source's; the message field answers the message. */
+			if (group_members_from_fields(type, copy, Py_XNewRef(source_group->msg)) != RESULT_OK) {
+				return NULL;
+			}
+		} else if (
 			carry_group_members(
 				type,
 				copy,
@@ -1054,52 +1231,23 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 #if PY_VERSION_HEX >= 0x030B0000
 	if (type->struct_group_family) {
 		PyObject * const args = ((PyBaseExceptionObject *) built)->args;
-		PY_MOVABLE(group_msg, (
-			args != NULL && PyTuple_GET_SIZE(args) > 0 ? PyObject_Str(PyTuple_GET_ITEM(args, 0)) :
-			PyUnicode_FromString("")
-		));
+		PY_MOVABLE(group_msg_fallback, NULL);
 
-		if (group_msg == NULL) {
-			Py_CLEAR(built);
-		} else {
-			/* A field named exceptions carries the group body the mapping
-			 * supplied; nothing else could have written the member, which
-			 * is a tuple by the group's contract. */
-			PY_OWNED(exceptions_name, PyUnicode_FromString("exceptions"));
-			PY_MOVABLE(group_excs, NULL);
-
-			if (exceptions_name != NULL) {
-				struct field_lookup const found = find_field(type, exceptions_name);
-
-				if (found.tag == FIELD_LOOKUP_ERROR) {
-					return NULL;
-				}
-
-				if (found.tag == FIELD_LOOKUP_FOUND) {
-					PyObject * const body = *struct_slot(type, built, found.index);
-
-					if (body != NULL) {
-						group_excs = PyTuple_Check(body) ? Py_NewRef(body) : PySequence_Tuple(body);
-
-						if (group_excs == NULL) {
-							return NULL;
-						}
-					}
-				}
-			}
-
-			if (
-				exceptions_name == NULL ||
-				carry_group_members(type, built, group_msg, group_excs, NULL, NULL, NULL) !=
-					RESULT_OK
-			) {
-				return NULL;
-			}
+		if (type->struct_message_index < 0) {
+			group_msg_fallback = (
+				args != NULL && PyTuple_GET_SIZE(
+					args
+				) > 0 ? PyObject_Str(PyTuple_GET_ITEM(args, 0)) :
+				PyUnicode_FromString("")
+			);
 		}
-	}
 
-	if (built == NULL) {
-		return NULL;
+		if (
+			(group_msg_fallback == NULL && PyErr_Occurred()) ||
+			group_members_from_fields(type, built, py_move(&group_msg_fallback)) != RESULT_OK
+		) {
+			return NULL;
+		}
 	}
 #endif
 
@@ -1107,7 +1255,10 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 		return NULL;
 	}
 
-	if (set_exception_args_from_fields(type, built, explicit_count) != RESULT_OK) {
+	if (
+		type->struct_post_init != NULL &&
+		set_exception_args_from_fields(type, built, explicit_count) != RESULT_OK
+	) {
 		return NULL;
 	}
 
