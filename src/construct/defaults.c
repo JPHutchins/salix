@@ -39,10 +39,81 @@ bool struct_copies_default(PyTypeObject const * const kind) {
 	return copies_default(kind) != NULL;
 }
 
+static PyObject * deepcopy_function(void) {
+	/* The module does not support multiple interpreters, so the static cache
+	 * is one per process. */
+	static PyObject * cached = NULL;
+
+	if (cached != NULL) {
+		return cached;
+	}
+
+	PY_OWNED(module, PyImport_ImportModule("copy"));
+
+	if (module == NULL) {
+		return NULL;
+	}
+
+	cached = PyObject_GetAttrString(module, "deepcopy");
+
+	return cached;
+}
+
+static bool hashes_unhashable_value(PyObject * const declared) {
+	PyTypeObject * const kind = Py_TYPE(declared);
+
+	if (kind->tp_hash == NULL || kind->tp_hash == PyObject_HashNotImplemented) {
+		return false;
+	}
+
+	if (PyObject_Hash(declared) != -1 || !PyErr_Occurred()) {
+		return false;
+	}
+
+	if (PyErr_ExceptionMatches(PyExc_RecursionError)) {
+		/* A frozen struct pointing at itself hashes out of stack; sharing it
+		 * is safe, exactly as the old refusal ruled. */
+		PyErr_Clear();
+
+		return false;
+	}
+
+	if (!PyErr_ExceptionMatches(PyExc_TypeError) && !PyErr_ExceptionMatches(PyExc_ValueError)) {
+		/* The author's own exception propagates unchanged. */
+		return false;
+	}
+
+	PyErr_Clear();
+
+	return true;
+}
+
 PyObject * struct_default_copy(PyObject * const declared) {
 	default_copier const copy = copies_default(Py_TYPE(declared));
 
-	return copy != NULL ? copy(declared) : Py_NewRef(declared);
+	if (copy != NULL) {
+		return copy(declared);
+	}
+
+	if (hashes_unhashable_value(declared)) {
+		PyObject * const deepcopy = deepcopy_function();
+
+		if (deepcopy == NULL) {
+			return NULL;
+		}
+
+		PY_OWNED(copied, PyObject_CallOneArg(deepcopy, declared));
+
+		if (copied != NULL) {
+			return py_move(&copied);
+		}
+
+		/* Some values a deepcopy cannot carry (a memoryview); the old rule
+		 * shared those, so share them still. */
+		PyErr_Clear();
+	}
+
+	return Py_NewRef(declared);
 }
 
 PyObject * Struct_set_field(PyObject * const module, PyObject * const arguments) {

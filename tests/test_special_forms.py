@@ -237,14 +237,14 @@ def test_re_annotating_an_inherited_field_with_a_value_replaces_the_default():
     assert Sub(99).x == 99
 
 
-def test_re_annotating_an_inherited_field_with_a_mutable_keeps_the_mutable_refusal():
+def test_re_annotating_an_inherited_field_with_a_mutable_is_deep_copied():
     class Base(Struct):
         x: int = 3
 
-    with pytest.raises(TypeError, match="type hashes and whose value will not"):
+    class Sub(Base):
+        x: ClassVar[list] = ([1],)
 
-        class Sub(Base):
-            x: ClassVar[list] = ([1],)
+    assert Sub._struct_defaults_[0] == ([1],)
 
 
 def test_re_annotating_an_inherited_class_var_without_a_value_is_refused():
@@ -267,8 +267,11 @@ def test_a_nested_class_var_with_a_value_is_still_refused():
         )
 
 
-def test_a_nested_class_var_with_a_shared_mutable_keeps_the_mutable_diagnosis():
-    with pytest.raises(TypeError, match="type hashes and whose value will not"):
+def test_a_nested_class_var_with_a_shared_mutable_keeps_the_class_var_refusal():
+    """The mutable-default rule is gone (#167); the ClassVar annotation is
+    what refuses this shape now."""
+
+    with pytest.raises(TypeError, match="annotated ClassVar"):
         type(Struct)(
             "Wrapped",
             (Struct,),
@@ -298,8 +301,8 @@ def test_an_escaped_quote_inside_the_string_does_not_end_it():
         type(Struct)("Wrapped", (Struct,), {"__annotations__": {"v": "'a\\'b ClassVar[int]'"}, "v": 5})
 
 
-def test_an_init_var_with_a_shared_mutable_keeps_the_mutable_refusal():
-    with pytest.raises(TypeError, match="type hashes and whose value will not"):
+def test_an_init_var_with_a_shared_mutable_keeps_the_init_var_refusal():
+    with pytest.raises(TypeError, match="annotated InitVar"):
 
         class Seeded(Struct):
             seed: InitVar[int] = ([1],)

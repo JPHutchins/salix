@@ -172,17 +172,6 @@ def _shares_mutable_contents(value: object) -> bool:
 # What salix refuses as a class-body default for holding something mutable that
 # every instance would otherwise share. Selected from EVERY rather than built
 # fresh, because the callers below test identity against the parametrized value.
-REFUSED_AS_DEFAULT = tuple(value for value in EVERY if _shares_mutable_contents(value))
-
-# The membership, stated rather than left to the rule, so widening or narrowing
-# the rule has to come here and say so. A writable memoryview is the only value
-# in the set whose type claims a hash that the instance then refuses; everything
-# else unhashable here declares __hash__ = None before being asked.
-assert [type(value).__name__ for value in REFUSED_AS_DEFAULT] == ["memoryview"]
-
-
-def refused_as_default(value: object) -> bool:
-    return any(value is refused for refused in REFUSED_AS_DEFAULT)
 
 
 def identify(value: object) -> str:
