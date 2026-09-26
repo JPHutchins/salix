@@ -93,9 +93,10 @@ shallow and the contents would still be shared: default it empty and fill it
 in `__post_init__` with `set_field` — unless the body writes its own
 `__init__`, which replaces the constructor that runs `__post_init__` (see
 What salix is and is not). A default whose type hashes but whose value cannot
-is refused the same way — `x: tuple = (1, [])` dies at class creation —
-because every instance would share it while its hash raises; a hash that
-fails by recursing slips through and is shared, and so does a type outside
+is deep-copied per instance — `x: tuple = (1, [])` hands each instance its
+own copy, because sharing it would leak one instance's mutations into the
+next. A value a deepcopy cannot carry (a writable memoryview) falls back to
+sharing; a hash that fails by recursing is shared, and so does a type outside
 the four that declares `__hash__ = None`. A field without a default cannot
 follow one that has it: append defaulted fields, or default the new field
 too. For the four, `__struct_defaults__` holds the

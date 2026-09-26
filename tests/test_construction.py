@@ -310,29 +310,50 @@ class TestMutableDefaults:
         assert Holder._struct_defaults_[0] is value
 
     @pytest.mark.parametrize(
-        "value",
+        "value, inner",
         [
-            pytest.param(([],), id="a_tuple_of_a_list"),
-            pytest.param(((1, []),), id="a_tuple_two_deep"),
-            pytest.param(memoryview(bytearray(b"abc")), id="a_writable_memoryview"),
-            pytest.param((frozenset(), []), id="a_pair_holding_one_of_each"),
+            pytest.param(([],), (0,), id="a_tuple_of_a_list"),
+            pytest.param(((1, []),), (0, 1), id="a_tuple_two_deep"),
+            pytest.param((frozenset(), []), (1,), id="a_pair_holding_one_of_each"),
         ],
     )
-    def test_a_shallowly_immutable_container_of_something_mutable_is_refused(self, value):
-        """#51's addition to the rule. A tuple is not one of the four, so it was
-        shared outright -- and `xs: object = ([],)` handed every instance the
-        same inner list, which is the aliasing bug the four-type rule exists to
-        stop, one level down and outside its reach.
-
-        The type says it hashes and the instance then refuses, which is exactly
-        what a container of something mutable does and what nothing immutable
-        does.
+    def test_a_shallowly_immutable_container_of_something_mutable_is_deep_copied(self, value, inner):
+        """#167: where the old rule refused, the default is now accepted and
+        deep-copied per instance -- `xs: object = ([],)` no longer hands every
+        instance the same inner list. The copy is deep: mutating an inner
+        element is invisible to the other instance. Values a deepcopy cannot
+        carry (a writable memoryview) fall back to sharing, pinned by the
+        test below.
         """
 
-        with pytest.raises(TypeError, match="whose value will not"):
+        class Holder(Struct):
+            v: object = value
 
-            class Holder(Struct):
-                v: object = value
+        first, second = Holder(), Holder()
+
+        assert first.v is not second.v
+
+        first_inner = first.v
+        second_inner = second.v
+
+        for step in inner:
+            first_inner = first_inner[step]
+            second_inner = second_inner[step]
+
+        first_inner.append(9)
+
+        assert 9 not in second_inner
+
+    def test_a_value_a_deepcopy_cannot_carry_is_shared(self):
+        """The deep path falls back to the old sharing for values deepcopy
+        refuses, rather than failing the construction."""
+
+        value = memoryview(bytearray(b"abc"))
+
+        class Holder(Struct):
+            v: object = value
+
+        assert Holder().v is Holder().v
 
     @pytest.mark.parametrize(
         "value",
@@ -378,13 +399,56 @@ class TestMutableDefaults:
         assert calls == [1]
         assert Holder().v is value
 
-    def test_a_subclass_does_not_re_probe_an_inherited_default(self):
-        """`build_defaults` walks the inherited defaults too, so probing there
-        re-asked every default on every subclass creation -- and a `__hash__`
-        that answers differently over time could then flip `class Child(Base):
-        pass` to refused. The probe reads what this body declares, and a base's
-        defaults answered when the base was built.
-        """
+    def test_an_author_hash_exception_propagates_past_later_fields(self):
+        """A later field's probe used to clear the pending exception; the
+        author's error must reach the class statement in either field order."""
+
+        class Angry:
+            def __hash__(self) -> int:
+                raise RuntimeError("boom")
+
+        with pytest.raises(RuntimeError, match="boom"):
+
+            class AngryFirst(Struct):
+                a: object = Angry()
+                b: object = ([],)
+
+        with pytest.raises(RuntimeError, match="boom"):
+
+            class AngrySecond(Struct):
+                a: object = ([],)
+                b: object = Angry()
+
+    def test_a_hash_that_raises_later_propagates_at_construction(self):
+        """The class-statement probe succeeded once, so the constructor's
+        re-probe must surface the author's exception, not a SystemError."""
+
+        class SometimesAngry:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def __hash__(self) -> int:
+                self.calls += 1
+
+                if self.calls > 1:
+                    raise RuntimeError("boom")
+
+                return 7
+
+        value = SometimesAngry()
+
+        class Holder(Struct):
+            v: object = value
+
+        with pytest.raises(RuntimeError, match="boom"):
+            Holder()
+
+    def test_a_subclass_re_probes_an_inherited_default_once_per_class(self):
+        """The probe runs when the singleton is built, once per class
+        statement -- the inherited default is re-copied for the subclass's own
+        singleton. Instance construction re-probes the declared default, so
+        the count here precedes any instantiation."""
+
 
         calls = []
 
@@ -402,7 +466,7 @@ class TestMutableDefaults:
         class Grandchild(Child):
             pass
 
-        assert calls == [1]
+        assert calls == [1, 1, 1]
         assert Grandchild().v is Base().v
 
     def test_a_value_that_holds_itself_is_shared_rather_than_refused(self):
@@ -453,12 +517,11 @@ class TestMutableDefaults:
         assert Holder().v.items == ["seen by every instance"]
 
     def test_a_hash_that_fails_for_its_own_reasons_propagates_unchanged(self):
-        """The probe reads TypeError and ValueError as the instance declining.
-        Anything else is not that, and salix says so with the author's own
-        exception rather than claiming the value holds something mutable.
-
-        A deliberate consequence: such a class used to build and share the
-        value, and now does not.
+        """The copy-time probe reads TypeError and ValueError as the instance
+        declining. Anything else is not that, and salix says so with the
+        author's own exception rather than claiming the value holds something
+        mutable -- raised at the class statement, which is when the
+        singleton build copies the default.
         """
 
         class Angry:
@@ -472,18 +535,18 @@ class TestMutableDefaults:
 
     def test_a_writable_memoryview_answers_ValueError_and_is_still_caught(self):
         """The trap: the probe is a hash that raises, and a writable memoryview
-        raises ValueError where a tuple of lists raises TypeError. Catching only
-        TypeError would let it through and turn class creation into a ValueError
-        from nowhere.
+        raises ValueError where a tuple of lists raises TypeError. Both are read
+        as the instance declining; a deepcopy then refuses the memoryview and
+        the default is shared, so the construction still succeeds.
         """
 
         with pytest.raises(ValueError, match="cannot hash writable"):
             hash(memoryview(bytearray(b"abc")))
 
-        with pytest.raises(TypeError, match="whose value will not"):
+        class Holder(Struct):
+            v: object = memoryview(bytearray(b"abc"))
 
-            class Holder(Struct):
-                v: object = memoryview(bytearray(b"abc"))
+        assert Holder().v is Holder().v
 
     def test_a_body_init_does_not_exempt_the_declared_default(self):
         """Its constructor never reads the default, so nothing is shared -- but
