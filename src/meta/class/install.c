@@ -68,6 +68,26 @@ enum result install_fields(
 	return RESULT_OK;
 }
 
+static bool author_new_in_mro(PyTypeObject * const cls) {
+	PyObject * const mro = cls->tp_mro;
+
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); ++i) {
+		PyTypeObject * const entry = (PyTypeObject *) PyTuple_GET_ITEM(mro, i);
+
+		if ((entry->tp_flags & Py_TPFLAGS_HEAPTYPE) == 0) {
+			continue;
+		}
+
+		int const present = dict_has_string(entry->tp_dict, "__new__");
+
+		if (present != 0) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
 enum result install_constructor(
 	StructType * const struct_class,
 	PyObject * const namespace,
@@ -87,6 +107,11 @@ enum result install_constructor(
 	} else {
 		struct_class->heap_type.ht_type.tp_vectorcall = Struct_vectorcall;
 	}
+
+	/* The vectorcall's TypeError fallback must not swallow an author
+	 * __new__'s refusal; the answer is fixed at class creation, so the
+	 * construction path reads it instead of re-walking the MRO. */
+	struct_class->struct_author_new = author_new_in_mro(&struct_class->heap_type.ht_type);
 
 	if (install_post_init(struct_class) != RESULT_OK) {
 		return RESULT_ERROR;

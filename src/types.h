@@ -39,6 +39,7 @@ typedef struct StructType {
 	struct options struct_options;
 
 	bool struct_resolves_body_eq;
+	bool struct_author_new;
 } StructType;
 
 /*

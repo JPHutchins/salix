@@ -288,6 +288,47 @@ def test_an_author_new_on_the_own_init_arm_runs():
     assert OwnNew(1).built_by_new is True
 
 
+class Factory(Exception, Struct, frozen=False):
+    x: int = 0
+
+    def __new__(cls, *args, **kwargs):
+        return object()
+
+
+def test_an_author_new_returning_a_non_instance_is_refused():
+    with pytest.raises(TypeError, match="is not safe"):
+        Factory(1)
+
+
+class BaseFactory(Exception):
+    def __new__(cls, *args, **kwargs):
+        return object()
+
+
+class FactoryDerived(BaseFactory, Struct, frozen=False):
+    x: int = 0
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+
+def test_a_base_author_new_returning_a_non_instance_is_refused():
+    with pytest.raises(TypeError, match="is not safe"):
+        FactoryDerived(1)
+
+
+class SigNone(Exception):
+    __signature__ = None
+
+
+class WithSigNone(SigNone, Struct, frozen=False):
+    x: int = 0
+
+
+def test_a_none_signature_on_an_exception_ancestor_keeps_the_field_signature():
+    assert str(inspect.signature(WithSigNone)) == "(x: int = 0)"
+
+
 class Gaps(Exception, Struct, frozen=True):
     a: int = 1
     b: int = 2

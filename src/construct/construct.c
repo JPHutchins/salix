@@ -40,6 +40,20 @@ static PyObject * interned_value(StructType const * const type, bool const no_ar
 	return (singleton != NULL && no_arguments) ? Py_NewRef(singleton) : NULL;
 }
 
+static void store_exception_args(PyObject * const self, PyObject * const args) {
+	PyObject * old;
+
+	/* The store holds the same lock every reader takes, and the old
+	 * reference's release is deferred past the end of the section -- the
+	 * PyMember_SetOne pattern the struct slots rely on. */
+	STRUCT_BEGIN_CRITICAL_SECTION(self);
+	old = ((PyBaseExceptionObject *) self)->args;
+	((PyBaseExceptionObject *) self)->args = args;
+	STRUCT_END_CRITICAL_SECTION();
+
+	Py_XDECREF(old);
+}
+
 enum result set_exception_args_from_fields(
 	StructType * const type,
 	PyObject * const self,
@@ -76,7 +90,7 @@ enum result set_exception_args_from_fields(
 		PyTuple_SET_ITEM(args, i, Py_NewRef(*struct_slot(type, self, i)));
 	}
 
-	Py_XSETREF(((PyBaseExceptionObject *) self)->args, py_move(&args));
+	store_exception_args(self, py_move(&args));
 
 	return RESULT_OK;
 }
@@ -126,7 +140,7 @@ enum result set_exception_args_from_original(
 		return RESULT_ERROR;
 	}
 
-	Py_XSETREF(((PyBaseExceptionObject *) copy)->args, py_move(&copied_args));
+	store_exception_args(copy, py_move(&copied_args));
 
 	return RESULT_OK;
 }
@@ -145,30 +159,8 @@ static void set_exception_args_from_positionals(
 
 	/* The own-init path runs the author's __init__ after the allocation, so
 	 * the fields are not bound here; BaseException_new's contract holds: the
-	 * positional tuple is the payload. XSETREF: the family tp_new Struct_new
-	 * invoked already stored its own reference, which a plain assignment
-	 * would leak. */
-	Py_XSETREF(((PyBaseExceptionObject *) self)->args, Py_XNewRef(positionals));
-}
-
-static bool any_author_new(PyTypeObject * const cls) {
-	PyObject * const mro = cls->tp_mro;
-
-	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); ++i) {
-		PyTypeObject * const entry = (PyTypeObject *) PyTuple_GET_ITEM(mro, i);
-
-		if ((entry->tp_flags & Py_TPFLAGS_HEAPTYPE) == 0) {
-			continue;
-		}
-
-		int const present = dict_has_string(entry->tp_dict, "__new__");
-
-		if (present != 0) {
-			return true;
-		}
-	}
-
-	return false;
+	 * positional tuple is the payload. */
+	store_exception_args(self, Py_XNewRef(positionals));
 }
 
 static Py_ssize_t explicit_field_prefix(
@@ -362,11 +354,10 @@ PyObject * Struct_vectorcall(
 			}
 		}
 
-		/* Probed before the call: a pending failure would read as a probe
-		 * error. An author __new__ -- on the class or any heap base, where a
-		 * family slot is out of reach -- raising TypeError owns the
-		 * construction and the failure. */
-		bool const author_new = any_author_new(python_class);
+		/* An author __new__ -- on the class or any heap base, where a family
+		 * slot is out of reach -- raising TypeError owns the construction
+		 * and the failure. The install cached the answer. */
+		bool const author_new = type->struct_author_new;
 
 		self = python_class->tp_new(python_class, positionals, keywords);
 
@@ -421,6 +412,20 @@ PyObject * Struct_vectorcall(
 					set_exception_args_from_positionals(python_class, self, positionals);
 				}
 			}
+		}
+
+		/* An author __new__ may return any object; the slot writes that
+		 * follow assume the struct's own layout, so the type_call guard
+		 * answers here. */
+		if (self != NULL && !PyObject_TypeCheck(self, python_class)) {
+			PyErr_Format(
+				PyExc_TypeError,
+				"%s.__new__(%s) is not safe, use %s.__new__()",
+				Py_TYPE(self)->tp_name,
+				python_class->tp_name,
+				python_class->tp_name
+			);
+			Py_CLEAR(self);
 		}
 
 		if (self == NULL) {
@@ -501,6 +506,19 @@ PyObject * Struct_new(
 		self = struct_class->tp_alloc(struct_class, 0);
 	}
 
+	/* An author __new__ may return any object; the slot writes that follow
+	 * assume the struct's own layout, so the type_call guard answers here. */
+	if (self != NULL && !PyObject_TypeCheck(self, struct_class)) {
+		PyErr_Format(
+			PyExc_TypeError,
+			"%s.__new__(%s) is not safe, use %s.__new__()",
+			Py_TYPE(self)->tp_name,
+			struct_class->tp_name,
+			struct_class->tp_name
+		);
+		Py_CLEAR(self);
+	}
+
 	if (self == NULL) {
 		return NULL;
 	}
@@ -509,7 +527,11 @@ PyObject * Struct_new(
 		return NULL;
 	}
 
-	set_exception_args_from_positionals(struct_class, self, arguments);
+	/* The family's tp_new wrote its payload -- a keyword-shaped family call
+	 * normalizes it; the positional write answers only when nothing did. */
+	if (!exception_first || ((PyBaseExceptionObject *) self)->args == NULL) {
+		set_exception_args_from_positionals(struct_class, self, arguments);
+	}
 
 	return py_move(&self);
 }

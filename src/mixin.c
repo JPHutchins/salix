@@ -793,6 +793,17 @@ PyObject * Struct_get_signature(PyObject * const self, void * const closure) {
 				continue;
 			}
 
+			/* None declares 'no signature' -- the uniform loop keeps
+			 * looking, and so does this branch. A heap entry's binding is
+			 * definitionally its own redefinition and answers. */
+			if (entry_binding == Py_None) {
+				continue;
+			}
+
+			if ((entry_type->tp_flags & Py_TPFLAGS_HEAPTYPE) != 0) {
+				return py_move(&entry_binding);
+			}
+
 			PyTypeObject * const parent_type = (PyTypeObject *) PyTuple_GET_ITEM(mro, i + 1);
 			PY_OWNED(parent_dict, struct_type_dict(parent_type));
 
