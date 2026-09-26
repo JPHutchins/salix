@@ -1,6 +1,7 @@
 #include <Python.h>
 
 #include "construct.h"
+#include "../owned.h"
 #include "../result.h"
 #include "../types.h"
 
@@ -15,21 +16,60 @@ static PyObject * copy_list(PyObject * const declared) {
 	return PyList_GetSlice(declared, 0, PyList_GET_SIZE(declared));
 }
 
+static PyObject * copy_declared(PyObject * const declared) {
+	/* The type's own constructor preserves the subclass. A constructor whose
+	 * signature is not the iterable one (a defaultdict takes a factory)
+	 * raises; the caller falls back to the base copy. */
+	return PyObject_CallOneArg((PyObject *) Py_TYPE(declared), declared);
+}
+
+static PyObject * copy_or_base(PyObject * const declared, PyObject * (*const base_copy)(PyObject *)) {
+	PY_OWNED(copied, copy_declared(declared));
+
+	if (copied != NULL) {
+		return py_move(&copied);
+	}
+
+	if (!PyErr_ExceptionMatches(PyExc_TypeError)) {
+		return NULL;
+	}
+
+	PyErr_Clear();
+
+	return base_copy(declared);
+}
+
+static PyObject * copy_list_or_base(PyObject * const declared) {
+	return copy_or_base(declared, copy_list);
+}
+
+static PyObject * copy_dict_or_base(PyObject * const declared) {
+	return copy_or_base(declared, PyDict_Copy);
+}
+
+static PyObject * copy_set_or_base(PyObject * const declared) {
+	return copy_or_base(declared, PySet_New);
+}
+
+static PyObject * copy_bytearray_or_base(PyObject * const declared) {
+	return copy_or_base(declared, PyByteArray_FromObject);
+}
+
 static default_copier copies_default(PyTypeObject const * const kind) {
-	if (kind == &PyList_Type) {
-		return copy_list;
+	if (PyType_IsSubtype(kind, &PyList_Type)) {
+		return copy_list_or_base;
 	}
 
-	if (kind == &PyDict_Type) {
-		return PyDict_Copy;
+	if (PyType_IsSubtype(kind, &PyDict_Type)) {
+		return copy_dict_or_base;
 	}
 
-	if (kind == &PySet_Type) {
-		return PySet_New;
+	if (PyType_IsSubtype(kind, &PySet_Type)) {
+		return copy_set_or_base;
 	}
 
-	if (kind == &PyByteArray_Type) {
-		return PyByteArray_FromObject;
+	if (PyType_IsSubtype(kind, &PyByteArray_Type)) {
+		return copy_bytearray_or_base;
 	}
 
 	return NULL;
