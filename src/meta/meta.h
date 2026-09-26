@@ -93,7 +93,9 @@ enum result set_exception_args_from_fields(
 enum result set_exception_args_from_original(
 	StructType * type,
 	PyObject * copy,
-	PyObject * original
+	PyObject * original,
+	PyObject * deepcopier,
+	PyObject * memo
 );
 PyModuleDef * salix_module_def(void);
 bool any_base_diverts_setattro(PyObject * bases);
@@ -189,12 +191,10 @@ bool defines_own_init(StructType * struct_class, PyObject * namespace);
 enum result ensure_singleton(
 	StructType * struct_class,
 	PyObject * namespace,
-	PyObject * bases,
 	bool bases_divert_setattro
 );
 enum result install_constructor(
 	StructType * struct_class,
 	PyObject * namespace,
-	PyObject * bases,
 	bool bases_divert_setattro
 );

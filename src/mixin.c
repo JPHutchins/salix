@@ -447,7 +447,7 @@ static PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 
 	if (
 		(dict != NULL && struct_dict_copy_merged(dict, copy) < 0) ||
-		set_exception_args_from_original(type, copy, self) != RESULT_OK
+		set_exception_args_from_original(type, copy, self, NULL, NULL) != RESULT_OK
 	) {
 		return NULL;
 	}
@@ -627,7 +627,7 @@ static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) 
 		}
 	}
 
-	if (set_exception_args_from_original(type, copy, self) != RESULT_OK) {
+	if (set_exception_args_from_original(type, copy, self, deepcopy, memo) != RESULT_OK) {
 		return memo_failure(memo, key);
 	}
 
@@ -775,24 +775,43 @@ PyObject * Struct_get_signature(PyObject * const self, void * const closure) {
 			 * answers. */
 			PY_OWNED(entry_dict, struct_type_dict(entry_type));
 
-			if (entry_dict != NULL) {
-				PY_MOVABLE(entry_binding, dict_value_ref(entry_dict, binding_name));
-
-				if (entry_binding != NULL) {
-					PyTypeObject * const parent_type = (PyTypeObject *) PyTuple_GET_ITEM(
-						mro,
-						i + 1
-					);
-					PY_OWNED(parent_dict, struct_type_dict(parent_type));
-					PY_OWNED(
-						parent_binding,
-						parent_dict != NULL ? dict_value_ref(parent_dict, binding_name) : NULL
-					);
-
-					if (entry_binding != parent_binding) {
-						return py_move(&entry_binding);
-					}
+			if (entry_dict == NULL) {
+				if (PyErr_Occurred()) {
+					return NULL;
 				}
+
+				continue;
+			}
+
+			PY_MOVABLE(entry_binding, dict_value_ref(entry_dict, binding_name));
+
+			if (entry_binding == NULL) {
+				if (PyErr_Occurred()) {
+					return NULL;
+				}
+
+				continue;
+			}
+
+			PyTypeObject * const parent_type = (PyTypeObject *) PyTuple_GET_ITEM(mro, i + 1);
+			PY_OWNED(parent_dict, struct_type_dict(parent_type));
+
+			if (parent_dict == NULL) {
+				if (PyErr_Occurred()) {
+					return NULL;
+				}
+
+				continue;
+			}
+
+			PY_OWNED(parent_binding, dict_value_ref(parent_dict, binding_name));
+
+			if (parent_binding == NULL && PyErr_Occurred()) {
+				return NULL;
+			}
+
+			if (entry_binding != parent_binding) {
+				return py_move(&entry_binding);
 			}
 
 			continue;

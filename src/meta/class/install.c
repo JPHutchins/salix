@@ -71,11 +71,18 @@ enum result install_fields(
 enum result install_constructor(
 	StructType * const struct_class,
 	PyObject * const namespace,
-	PyObject * const bases,
 	bool const bases_divert_setattro
 ) {
 	if (defines_own_init(struct_class, namespace)) {
-		struct_class->heap_type.ht_type.tp_new = Struct_new;
+		/* A body __new__ owns the allocation: the author's slot stays, and
+		 * its super() chain reaches the family's __new__. The probe error
+		 * keeps the slot too -- the conservative answer runs the author's. */
+		int const defines_new = dict_has_string(namespace, "__new__");
+
+		if (defines_new == 0) {
+			struct_class->heap_type.ht_type.tp_new = Struct_new;
+		}
+
 		struct_class->heap_type.ht_type.tp_vectorcall = NULL;
 	} else {
 		struct_class->heap_type.ht_type.tp_vectorcall = Struct_vectorcall;
@@ -85,13 +92,12 @@ enum result install_constructor(
 		return RESULT_ERROR;
 	}
 
-	return ensure_singleton(struct_class, namespace, bases, bases_divert_setattro);
+	return ensure_singleton(struct_class, namespace, bases_divert_setattro);
 }
 
 enum result ensure_singleton(
 	StructType * const struct_class,
 	PyObject * const namespace,
-	PyObject * const bases,
 	bool const bases_divert_setattro
 ) {
 	bool const qualifies = (
@@ -198,7 +204,12 @@ static enum init_owner base_init_owner(PyTypeObject * const base) {
 			return INIT_OWNER_AUTHOR;
 		}
 
-		return INIT_OWNER_NONE;
+		/* No entry: an exception base keeps walking toward the family; any
+		 * other base with a non-object init owns it -- the same answer the
+		 * NULL-dict branch gives, so a static C base whose dict is readable
+		 * on one version and not on another flips nothing. */
+		return PyType_FastSubclass(base, Py_TPFLAGS_BASE_EXC_SUBCLASS) ? INIT_OWNER_NONE :
+			INIT_OWNER_AUTHOR;
 	}
 
 	if (PyType_FastSubclass(base, Py_TPFLAGS_BASE_EXC_SUBCLASS)) {

@@ -209,6 +209,85 @@ def test_copy_arms_keep_the_source_payload():
     assert copy.deepcopy(error).args == (7,)
 
 
+class ListError(Exception, Struct, frozen=True):
+    items: list
+
+
+def test_deepcopy_detaches_mutable_payload_items():
+    import copy
+
+    error = ListError([1, 2])
+    copied = copy.deepcopy(error)
+
+    assert copied.items == [1, 2]
+    assert copied.args == ([1, 2],)
+    assert copied.args is not error.args
+    assert copied.args[0] is not error.args[0]
+
+
+class MutableCode(Exception, Struct, frozen=False):
+    code: int
+    detail: str = ""
+
+
+def test_replace_carries_the_payload_through_non_leading_changes():
+    import salix
+
+    error = MutableCode(7)
+
+    assert salix.replace(error, detail="e").args == (7, "e")
+    assert salix.replace(error).args == (7,)
+
+
+class OwnInit(Exception, Struct, frozen=False):
+    x: int = 0
+
+    def __init__(self, *args, **kwargs):
+        if args:
+            self.x = args[0]
+
+        if "x" in kwargs:
+            self.x = kwargs["x"]
+
+
+def test_replace_represents_the_own_init_positionals():
+    import salix
+
+    error = OwnInit(3)
+
+    assert salix.replace(error, x=5).args == (3,)
+
+
+class NewRefuser(Exception):
+    def __new__(cls, *args, **kwargs):
+        raise TypeError("refused by the author")
+
+
+class Refused(NewRefuser, Struct, frozen=False):
+    x: int = 0
+
+
+def test_an_inherited_author_new_keeps_its_type_error():
+    with pytest.raises(TypeError, match="refused by the author"):
+        Refused(1)
+
+
+class OwnNew(Exception, Struct, frozen=False):
+    x: int = 0
+
+    def __init__(self, value: int) -> None:
+        self.x = value
+
+    def __new__(cls, *args, **kwargs):
+        instance = super().__new__(cls, *args, **kwargs)
+        instance.built_by_new = True
+        return instance
+
+
+def test_an_author_new_on_the_own_init_arm_runs():
+    assert OwnNew(1).built_by_new is True
+
+
 class Gaps(Exception, Struct, frozen=True):
     a: int = 1
     b: int = 2
@@ -236,6 +315,28 @@ def test_an_exception_group_struct_constructs_through_the_alloc_fallback():
     assert error.x == "boom"
     assert error.args == ("boom",)
     assert str(error) == "boom (0 sub-exception)"
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
+def test_the_fallback_group_message_mirrors_the_supplied_value():
+    assert str(EG(5)) == "5 (0 sub-exception)"
+    assert str(EG(x=5)) == "5 (0 sub-exception)"
+
+
+if sys.version_info >= (3, 11):
+    class HookEG(ExceptionGroup, Struct, frozen=False):
+        x: int = 0
+
+        def __post_init__(self) -> None:
+            repr(self)
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
+def test_the_fallback_arm_writes_args_before_the_hook():
+    error = HookEG(1)
+
+    assert error.x == 1
+    assert error.args == (1,)
 
 
 if sys.version_info >= (3, 11):

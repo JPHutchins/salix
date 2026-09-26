@@ -343,7 +343,6 @@ struct field_plan plan = field_plan_build(base, original_namespace);
 					install_constructor(
 							struct_class,
 							original_namespace,
-							bases,
 							bases_divert_setattro
 						) !=
 						RESULT_OK

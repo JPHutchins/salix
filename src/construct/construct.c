@@ -84,7 +84,9 @@ enum result set_exception_args_from_fields(
 enum result set_exception_args_from_original(
 	StructType * const type,
 	PyObject * const copy,
-	PyObject * const original
+	PyObject * const original,
+	PyObject * const deepcopier,
+	PyObject * const memo
 ) {
 	PyTypeObject * const cls = &type->heap_type.ht_type;
 
@@ -97,12 +99,36 @@ enum result set_exception_args_from_original(
 
 	/* The source's payload is the truth on every arm -- whatever produced
 	 * it, the copy keeps it, so a copied exception formats like the
-	 * original. */
-	PyObject * const args = ((PyBaseExceptionObject *) original)->args;
+	 * original. The ref is taken under the source's own lock: args is a
+	 * settable member whose store holds a critical section on the instance,
+	 * and a load-then-incref outside it is the free-threaded use-after-free
+	 * the struct slots fixed the same way. The deep copy detaches the items
+	 * through the memo, so a deepcopy's payload is the deep field values,
+	 * not the original's live objects. */
+	PyObject * args;
 
-	((PyBaseExceptionObject *) copy)->args = args != NULL ? Py_XNewRef(args) : PyTuple_New(0);
+	STRUCT_BEGIN_CRITICAL_SECTION(original);
+	args = Py_XNewRef(((PyBaseExceptionObject *) original)->args);
+	STRUCT_END_CRITICAL_SECTION();
 
-	return ((PyBaseExceptionObject *) copy)->args != NULL ? RESULT_OK : RESULT_ERROR;
+	PY_MOVABLE(copied_args, NULL);
+
+	if (args == NULL) {
+		copied_args = PyTuple_New(0);
+	} else if (deepcopier != NULL) {
+		copied_args = PyObject_CallFunctionObjArgs(deepcopier, args, memo, NULL);
+		Py_DECREF(args);
+	} else {
+		copied_args = args;
+	}
+
+	if (copied_args == NULL) {
+		return RESULT_ERROR;
+	}
+
+	Py_XSETREF(((PyBaseExceptionObject *) copy)->args, py_move(&copied_args));
+
+	return RESULT_OK;
 }
 
 static void set_exception_args_from_positionals(
@@ -119,20 +145,43 @@ static void set_exception_args_from_positionals(
 
 	/* The own-init path runs the author's __init__ after the allocation, so
 	 * the fields are not bound here; BaseException_new's contract holds: the
-	 * positional tuple is the payload. */
-	((PyBaseExceptionObject *) self)->args = Py_XNewRef(positionals);
+	 * positional tuple is the payload. XSETREF: the family tp_new Struct_new
+	 * invoked already stored its own reference, which a plain assignment
+	 * would leak. */
+	Py_XSETREF(((PyBaseExceptionObject *) self)->args, Py_XNewRef(positionals));
+}
+
+static bool any_author_new(PyTypeObject * const cls) {
+	PyObject * const mro = cls->tp_mro;
+
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); ++i) {
+		PyTypeObject * const entry = (PyTypeObject *) PyTuple_GET_ITEM(mro, i);
+
+		if ((entry->tp_flags & Py_TPFLAGS_HEAPTYPE) == 0) {
+			continue;
+		}
+
+		int const present = dict_has_string(entry->tp_dict, "__new__");
+
+		if (present != 0) {
+			return true;
+		}
+	}
+
+	return false;
 }
 
 static Py_ssize_t explicit_field_prefix(
 	StructType const * const type,
 	Py_ssize_t const positional_count,
-	PyObject * const keyword_names
+	PyObject * const keyword_names,
+	Py_ssize_t const carried_count
 ) {
 	Py_ssize_t const keyword_count = keyword_names != NULL ? PyTuple_GET_SIZE(keyword_names) : 0;
 	Py_ssize_t prefix = 0;
 
 	while (prefix < type->struct_field_count) {
-		bool explicit = prefix < positional_count;
+		bool explicit = prefix < positional_count || prefix < carried_count;
 
 		for (Py_ssize_t i = 0; !explicit && i < keyword_count; ++i) {
 			struct field_lookup const found = find_field(type, PyTuple_GET_ITEM(keyword_names, i));
@@ -152,6 +201,28 @@ static Py_ssize_t explicit_field_prefix(
 	}
 
 	return prefix;
+}
+
+static Py_ssize_t carried_payload_count(StructType * const type, PyObject * const self) {
+	PyTypeObject * const cls = &type->heap_type.ht_type;
+
+	if (
+		!PyType_FastSubclass(cls, Py_TPFLAGS_BASE_EXC_SUBCLASS) ||
+		!PyType_FastSubclass(cls->tp_base, Py_TPFLAGS_BASE_EXC_SUBCLASS)
+	) {
+		return 0;
+	}
+
+	PyObject * args;
+
+	STRUCT_BEGIN_CRITICAL_SECTION(self);
+	args = Py_XNewRef(((PyBaseExceptionObject *) self)->args);
+	STRUCT_END_CRITICAL_SECTION();
+
+	Py_ssize_t const count = args != NULL ? PyTuple_GET_SIZE(args) : 0;
+	Py_XDECREF(args);
+
+	return count;
 }
 
 static Py_ssize_t explicit_dict_prefix(StructType const * const type, PyObject * const values) {
@@ -291,14 +362,19 @@ PyObject * Struct_vectorcall(
 			}
 		}
 
+		/* Probed before the call: a pending failure would read as a probe
+		 * error. An author __new__ -- on the class or any heap base, where a
+		 * family slot is out of reach -- raising TypeError owns the
+		 * construction and the failure. */
+		bool const author_new = any_author_new(python_class);
+
 		self = python_class->tp_new(python_class, positionals, keywords);
 
 		if (self == NULL && PyErr_ExceptionMatches(PyExc_TypeError)) {
 			/* A family tp_new with its own arity contract rejects the
 			 * field-constructor call shape; the allocation answers instead,
-			 * the C members zeroed. An author __new__ raising TypeError owns
-			 * the construction and the failure. */
-			if (dict_get_string(python_class->tp_dict, "__new__") == NULL) {
+			 * the C members zeroed. */
+			if (!author_new) {
 				PyErr_Clear();
 				self = python_class->tp_alloc(python_class, 0);
 
@@ -311,22 +387,39 @@ PyObject * Struct_vectorcall(
 					/* The fallback bypasses __new__, the group members'
 					 * only writer; the empty group body keeps str() and the
 					 * group operations on a valid tuple, and the message
-					 * mirrors the first positional when it is one. */
+					 * mirrors the first supplied value. */
 					PyBaseExceptionGroupObject * const group = (PyBaseExceptionGroupObject *) self;
 
-					group->excs = PyTuple_New(0);
 					group->msg = (
-						positional_count > 0 && PyUnicode_Check(
-							arguments[0]
-						) ? Py_NewRef(arguments[0]) :
-						NULL
+						positional_count > 0 ? PyObject_Str(arguments[0]) :
+						keyword_names != NULL && PyTuple_GET_SIZE(
+							keyword_names
+						) > 0 ? PyObject_Str(arguments[positional_count]) :
+						PyUnicode_FromString("")
 					);
+					group->excs = PyTuple_New(0);
+					bool complete = group->msg != NULL && group->excs != NULL;
 
-					if (group->excs == NULL) {
+#	if PY_VERSION_HEX >= 0x030E0000
+					/* 3.14's repr reads the cached excs string; the member
+					 * does not exist before it. */
+					group->excs_str = PyUnicode_FromString("");
+					complete = complete && group->excs_str != NULL;
+#	endif
+
+					if (!complete) {
 						Py_CLEAR(self);
 					}
 				}
 #endif
+
+				if (self != NULL) {
+					/* The family tp_new would have written args; the fallback
+					 * writes the same payload before any hook runs, so a
+					 * __post_init__ that formats the instance never reads
+					 * NULL. */
+					set_exception_args_from_positionals(python_class, self, positionals);
+				}
 			}
 		}
 
@@ -353,7 +446,7 @@ PyObject * Struct_vectorcall(
 	Py_ssize_t explicit_count = 0;
 
 	if (exception_struct) {
-		explicit_count = explicit_field_prefix(type, positional_count, keyword_names);
+		explicit_count = explicit_field_prefix(type, positional_count, keyword_names, 0);
 
 		if (explicit_count < 0) {
 			return NULL;
@@ -508,13 +601,29 @@ PyObject * Struct_replace(
 			}
 		}
 
-		PY_OWNED(no_arguments, PyTuple_New(0));
+		/* An exception struct's payload is its positional tuple; the replaced
+		 * instance re-presents it so the author's or the family's init
+		 * reconstructs the members and args instead of an empty tuple. */
+		PY_MOVABLE(positionals, NULL);
 
-		if (no_arguments == NULL) {
+		if (
+			PyType_FastSubclass(cls, Py_TPFLAGS_BASE_EXC_SUBCLASS) &&
+			PyType_FastSubclass(cls->tp_base, Py_TPFLAGS_BASE_EXC_SUBCLASS)
+		) {
+			STRUCT_BEGIN_CRITICAL_SECTION(self);
+			positionals = Py_XNewRef(((PyBaseExceptionObject *) self)->args);
+			STRUCT_END_CRITICAL_SECTION();
+		}
+
+		if (positionals == NULL) {
+			positionals = PyTuple_New(0);
+		}
+
+		if (positionals == NULL) {
 			return NULL;
 		}
 
-		PY_MOVABLE(replaced, PyObject_Call((PyObject *) cls, no_arguments, changed));
+		PY_MOVABLE(replaced, PyObject_Call((PyObject *) cls, positionals, changed));
 
 		if (replaced == NULL) {
 			return NULL;
@@ -561,7 +670,15 @@ PyObject * Struct_replace(
 	PY_MOVABLE(source_dict, NULL);
 	struct_slots_copy_into(type, self, copy, &source_dict);
 
-	Py_ssize_t const explicit_count = explicit_field_prefix(type, 0, keyword_names);
+	/* The source's payload was the explicit prefix at its construction; the
+	 * replaced instance carries it forward, so a change behind a gap keeps
+	 * the leading fields in the payload and the result pickles. */
+	Py_ssize_t const explicit_count = explicit_field_prefix(
+		type,
+		0,
+		keyword_names,
+		carried_payload_count(type, self)
+	);
 
 	if (explicit_count < 0) {
 		return NULL;
