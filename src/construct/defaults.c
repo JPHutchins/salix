@@ -25,7 +25,10 @@ static PyObject * copy_declared(PyObject * const declared) {
 	return PyObject_CallOneArg((PyObject *) Py_TYPE(declared), declared);
 }
 
-static PyObject * copy_or_base(PyObject * const declared, PyObject * (*const base_copy)(PyObject *)) {
+static PyObject * copy_or_base(
+	PyObject * const declared,
+	PyObject * (* const base_copy) (PyObject *)
+) {
 	/* #172: a non-empty value cannot be copied shallowly without sharing its
 	 * contents, so the deep path carries it; the empty one copies through the
 	 * declared type's constructor, with the base copy for constructors whose
