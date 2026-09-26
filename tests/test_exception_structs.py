@@ -900,6 +900,16 @@ def test_an_exceptions_only_group_struct_pickles_round_trip():
 
 
 @pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
+def test_a_two_positional_exceptions_only_construction_binds_by_declaration():
+    group = PrefixedExceptions("m", [ValueError("q")])
+
+    assert group.flag == "m"
+    assert len(group.exceptions) == 1
+    assert group.exceptions[0].args == ("q",)
+    assert str(group) == "m (1 sub-exception)"
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
 def test_a_message_only_group_struct_with_a_leading_field_pickles_round_trip():
     import pickle
 

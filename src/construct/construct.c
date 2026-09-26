@@ -1447,7 +1447,7 @@ static void bind_positional(
 				member_shape ? (
 					i == 0 ? (
 						type->struct_message_index >= 0 ? type->struct_message_index :
-						type->struct_exceptions_index >= 0 ? type->struct_exceptions_index :
+						positional_count == 1 && type->struct_exceptions_index >= 0 ? type->struct_exceptions_index :
 						0
 					) :
 					i == 1 && type->struct_exceptions_index >= 0 ? type->struct_exceptions_index :
