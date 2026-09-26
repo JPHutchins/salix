@@ -36,3 +36,22 @@ def test_multiple_positionals_follow_field_order():
 
     assert error.code == 7
     assert error.detail == "d"
+
+
+class FileError(OSError, Struct, frozen=True):
+    code: int
+
+
+def test_an_exception_family_base_gets_the_field_constructor_too():
+    """The carve-out used to match only BaseException's own init; OSError and
+    its family install their own, so the field constructor was displaced."""
+
+    error = FileError(7)
+
+    assert error.code == 7
+
+
+def test_an_exception_family_base_takes_keywords():
+    error = FileError(code=9)
+
+    assert error.code == 9

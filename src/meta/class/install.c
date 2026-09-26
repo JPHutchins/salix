@@ -126,12 +126,26 @@ enum result ensure_singleton(StructType * const struct_class, bool const bases_d
 }
 
 bool defines_own_init(StructType const * const struct_class) {
-	initproc const init_owner = struct_class->heap_type.ht_type.tp_init;
+	PyTypeObject const * const type = &struct_class->heap_type.ht_type;
+	initproc const init_owner = type->tp_init;
 
-	return (
-		init_owner != PyBaseObject_Type.tp_init &&
-		init_owner != ((PyTypeObject *) PyExc_BaseException)->tp_init
-	);
+	/* The nearest base that defines tp_init owns the construction sequence:
+	 * object's is the generated-constructor case, and every exception's is
+	 * the no-own-init case too -- the field constructor answers beside it.
+	 * An author __init__ sits on the class itself, which no base defines. */
+	for (PyTypeObject * base = type->tp_base; base != NULL; base = base->tp_base) {
+		if (
+			base->tp_init == init_owner &&
+			(base->tp_base == NULL || base->tp_base->tp_init != init_owner)
+		) {
+			return (
+				!PyType_FastSubclass(base, Py_TPFLAGS_BASE_EXC_SUBCLASS) &&
+				base != &PyBaseObject_Type
+			);
+		}
+	}
+
+	return true;
 }
 
 enum result install_post_init(StructType * const struct_class) {
