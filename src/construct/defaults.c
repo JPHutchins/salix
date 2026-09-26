@@ -103,7 +103,7 @@ PyObject * struct_default_copy(PyObject * const declared) {
 			return NULL;
 		}
 
-		PY_OWNED(copied, PyObject_CallOneArg(deepcopy, declared));
+		PY_MOVABLE(copied, PyObject_CallOneArg(deepcopy, declared));
 
 		if (copied != NULL) {
 			return py_move(&copied);
