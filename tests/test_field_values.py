@@ -32,10 +32,13 @@ def test_a_value_survives_a_round_trip_unchanged(value):
 @pytest.mark.parametrize("value", EVERY, ids=identify)
 def test_a_value_may_be_a_default(value):
     if type(value) in COPIED_WHEN_EMPTY and len(value) > 0:
-        with pytest.raises(TypeError, match="non-empty"):
+        class Copied(Struct):
+            field: object = value
 
-            class Refused(Struct):
-                field: object = value
+        first, second = Copied(), Copied()
+
+        assert first.field is not second.field
+        assert first.field == value
 
         return
 

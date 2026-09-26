@@ -334,14 +334,17 @@ class TestMutableDefaults:
             pytest.param(__import__("collections").defaultdict(list, {"k": [1]}), id="a_defaultdict"),
         ],
     )
-    def test_a_non_empty_subclass_of_one_of_the_four_is_refused(self, seed):
-        """The refusal covers the subclasses too -- the same shallow-copy
-        argument applies."""
+    def test_a_non_empty_subclass_of_one_of_the_four_is_deep_copied(self, seed):
+        """#172: the refusal is gone -- the default is deep-copied per
+        instance, subclasses included."""
 
-        with pytest.raises(TypeError, match="non-empty"):
+        class Holder(Struct):
+            v: object = seed
 
-            class Holder(Struct):
-                v: object = seed
+        first, second = Holder(), Holder()
+
+        assert first.v is not second.v
+        assert first.v == seed
 
     @pytest.mark.parametrize(
         "value",
