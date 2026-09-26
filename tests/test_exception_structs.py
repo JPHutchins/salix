@@ -689,3 +689,50 @@ def test_the_group_message_comes_from_the_bound_field_not_the_call_order():
 
     assert error.message == "m"
     assert str(error) == "m (1 sub-exception)"
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
+def test_field_built_group_constructions_do_not_leak_the_message_or_body():
+    body = (ValueError(),)
+    baseline_message = sys.getrefcount("m")
+    baseline_body = sys.getrefcount(body)
+
+    for _ in range(200):
+        EG2(message="m", exceptions=body)
+
+    assert sys.getrefcount("m") - baseline_message < 10
+    assert sys.getrefcount(body) - baseline_body < 10
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
+def test_from_mapping_builds_an_own_init_group_struct():
+    import salix
+
+    error = salix.from_mapping(OwnInitGroup, {"message": "m", "exceptions": [ValueError("q")]})
+
+    assert error.message == "m"
+    assert str(error) == "m (1 sub-exception)"
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
+def test_replace_rebuilds_a_group_whose_args_were_cleared():
+    import salix
+
+    group = OwnInitGroup("m", [ValueError("q")])
+    group.args = ()
+    replaced = salix.replace(group, exceptions=[ValueError("z")])
+
+    assert str(replaced) == "m (1 sub-exception)"
+    assert replaced.subgroup(ValueError).exceptions[0].args == ("z",)
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
+def test_a_message_only_replace_keeps_the_payload_with_the_members():
+    import salix
+
+    replaced = salix.replace(EG2("m", (ValueError("q"),)), message="n")
+
+    assert str(replaced) == "m (1 sub-exception)"
+    assert replaced.args[0] == "m"
+    assert len(replaced.args[1]) == 1
+    assert replaced.args[1][0].args == ("q",)

@@ -130,7 +130,9 @@ static enum result group_members_from_fields(
 		}
 	}
 
-	return carry_group_members(type, self, py_move(&msg), py_move(&excs), NULL, NULL, NULL);
+	/* The carry borrows both members and takes its own references; the
+	 * locals here own them until this return releases them. */
+	return carry_group_members(type, self, msg, excs, NULL, NULL, NULL);
 }
 #endif
 
@@ -472,7 +474,9 @@ PyObject * Struct_vectorcall(
 		 * ...), which tp_alloc would leave zeroed. It receives the call's
 		 * real shape -- a user __new__ sees the keywords the caller passed,
 		 * and a family tp_new with its own arity contract is not answered by
-		 * a one-tuple. */
+		 * a one-tuple. A non-exception struct's body __new__ is discarded by
+		 * construction, the pinned contract; the plain allocation is the
+		 * whole of it. */
 		PY_OWNED(positionals, PyTuple_New(positional_count));
 
 		if (positionals == NULL) {
@@ -553,6 +557,24 @@ PyObject * Struct_vectorcall(
 		if (self == NULL) {
 			return NULL;
 		}
+	}
+
+	/* An author __new__ may return any object; the slot writes that
+	 * follow assume the struct's own layout, so the type_call guard
+	 * answers here. */
+	if (self != NULL && !PyObject_TypeCheck(self, python_class)) {
+		PyErr_Format(
+			PyExc_TypeError,
+			"%s.__new__(%s) is not safe, use %s.__new__()",
+			Py_TYPE(self)->tp_name,
+			python_class->tp_name,
+			python_class->tp_name
+		);
+		Py_CLEAR(self);
+	}
+
+	if (self == NULL) {
+		return NULL;
 	}
 
 	bind_positional(type, self, arguments, positional_count);
@@ -827,7 +849,7 @@ PyObject * Struct_replace(
 							return NULL;
 						}
 
-						Py_SETREF(
+						Py_XSETREF(
 							((PyBaseExceptionObject *) replaced)->args,
 							py_move(&packed_args)
 						);
@@ -1026,6 +1048,21 @@ PyObject * Struct_replace(
 		return NULL;
 	}
 
+#if PY_VERSION_HEX >= 0x030B0000
+	if (type->struct_group_family) {
+		/* The payload mirrors the carried or rebuilt members, so args and
+		 * str() never disagree about the message. */
+		PyBaseExceptionGroupObject * const group = (PyBaseExceptionGroupObject *) copy;
+		PY_MOVABLE(packed_args, PyTuple_Pack(2, group->msg, group->excs));
+
+		if (packed_args == NULL) {
+			return NULL;
+		}
+
+		Py_XSETREF(((PyBaseExceptionObject *) copy)->args, py_move(&packed_args));
+	}
+#endif
+
 	if (source_dict != NULL && struct_dict_copy_merged(source_dict, copy) < 0) {
 		return NULL;
 	}
@@ -1112,7 +1149,7 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 		}
 	}
 
-	if (type->struct_own_init && !type->struct_family_owned) {
+	if (type->struct_own_init && !type->struct_family_owned && !type->struct_group_family) {
 		PY_MOVABLE(keywords, NULL);
 
 		if (dict_values != NULL) {

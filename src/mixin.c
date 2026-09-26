@@ -445,6 +445,14 @@ static PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 		 * positional payload. The constructor pre-filled the defaults;
 		 * the source's values -- mutations and prior replaces included --
 		 * overwrite them, releasing the pre-filled references. */
+		PY_OWNED(values_snapshot, PyTuple_New(type->struct_field_count));
+
+		if (values_snapshot == NULL) {
+			return NULL;
+		}
+
+		struct_slots_ref_into(type, self, values_snapshot, NULL);
+
 		PyObject * args;
 
 		STRUCT_BEGIN_CRITICAL_SECTION(self);
@@ -482,7 +490,7 @@ static PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 		}
 
 		for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
-			PyObject * const value = *struct_slot(type, self, i);
+			PyObject * const value = PyTuple_GET_ITEM(values_snapshot, i);
 
 			if (value != NULL) {
 				Py_XSETREF(*struct_slot(type, copy, i), Py_NewRef(value));
@@ -645,6 +653,14 @@ static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) 
 		 * pre-filled the defaults; the source's values -- mutations and
 		 * prior replaces included -- overwrite them, releasing the
 		 * pre-filled references. */
+		PY_OWNED(values_snapshot, PyTuple_New(type->struct_field_count));
+
+		if (values_snapshot == NULL) {
+			return NULL;
+		}
+
+		struct_slots_ref_into(type, self, values_snapshot, NULL);
+
 		PyObject * args;
 
 		STRUCT_BEGIN_CRITICAL_SECTION(self);
@@ -688,7 +704,7 @@ static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) 
 		}
 
 		for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
-			PyObject * const value = *struct_slot(type, self, i);
+			PyObject * const value = PyTuple_GET_ITEM(values_snapshot, i);
 
 			if (value != NULL) {
 				Py_XSETREF(*struct_slot(type, copy, i), Py_NewRef(value));
