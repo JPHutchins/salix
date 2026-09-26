@@ -340,7 +340,13 @@ struct field_plan plan = field_plan_build(base, original_namespace);
 							request.options
 						) !=
 						RESULT_OK ||
-					install_constructor(struct_class, bases_divert_setattro) != RESULT_OK
+					install_constructor(
+							struct_class,
+							original_namespace,
+							bases,
+							bases_divert_setattro
+						) !=
+						RESULT_OK
 				) {
 					Py_CLEAR(struct_class);
 				}

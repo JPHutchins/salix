@@ -68,8 +68,13 @@ enum result install_fields(
 	return RESULT_OK;
 }
 
-enum result install_constructor(StructType * const struct_class, bool const bases_divert_setattro) {
-	if (defines_own_init(struct_class)) {
+enum result install_constructor(
+	StructType * const struct_class,
+	PyObject * const namespace,
+	PyObject * const bases,
+	bool const bases_divert_setattro
+) {
+	if (defines_own_init(struct_class, namespace, bases)) {
 		struct_class->heap_type.ht_type.tp_new = Struct_new;
 		struct_class->heap_type.ht_type.tp_vectorcall = NULL;
 	} else {
@@ -80,15 +85,20 @@ enum result install_constructor(StructType * const struct_class, bool const base
 		return RESULT_ERROR;
 	}
 
-	return ensure_singleton(struct_class, bases_divert_setattro);
+	return ensure_singleton(struct_class, namespace, bases, bases_divert_setattro);
 }
 
-enum result ensure_singleton(StructType * const struct_class, bool const bases_divert_setattro) {
+enum result ensure_singleton(
+	StructType * const struct_class,
+	PyObject * const namespace,
+	PyObject * const bases,
+	bool const bases_divert_setattro
+) {
 	bool const qualifies = (
 		struct_class->struct_options.frozen &&
 		!struct_class->struct_options.weakref &&
 		struct_class->struct_field_count == 0 &&
-		!defines_own_init(struct_class) &&
+		!defines_own_init(struct_class, namespace, bases) &&
 		struct_class->heap_type.ht_type.tp_new == NULL &&
 		struct_class->struct_member_count == 0 &&
 		!bases_divert_setattro &&
@@ -125,22 +135,75 @@ enum result ensure_singleton(StructType * const struct_class, bool const bases_d
 	return RESULT_OK;
 }
 
-bool defines_own_init(StructType const * const struct_class) {
-	PyTypeObject const * const type = &struct_class->heap_type.ht_type;
-	initproc const init_owner = type->tp_init;
+bool defines_own_init(
+	StructType * const struct_class,
+	PyObject * const namespace,
+	PyObject * const bases
+) {
+	PyTypeObject * const type = &struct_class->heap_type.ht_type;
 
-	/* The nearest base that defines tp_init owns the construction sequence:
-	 * object's is the generated-constructor case, and every exception's is
-	 * the no-own-init case too -- the field constructor answers beside it.
-	 * An author __init__ sits on the class itself, which no base defines. */
-	for (PyTypeObject * base = type->tp_base; base != NULL; base = base->tp_base) {
-		if (
-			base->tp_init == init_owner &&
-			(base->tp_base == NULL || base->tp_base->tp_init != init_owner)
-		) {
+	if (type->tp_init == PyBaseObject_Type.tp_init) {
+		return false;
+	}
+
+	/* The nearest class whose dict defines __init__ owns the construction
+	 * sequence. Pointer identity cannot find it: every Python __init__ shares
+	 * slot_tp_init. An author __init__ is a Python function in the dict; an
+	 * exception's own init is a wrapper descriptor and the field constructor
+	 * answers beside it; anything else owns it too. */
+	PyTypeObject * first = type;
+
+	if (namespace != NULL) {
+		/* The type being built has no ready tp_dict or tp_base; the
+		 * namespace is the class body and the declared bases carry the MRO
+		 * walk. */
+		int const present = dict_has_string(namespace, "__init__");
+
+		if (present < 0) {
+			return true;
+		}
+
+		if (present == 1) {
+			return true;
+		}
+
+		first = (PyTypeObject *) PyTuple_GET_ITEM(bases, 0);
+	}
+
+	for (PyTypeObject * base = first; base != NULL; base = base->tp_base) {
+		PyObject * const dict = base->tp_dict;
+
+		if (dict == NULL) {
+			/* Static builtin exceptions expose no tp_dict to C; their init
+			 * is their own C init, which the field constructor answers
+			 * beside. A NULL-dict base with any other init owns it. */
+			if (PyType_FastSubclass(base, Py_TPFLAGS_BASE_EXC_SUBCLASS)) {
+				return false;
+			}
+
+			if (base->tp_init != PyBaseObject_Type.tp_init) {
+				return true;
+			}
+
+			continue;
+		}
+
+		int const present = dict_has_string(dict, "__init__");
+
+		if (present < 0) {
+			return true;
+		}
+
+		if (present == 1) {
+			PY_OWNED(init_value, Py_XNewRef(dict_get_string(dict, "__init__")));
+
+			if (init_value == NULL) {
+				return true;
+			}
+
 			return (
-				!PyType_FastSubclass(base, Py_TPFLAGS_BASE_EXC_SUBCLASS) &&
-				base != &PyBaseObject_Type
+				PyFunction_Check(init_value) ||
+				!PyType_FastSubclass(base, Py_TPFLAGS_BASE_EXC_SUBCLASS)
 			);
 		}
 	}

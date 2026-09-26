@@ -40,6 +40,39 @@ static PyObject * interned_value(StructType const * const type, bool const no_ar
 	return (singleton != NULL && no_arguments) ? Py_NewRef(singleton) : NULL;
 }
 
+static enum result initialize_exception_args(
+	PyTypeObject * const python_class,
+	PyObject * const self,
+	PyObject * const * const arguments,
+	Py_ssize_t const positional_count
+) {
+	if (
+		!PyType_FastSubclass(python_class, Py_TPFLAGS_BASE_EXC_SUBCLASS) ||
+		!PyType_FastSubclass(python_class->tp_base, Py_TPFLAGS_BASE_EXC_SUBCLASS)
+	) {
+		return RESULT_OK;
+	}
+
+	/* The exception's C-level args member sits at offset zero when the first
+	 * base is the exception. BaseException_new would have set it from the
+	 * positional tuple, and str()/repr()/__reduce__ read it without a NULL
+	 * check. `arguments` is the vectorcall array, not a tuple -- the tuple is
+	 * built from it. */
+	PY_MOVABLE(args, PyTuple_New(arguments != NULL ? positional_count : 0));
+
+	if (args == NULL) {
+		return RESULT_ERROR;
+	}
+
+	for (Py_ssize_t i = 0; i < positional_count; ++i) {
+		PyTuple_SET_ITEM(args, i, Py_NewRef(arguments[i]));
+	}
+
+	((PyBaseExceptionObject *) self)->args = py_move(&args);
+
+	return RESULT_OK;
+}
+
 PyObject * Struct_vectorcall(
 	PyObject * const struct_class,
 	PyObject * const * const arguments,
@@ -76,6 +109,10 @@ PyObject * Struct_vectorcall(
 	PY_MOVABLE(self, python_class->tp_alloc(python_class, 0));
 
 	if (self == NULL) {
+		return NULL;
+	}
+
+	if (initialize_exception_args(python_class, self, arguments, positional_count) != RESULT_OK) {
 		return NULL;
 	}
 
@@ -145,7 +182,7 @@ PyObject * Struct_replace(
 
 	PyTypeObject * const cls = &type->heap_type.ht_type;
 
-	if (defines_own_init(type)) {
+	if (defines_own_init(type, NULL, NULL)) {
 		PY_OWNED(changed, PyDict_New());
 
 		if (changed == NULL) {
@@ -241,6 +278,10 @@ PyObject * Struct_replace(
 	PY_MOVABLE(copy, cls->tp_alloc(cls, 0));
 
 	if (copy == NULL) {
+		return NULL;
+	}
+
+	if (initialize_exception_args(cls, copy, NULL, 0) != RESULT_OK) {
 		return NULL;
 	}
 
@@ -341,7 +382,7 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 		}
 	}
 
-	if (defines_own_init(type)) {
+	if (defines_own_init(type, NULL, NULL)) {
 		PY_MOVABLE(keywords, NULL);
 
 		if (dict_values != NULL) {
@@ -414,6 +455,10 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 	PY_MOVABLE(built, cls->tp_alloc(cls, 0));
 
 	if (built == NULL) {
+		return NULL;
+	}
+
+	if (initialize_exception_args(cls, built, NULL, 0) != RESULT_OK) {
 		return NULL;
 	}
 

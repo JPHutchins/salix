@@ -175,6 +175,16 @@ enum result install_fields(
 	bool resolves_body_eq
 );
 enum result install_post_init(StructType * struct_class);
-bool defines_own_init(StructType const * struct_class);
-enum result ensure_singleton(StructType * struct_class, bool bases_divert_setattro);
-enum result install_constructor(StructType * struct_class, bool bases_divert_setattro);
+bool defines_own_init(StructType * struct_class, PyObject * namespace, PyObject * bases);
+enum result ensure_singleton(
+	StructType * struct_class,
+	PyObject * namespace,
+	PyObject * bases,
+	bool bases_divert_setattro
+);
+enum result install_constructor(
+	StructType * struct_class,
+	PyObject * namespace,
+	PyObject * bases,
+	bool bases_divert_setattro
+);

@@ -748,7 +748,7 @@ PyObject * Struct_get_signature(PyObject * const self, void * const closure) {
 		return NULL;
 	}
 
-	if (defines_own_init(type)) {
+	if (defines_own_init(type, NULL, NULL)) {
 		PyErr_SetString(
 			PyExc_AttributeError,
 			"the class defines its own __init__, whose signature answers instead"
