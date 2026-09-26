@@ -389,7 +389,7 @@ class TestMutableDefaults:
     def test_a_subclass_re_probes_an_inherited_default_once_per_class(self):
         """The probe runs when the singleton is built, once per class
         statement -- the inherited default is re-copied for the subclass's own
-        singleton, so the count is one per class, not one per instance.""",
+        singleton, so the count is one per class, not one per instance."""
 
 
         calls = []
