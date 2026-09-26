@@ -25,10 +25,10 @@ done
 [[ -e "$SALIX_WHEEL" ]] || { echo "salix wheel not found: $SALIX_WHEEL" >&2; exit 1; }
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-CHECKOUT="$HERE/vendor/cyclopts-salix"
+CHECKOUT="$HERE/vendor/hydra"
 [[ -e "$CHECKOUT/.git" ]] || { echo "submodule not initialized: $CHECKOUT" >&2; exit 1; }
 
-PIN_SHA="$(git -C "$HERE" ls-tree HEAD vendor/cyclopts-salix | awk '{print $3}')"
+PIN_SHA="$(git -C "$HERE" ls-tree HEAD vendor/hydra | awk '{print $3}')"
 [[ "$(git -C "$CHECKOUT" rev-parse HEAD)" == "$PIN_SHA" ]] || {
     echo "checkout is not at the pinned commit: expected $PIN_SHA, at $(git -C "$CHECKOUT" rev-parse HEAD)" >&2
     exit 1
@@ -60,8 +60,9 @@ trap cleanup EXIT
 if [[ ! -d "$VENV" ]]; then
     uv venv --python "$PYTHON_VERSION" "$VENV"
 fi
-uv pip install --python "$VENV" -r "$HERE/../dataclass-compat/requirements-cyclopts.txt"
-uv pip install --python "$VENV" -e "$CHECKOUT[dev]"
+uv pip install --python "$VENV" -r "$HERE/../dataclass-compat/requirements-hydra.txt"
+uv pip install --python "$VENV" -e "$CHECKOUT"
+uv pip install --python "$VENV" -r "$CHECKOUT/requirements/dev.txt"
 if [[ -d "$SALIX_WHEEL" ]]; then
     WHEEL_LINKS="$SALIX_WHEEL"
 else
@@ -69,7 +70,13 @@ else
 fi
 uv pip install --python "$VENV" --no-index --find-links "$WHEEL_LINKS" --reinstall "salix==$SALIX_VERSION"
 
+if command -v java >/dev/null 2>&1; then
+    ( cd "$CHECKOUT" && "$VENV/bin/python" setup.py antlr )
+else
+    ( cd "$CHECKOUT" && nix shell nixpkgs#jdk17 --command "$VENV/bin/python" setup.py antlr )
+fi
+
 (
     cd "$CHECKOUT"
-    "$VENV/bin/python" -m pytest -p no:cacheprovider tests/ -q
+    PYTHONPATH="$HERE/../dataclass-compat:$HERE" "$VENV/bin/python" -m pytest -p shim_install_plugin -p no:cacheprovider tests/ -q
 )

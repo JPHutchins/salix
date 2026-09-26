@@ -1,23 +1,34 @@
 # source-tiers
 
 Drop-in-replacement proofs for [salix #160](https://github.com/JPHutchins/salix/issues/160):
-consumer libraries with the dataclasses replaced by salix `Struct`s,
-run against their own test suites. No speed claims — the proof is that
-the suites pass.
+the consumer libraries tested against, pinned as git submodules under
+`vendor/` at the tested commits. No speed claims — the proof is the
+suites passing with the consumers' dataclasses/attrs replaced by salix
+`Struct`s.
 
-| library | fork | suite (fork) | suite (stock, same env) |
-|---|---|---|---|
-| tyro | [JPHutchins/tyro-salix](https://github.com/JPHutchins/tyro-salix) PR #1 | 5088 passed, 300 skipped | identical (upstream sha) |
-| cyclopts | [JPHutchins/cyclopts-salix](https://github.com/JPHutchins/cyclopts-salix) PR #1 | 2530 passed, 22 failed, 3 errors | identical (upstream sha) |
+| library | pin | state | suite (pin) | suite (stock, same env) |
+|---|---|---|---|---|
+| tyro | `vendor/tyro-salix` | all 65 internal dataclasses converted to Structs (1 documented exception) | 5088 passed, 300 skipped | 5080 passed, 300 skipped |
+| cyclopts | `vendor/cyclopts-salix` | attrs classes converted to Structs (3 documented exceptions) | 2530 passed, 22 failed, 3 errors | identical |
+| omegaconf | `vendor/omegaconf-salix` | Metadata/ContainerMetadata converted to Structs | 8553 passed, 2 failed, 1 module excluded | 8555 passed |
+| transformers | `vendor/transformers-salix` | the repo-local shim patches only transformers (`include_prefixes`); the parity gate (a checked module, `bench/source-tiers/transformers_parity.py`) asserts 3266 distinct config-bearing classes, that the shim actually converted a config class, and the measured failure counts — 314 import failures with the shim (three more than stock's 311: the shim's known init=False refusals in three torch-adjacent modules) and 37 class-scan failures; `--stock` runs the same count without the shim for the baseline column | 3266 classes, 314 + 37 failures | 3266 classes, 311 + 37 failures (`--stock` measured) |
+| hydra | `vendor/hydra` | patch-tier parity (no source changes; stock upstream pin) | 3264 passed, 2 failed | identical |
 
-The forks change two things: the consumer's dataclasses become salix
-`Struct`s, and the spec readers' dataclass gates also match struct
+The readers widen the spec readers' dataclass gates to match struct
 metadata (tyro's `_struct_compat` / cyclopts' `_struct_field_infos`
-synthesize `dataclasses.Field` objects from `__struct_fields__`/
-`__struct_annotations__`/`__struct_defaults__`, so the existing
-machinery consumes Structs unchanged).
+synthesize `dataclasses.Field` objects from struct metadata), and the
+repos' own classes are Structs with frozen preserved; classes whose
+instances are reassigned after construction are `frozen=False`.
+Documented conversion exceptions: tyro's `InstantiationError`
+(Exception base), cyclopts' `Parameter` and `Group` (attrs converters
+plus init-wrapping recorder / field aliases) and its exception
+classes, and transformers' `PretrainedConfig` family (the
+`__init_subclass__` runtime re-decoration is dataclass machinery).
 
-`run_tyro_salix.sh` and `run_cyclopts_salix.sh` reproduce the suite
-runs from this repo alone: they pin the fork and stock shas, create a
-3.13 venv, and install the salix wheel passed as an argument
-(`--mode fork|stock`).
+Each `run_*_salix.sh` reproduces the suite run from this repo alone:
+the submodule pins the fork, the runner creates a 3.13 venv, installs
+the salix wheel passed as an argument, and runs the suite, removing
+the venv unless `--keep-venv` is given. The hydra and omegaconf legs
+generate antlr parsers first and need java (or a nix JDK); the
+transformers `--suite` leg downloads a tiny Hub config to prove
+`AutoConfig` loading.

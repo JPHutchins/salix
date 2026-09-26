@@ -1,56 +1,75 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-FORK_SHA=296776f1
-STOCK_SHA=d0c9877f
 PYTHON_VERSION=3.13
+SALIX_VERSION=0.1.0
 
 usage() {
-    echo "usage: $0 --salix-wheel <wheel-or-dir> --mode <fork|stock> [--workdir <dir>]" >&2
+    echo "usage: $0 --salix-wheel <wheel-or-dir> [--workdir <dir>] [--keep-venv]" >&2
     exit 2
 }
 
 SALIX_WHEEL=""
-MODE=""
 WORKDIR=""
+KEEP_VENV=0
+OWNED_WORKDIR=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --salix-wheel) SALIX_WHEEL="$2"; shift 2 ;;
-        --mode) MODE="$2"; shift 2 ;;
-        --workdir) WORKDIR="$2"; shift 2 ;;
+        --salix-wheel) [[ $# -ge 2 && $2 != -* ]] || usage; SALIX_WHEEL="$2"; shift 2 ;;
+        --workdir) [[ $# -ge 2 && $2 != -* ]] || usage; WORKDIR="$(realpath "$2")"; shift 2 ;;
+        --keep-venv) KEEP_VENV=1; shift ;;
         *) usage ;;
     esac
 done
-[[ -n "$SALIX_WHEEL" && -n "$MODE" ]] || usage
-[[ "$MODE" == "fork" || "$MODE" == "stock" ]] || usage
+[[ -n "$SALIX_WHEEL" ]] || usage
+[[ -e "$SALIX_WHEEL" ]] || { echo "salix wheel not found: $SALIX_WHEEL" >&2; exit 1; }
 
-WORKDIR="${WORKDIR:-$(mktemp -d)}"
+HERE="$(cd "$(dirname "$0")" && pwd)"
+CHECKOUT="$HERE/vendor/tyro-salix"
+[[ -e "$CHECKOUT/.git" ]] || { echo "submodule not initialized: $CHECKOUT" >&2; exit 1; }
+
+PIN_SHA="$(git -C "$HERE" ls-tree HEAD vendor/tyro-salix | awk '{print $3}')"
+[[ "$(git -C "$CHECKOUT" rev-parse HEAD)" == "$PIN_SHA" ]] || {
+    echo "checkout is not at the pinned commit: expected $PIN_SHA, at $(git -C "$CHECKOUT" rev-parse HEAD)" >&2
+    exit 1
+}
+
+if [[ -z "$WORKDIR" ]]; then
+    WORKDIR="$(mktemp -d)"
+    OWNED_WORKDIR=1
+fi
 VENV="$WORKDIR/venv"
-CHECKOUT="$WORKDIR/tyro"
 
-if [[ ! -d "$CHECKOUT/.git" ]]; then
-    git clone https://github.com/JPHutchins/tyro-salix.git "$CHECKOUT"
-fi
-if [[ "$MODE" == "fork" ]]; then
-    git -C "$CHECKOUT" fetch --depth 1 origin "$FORK_SHA" || true
-    git -C "$CHECKOUT" checkout --detach "$FORK_SHA" 2>/dev/null || true
-else
-    git -C "$CHECKOUT" fetch --depth 1 origin "$STOCK_SHA" || true
-    git -C "$CHECKOUT" checkout --detach "$STOCK_SHA" 2>/dev/null || true
-fi
+cleanup() {
+    status=$?
+
+    if [[ "$KEEP_VENV" -eq 0 ]]; then
+        rm -rf "$VENV"
+
+        if [[ "$OWNED_WORKDIR" -eq 1 ]]; then
+            rm -rf "$WORKDIR"
+        fi
+    elif [[ "$KEEP_VENV" -eq 1 ]]; then
+        echo "venv kept: $VENV"
+    fi
+
+    exit "$status"
+}
+trap cleanup EXIT
 
 if [[ ! -d "$VENV" ]]; then
     uv venv --python "$PYTHON_VERSION" "$VENV"
 fi
+uv pip install --python "$VENV" -r "$HERE/../dataclass-compat/requirements-tyro.txt"
 uv pip install --python "$VENV" -e "$CHECKOUT[dev]"
 if [[ -d "$SALIX_WHEEL" ]]; then
     WHEEL_LINKS="$SALIX_WHEEL"
 else
     WHEEL_LINKS="$(dirname "$SALIX_WHEEL")"
 fi
-uv pip install --python "$VENV" --no-index --find-links "$WHEEL_LINKS" --reinstall salix==0.1.0
+uv pip install --python "$VENV" --no-index --find-links "$WHEEL_LINKS" --reinstall "salix==$SALIX_VERSION"
 
 (
     cd "$CHECKOUT"
-    "$VENV/bin/python" -m pytest tests/ -q
+    "$VENV/bin/python" -m pytest -p no:cacheprovider tests/ -q
 )
