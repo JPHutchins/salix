@@ -55,7 +55,7 @@ static PyObject * copy_bytearray_or_base(PyObject * const declared) {
 	return copy_or_base(declared, PyByteArray_FromObject);
 }
 
-static default_copier copies_default(PyTypeObject const * const kind) {
+static default_copier copies_default(PyTypeObject * const kind) {
 	if (PyType_IsSubtype(kind, &PyList_Type)) {
 		return copy_list_or_base;
 	}
@@ -75,7 +75,7 @@ static default_copier copies_default(PyTypeObject const * const kind) {
 	return NULL;
 }
 
-bool struct_copies_default(PyTypeObject const * const kind) {
+bool struct_copies_default(PyTypeObject * const kind) {
 	return copies_default(kind) != NULL;
 }
 
