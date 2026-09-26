@@ -628,6 +628,10 @@ if sys.version_info >= (3, 11):
         flag: bool = False
         message: str = ""
 
+    class ExceptionsFirst(ExceptionGroup, Struct, frozen=False):
+        exceptions: list = ()
+        note: str = ""
+
 
 @pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
 def test_replace_runs_on_an_own_init_group_struct():
@@ -901,12 +905,101 @@ def test_an_exceptions_only_group_struct_pickles_round_trip():
 
 @pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
 def test_a_two_positional_exceptions_only_construction_binds_by_declaration():
+    import pickle
+
     group = PrefixedExceptions("m", [ValueError("q")])
 
     assert group.flag == "m"
     assert len(group.exceptions) == 1
     assert group.exceptions[0].args == ("q",)
     assert str(group) == "m (1 sub-exception)"
+    assert group.args[0] == "m"
+
+    restored = pickle.loads(pickle.dumps(group))
+
+    assert restored.flag == "m"
+    assert len(restored.exceptions) == 1
+    assert restored.exceptions[0].args == ("q",)
+    assert str(restored) == "m (1 sub-exception)"
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
+def test_a_two_positional_exceptions_first_construction_binds_the_body():
+    import pickle
+
+    group = ExceptionsFirst("m", [ValueError("q")])
+
+    assert len(group.exceptions) == 1
+    assert group.exceptions[0].args == ("q",)
+    assert group.note == ""
+    assert str(group) == "m (1 sub-exception)"
+
+    restored = pickle.loads(pickle.dumps(group))
+
+    assert len(restored.exceptions) == 1
+    assert restored.exceptions[0].args == ("q",)
+    assert str(restored) == "m (1 sub-exception)"
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
+def test_a_self_referential_family_payload_deepcopies():
+    import copy
+
+    class F(OSError, Struct, frozen=False):
+        pass
+
+    f = F(2, "m")
+    f.args = (f,)
+    copied = copy.deepcopy(f)
+
+    assert isinstance(copied.args[0], F)
+    assert copied.args[0] is not f
+
+    class M(Exception, Struct, frozen=False):
+        pass
+
+    m = M()
+    m.args = (m,)
+    copied_m = copy.deepcopy(m)
+
+    assert copied_m.args[0] is copied_m
+
+
+def test_a_subclass_of_a_none_new_struct_refuses_every_entry_point():
+    import salix
+
+    class PA(Struct, frozen=False):
+        x: int = 0
+        __new__ = None
+
+    class PB(PA):
+        pass
+
+    with pytest.raises(TypeError, match="cannot create"):
+        PB(7)
+
+    with pytest.raises(TypeError, match="cannot create"):
+        salix.from_mapping(PA, {"x": 5})
+
+    with pytest.raises(TypeError, match="cannot create"):
+        salix.from_mapping(PB, {"x": 5})
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
+def test_from_mapping_refuses_a_none_new_own_init_group_struct():
+    import salix
+
+    class NoneNewGroup(ExceptionGroup, Struct, frozen=False):
+        message: str
+        exceptions: list
+        __new__ = None
+
+        def __init__(self, message, exceptions):
+            self.message = message
+            self.exceptions = exceptions
+
+    with pytest.raises(TypeError, match="cannot create"):
+        salix.from_mapping(NoneNewGroup, {"message": "m", "exceptions": [ValueError()]})
 
 
 @pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")

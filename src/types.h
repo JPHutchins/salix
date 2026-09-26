@@ -44,6 +44,7 @@ typedef struct StructType {
 	bool struct_family_owned;
 	bool struct_group_family;
 	bool struct_own_init;
+	bool struct_cannot_create;
 	initproc struct_installed_init;
 	Py_ssize_t struct_message_index;
 	Py_ssize_t struct_exceptions_index;

@@ -245,6 +245,13 @@ static enum result store_group_args(
 			packed = PyTuple_Pack(2, message, exceptions);
 		} else if (message != NULL) {
 			packed = PyTuple_Pack(1, message);
+		} else if (exceptions != NULL && type->struct_field_count >= 2) {
+			/* No message field: the carried or family-written member is the
+			 * message, and the two-item payload reconstructs through the
+			 * family shape, which round-trips it -- where the struct's own
+			 * arity accepts two positionals. */
+			PyBaseExceptionGroupObject * const group = (PyBaseExceptionGroupObject *) self;
+			packed = PyTuple_Pack(2, group->msg, exceptions);
 		} else if (exceptions != NULL) {
 			packed = PyTuple_Pack(1, exceptions);
 		} else {
@@ -253,12 +260,12 @@ static enum result store_group_args(
 	} else {
 		PyBaseExceptionGroupObject * const group = (PyBaseExceptionGroupObject *) self;
 
-		if (has_message && has_exceptions) {
+		if (has_exceptions && type->struct_field_count >= 2) {
 			packed = PyTuple_Pack(2, group->msg, group->excs);
-		} else if (has_message) {
-			packed = PyTuple_Pack(1, group->msg);
 		} else if (has_exceptions) {
 			packed = PyTuple_Pack(1, group->excs);
+		} else if (has_message) {
+			packed = PyTuple_Pack(1, group->msg);
 		} else {
 			return RESULT_OK;
 		}
@@ -769,6 +776,15 @@ PyObject * Struct_replace(
 	StructType * const type = struct_type_of(self);
 	Py_ssize_t const change_count = keyword_names != NULL ? PyTuple_GET_SIZE(keyword_names) : 0;
 
+	/* A body __new__ = None is the cannot-create marker the install
+	 * normalized to a NULL slot; every construction entry point reads it,
+	 * the vectorcall's guard included. */
+	if (type->heap_type.ht_type.tp_new == NULL) {
+		PyErr_Format(PyExc_TypeError, "cannot create '%.100s' instances", struct_type_name(type));
+
+		return NULL;
+	}
+
 	if (change_count == 0 && type->struct_options.frozen) {
 		return Py_NewRef(self);
 	}
@@ -1162,6 +1178,15 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 
 	StructType * const type = (StructType *) struct_class;
 
+	/* A body __new__ = None is the cannot-create marker the install
+	 * normalized to a NULL slot; every construction entry point reads it,
+	 * the vectorcall's guard included. */
+	if (type->heap_type.ht_type.tp_new == NULL) {
+		PyErr_Format(PyExc_TypeError, "cannot create '%.100s' instances", struct_type_name(type));
+
+		return NULL;
+	}
+
 	/* The fallback acquires items once and validates every pair at the
 	 * boundary, so the bind loop, the own-init kwargs and the pair-shape
 	 * error all read the same list. A list is PyMapping_Check-true through
@@ -1349,7 +1374,12 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 
 #if PY_VERSION_HEX >= 0x030B0000
 	if (type->struct_group_family) {
-		PyObject * const args = ((PyBaseExceptionObject *) built)->args;
+		PyObject * args;
+
+		STRUCT_BEGIN_CRITICAL_SECTION(built);
+		args = Py_XNewRef(((PyBaseExceptionObject *) built)->args);
+		STRUCT_END_CRITICAL_SECTION();
+
 		PY_MOVABLE(group_msg_fallback, NULL);
 
 		if (type->struct_message_index < 0) {
@@ -1360,6 +1390,8 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 				PyUnicode_FromString("")
 			);
 		}
+
+		Py_XDECREF(args);
 
 		if (
 			(group_msg_fallback == NULL && PyErr_Occurred()) ||
@@ -1458,6 +1490,12 @@ static void bind_positional(
 
 			if (*struct_slot(type, self, target) == NULL) {
 				*struct_slot(type, self, target) = Py_NewRef(arguments[i]);
+			} else if (family_constructed && i == 1 && target == type->struct_exceptions_index) {
+				/* The family accepted the shape, so positional 1 IS the
+				 * body: it wins the exceptions slot over a positional 0
+				 * that fell through to declaration order at the same
+				 * index. */
+				Py_SETREF(*struct_slot(type, self, target), Py_NewRef(arguments[i]));
 			}
 		}
 

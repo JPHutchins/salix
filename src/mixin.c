@@ -409,6 +409,16 @@ static PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 
 	StructType * const type = struct_type_of(self);
 	PyTypeObject * const cls = &type->heap_type.ht_type;
+
+	/* A body __new__ = None is the cannot-create marker the install
+	 * normalized to a NULL slot; every construction entry point reads it,
+	 * the vectorcall's guard included. */
+	if (cls->tp_new == NULL) {
+		PyErr_Format(PyExc_TypeError, "cannot create '%.100s' instances", cls->tp_name);
+
+		return NULL;
+	}
+
 	PY_MOVABLE(copy_module, NULL);
 	PY_MOVABLE(copier, NULL);
 	PY_MOVABLE(
@@ -592,6 +602,16 @@ static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) 
 
 	StructType * const type = struct_type_of(self);
 	PyTypeObject * const cls = &type->heap_type.ht_type;
+
+	/* A body __new__ = None is the cannot-create marker the install
+	 * normalized to a NULL slot; every construction entry point reads it,
+	 * the vectorcall's guard included. */
+	if (cls->tp_new == NULL) {
+		PyErr_Format(PyExc_TypeError, "cannot create '%.100s' instances", cls->tp_name);
+
+		return NULL;
+	}
+
 	PY_MOVABLE(copy_module, NULL);
 	PY_MOVABLE(copier, NULL);
 	PY_MOVABLE(
@@ -676,6 +696,22 @@ static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) 
 		}
 
 		if (PyTuple_GET_SIZE(args) > 0) {
+			/* The shell registers before the payload's deep copy, so a
+			 * self-referential args tuple resolves to it instead of
+			 * re-entering deepcopy on the source forever; the memo entry
+			 * then moves to the rebuilt copy. */
+			PY_MOVABLE(shell, cls->tp_alloc(cls, 0));
+
+			if (shell == NULL) {
+				Py_DECREF(args);
+
+				return NULL;
+			}
+
+			if (PyDict_SetItem(memo, key, shell) < 0) {
+				return NULL;
+			}
+
 			PY_MOVABLE(deep_args, PyObject_CallFunctionObjArgs(deepcopy, args, memo, NULL));
 			Py_DECREF(args);
 
@@ -686,10 +722,14 @@ static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) 
 			PY_MOVABLE(rebuilt, PyObject_Call((PyObject *) cls, deep_args, NULL));
 
 			if (rebuilt == NULL) {
-				return NULL;
+				return memo_failure(memo, key);
 			}
 
 			copy = py_move(&rebuilt);
+
+			if (PyDict_SetItem(memo, key, copy) < 0) {
+				return NULL;
+			}
 		} else {
 			/* An empty payload marks a from_mapping-built source: the
 			 * family's parse has nothing to reconstruct, and the plain
