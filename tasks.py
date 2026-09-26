@@ -125,6 +125,7 @@ tooling = Task(
     TYPE_CHECK + " --with mypy --with camas --with setuptools --with types-setuptools"
     " --with msgspec --with record-type"
     " mypy --strict --warn-unused-ignores --explicit-package-bases"
+    " --exclude bench/source-tiers/vendor"
     " setup.py tasks.py build_config.py tools/ bench/",
     env={"MYPYPATH": "."},
 )
