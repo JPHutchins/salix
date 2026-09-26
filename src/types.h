@@ -41,6 +41,7 @@ typedef struct StructType {
 	bool struct_resolves_body_eq;
 	bool struct_author_new;
 	bool struct_family_owned;
+	bool struct_group_family;
 	bool struct_own_init;
 	initproc struct_installed_init;
 } StructType;
@@ -52,6 +53,25 @@ typedef struct StructType {
  * hands it out, so a subclass of it whose metaclass is plain `type` reaches
  * every slot the mixin installs while being no such thing.
  */
+static inline PyObject * group_excs_str(PyObject * const source) {
+#if PY_VERSION_HEX >= 0x030D0C00
+	if (Py_Version >= 0x030D0C00) {
+		PyObject * const cached = ((PyBaseExceptionGroupObject *) source)->excs_str;
+
+		return cached != NULL ? Py_XNewRef(cached) : NULL;
+	}
+#endif
+
+	return NULL;
+}
+
+static inline bool is_exception_struct(PyTypeObject * const cls) {
+	return (
+		PyType_FastSubclass(cls, Py_TPFLAGS_BASE_EXC_SUBCLASS) &&
+		PyType_FastSubclass(cls->tp_base, Py_TPFLAGS_BASE_EXC_SUBCLASS)
+	);
+}
+
 static inline bool is_struct_class(PyObject * const object) {
 	return PyObject_TypeCheck(object, &StructMeta_Type);
 }

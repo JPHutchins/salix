@@ -89,6 +89,7 @@ static bool author_new_in_chain(PyTypeObject * const cls) {
 }
 
 static bool family_owns_in_mro(PyTypeObject * const cls);
+static bool group_family_in_mro(PyTypeObject * const cls);
 
 enum result install_constructor(
 	StructType * const struct_class,
@@ -144,6 +145,7 @@ enum result install_constructor(
 	 * copy paths read them instead of re-walking per call. */
 	struct_class->struct_author_new = author_new_in_chain(&struct_class->heap_type.ht_type);
 	struct_class->struct_family_owned = family_owns_in_mro(&struct_class->heap_type.ht_type);
+	struct_class->struct_group_family = group_family_in_mro(&struct_class->heap_type.ht_type);
 
 	if (install_post_init(struct_class) != RESULT_OK) {
 		return RESULT_ERROR;
@@ -298,6 +300,23 @@ static enum init_owner namespace_init_owner(PyTypeObject * const type, PyObject 
 	}
 
 	return present == 1 ? INIT_OWNER_AUTHOR : INIT_OWNER_NONE;
+}
+
+static bool group_family_in_mro(PyTypeObject * const cls) {
+#if PY_VERSION_HEX >= 0x030B0000
+	PyObject * const mro = cls->tp_mro;
+
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); ++i) {
+		if (
+			PyExc_BaseExceptionGroup != NULL &&
+			(PyTypeObject *) PyTuple_GET_ITEM(mro, i) == (PyTypeObject *) PyExc_BaseExceptionGroup
+		) {
+			return true;
+		}
+	}
+#endif
+
+	return false;
 }
 
 static bool family_owns_in_mro(PyTypeObject * const cls) {

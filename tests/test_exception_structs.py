@@ -594,3 +594,44 @@ def test_from_mapping_refuses_a_non_sequence_group_body():
 
     with pytest.raises(TypeError):
         salix.from_mapping(EG2, {"message": "m", "exceptions": 5})
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
+def test_keyword_construction_carries_the_group_body():
+    error = EG2(message="m", exceptions=[ValueError("q")])
+
+    assert len(error.exceptions) == 1
+    assert str(error) == "m (1 sub-exception)"
+
+
+if sys.version_info >= (3, 11):
+    class OwnInitGroup(ExceptionGroup, Struct, frozen=False):
+        message: str
+        exceptions: list
+
+        def __init__(self, message, exceptions):
+            self.message = message
+            self.exceptions = exceptions
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
+def test_replace_runs_on_an_own_init_group_struct():
+    import salix
+
+    replaced = salix.replace(OwnInitGroup("m", [ValueError()]), message="n")
+
+    assert replaced.message == "n"
+    assert str(replaced) == "m (1 sub-exception)"
+
+
+def test_a_from_mapping_built_family_struct_copies_without_fabricated_members():
+    import copy
+
+    import salix
+
+    error = salix.from_mapping(FileError, {"code": 9})
+
+    assert error.args == ()
+    assert copy.copy(error).errno is None
+    assert copy.deepcopy(error).errno is None
+    assert salix.replace(error, code=5).errno is None

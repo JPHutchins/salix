@@ -97,12 +97,12 @@ enum result set_exception_args_from_original(
 	PyObject * deepcopier,
 	PyObject * memo
 );
-bool is_group_family(PyTypeObject const * cls);
 enum result carry_group_members(
 	StructType * type,
 	PyObject * self,
 	PyObject * msg,
 	PyObject * excs,
+	PyObject * excs_str,
 	PyObject * deepcopier,
 	PyObject * memo
 );

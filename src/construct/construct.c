@@ -40,27 +40,36 @@ static PyObject * interned_value(StructType const * const type, bool const no_ar
 	return (singleton != NULL && no_arguments) ? Py_NewRef(singleton) : NULL;
 }
 
-bool is_group_family(PyTypeObject const * const cls) {
 #if PY_VERSION_HEX >= 0x030B0000
-	return (
-		PyExc_BaseExceptionGroup != NULL &&
-		cls->tp_new == ((PyTypeObject *) PyExc_BaseExceptionGroup)->tp_new
-	);
-#else
-	return false;
-#endif
+static PyObject * group_body_from_field(StructType * const type, PyObject * const self) {
+	/* A field named exceptions carries the group body; nothing else could
+	 * have written the member, which is a tuple by the group's contract.
+	 * NULL without an error means no body; the tuple conversion's failure
+	 * keeps its error for the caller. */
+	PY_OWNED(exceptions_name, PyUnicode_FromString("exceptions"));
+	struct field_lookup const found = find_field(type, exceptions_name);
+
+	if (found.tag != FIELD_LOOKUP_FOUND) {
+		return NULL;
+	}
+
+	PyObject * const body = *struct_slot(type, self, found.index);
+
+	return body == NULL ? NULL : (PyTuple_Check(body) ? Py_NewRef(body) : PySequence_Tuple(body));
 }
+#endif
 
 enum result carry_group_members(
 	StructType * const type,
 	PyObject * self,
 	PyObject * const msg,
 	PyObject * const excs,
+	PyObject * const excs_str,
 	PyObject * const deepcopier,
 	PyObject * const memo
 ) {
 #if PY_VERSION_HEX >= 0x030B0000
-	if (is_group_family(&type->heap_type.ht_type)) {
+	if (type->struct_group_family) {
 		/* The family's __new__ is the group members' only writer; every
 		 * tp_alloc arm carries them itself so str()/repr()/raise never read
 		 * NULL. The deep copy detaches the body through the memo. */
@@ -87,8 +96,13 @@ enum result carry_group_members(
 			/* 3.13.12+ backported the cached excs string: its repr
 			 * dereferences it on 3.14 and, without it, reads args[1] past a
 			 * one-item payload on 3.13.12+. The runtime check keeps a wheel
-			 * built here off an older patch's shorter layout. */
-			group->excs_str = group->excs != NULL ? PyObject_Repr(group->excs) : NULL;
+			 * built here off an older patch's shorter layout. The source's
+			 * cache answers when one exists; the repr is the rebuild. */
+			group->excs_str = (
+				excs_str != NULL ? Py_NewRef(excs_str) :
+				group->excs != NULL ? PyObject_Repr(group->excs) :
+				NULL
+			);
 			complete = complete && group->excs_str != NULL;
 		}
 #	endif
@@ -127,10 +141,7 @@ enum result set_exception_args_from_fields(
 ) {
 	PyTypeObject * const cls = &type->heap_type.ht_type;
 
-	if (
-		!PyType_FastSubclass(cls, Py_TPFLAGS_BASE_EXC_SUBCLASS) ||
-		!PyType_FastSubclass(cls->tp_base, Py_TPFLAGS_BASE_EXC_SUBCLASS)
-	) {
+	if (!is_exception_struct(cls)) {
 		return RESULT_OK;
 	}
 
@@ -170,10 +181,7 @@ enum result set_exception_args_from_original(
 ) {
 	PyTypeObject * const cls = &type->heap_type.ht_type;
 
-	if (
-		!PyType_FastSubclass(cls, Py_TPFLAGS_BASE_EXC_SUBCLASS) ||
-		!PyType_FastSubclass(cls->tp_base, Py_TPFLAGS_BASE_EXC_SUBCLASS)
-	) {
+	if (!is_exception_struct(cls)) {
 		return RESULT_OK;
 	}
 
@@ -216,10 +224,7 @@ static void set_exception_args_from_positionals(
 	PyObject * const self,
 	PyObject * const positionals
 ) {
-	if (
-		!PyType_FastSubclass(cls, Py_TPFLAGS_BASE_EXC_SUBCLASS) ||
-		!PyType_FastSubclass(cls->tp_base, Py_TPFLAGS_BASE_EXC_SUBCLASS)
-	) {
+	if (!is_exception_struct(cls)) {
 		return;
 	}
 
@@ -264,10 +269,7 @@ static Py_ssize_t explicit_field_prefix(
 static Py_ssize_t carried_payload_count(StructType * const type, PyObject * const self) {
 	PyTypeObject * const cls = &type->heap_type.ht_type;
 
-	if (
-		!PyType_FastSubclass(cls, Py_TPFLAGS_BASE_EXC_SUBCLASS) ||
-		!PyType_FastSubclass(cls->tp_base, Py_TPFLAGS_BASE_EXC_SUBCLASS)
-	) {
+	if (!is_exception_struct(cls)) {
 		return 0;
 	}
 
@@ -373,10 +375,7 @@ PyObject * Struct_vectorcall(
 	}
 
 	PyTypeObject * const python_class = &type->heap_type.ht_type;
-	bool const exception_struct = (
-		PyType_FastSubclass(python_class, Py_TPFLAGS_BASE_EXC_SUBCLASS) &&
-		PyType_FastSubclass(python_class->tp_base, Py_TPFLAGS_BASE_EXC_SUBCLASS)
-	);
+	bool const exception_struct = is_exception_struct(python_class);
 
 	/* A body __new__ = None is the cannot-create marker the install
 	 * normalized to a NULL slot; every struct reads it, exception or
@@ -470,33 +469,6 @@ PyObject * Struct_vectorcall(
 		if (self == NULL) {
 			return NULL;
 		}
-
-#if PY_VERSION_HEX >= 0x030B0000
-		if (is_group_family(python_class) && ((PyBaseExceptionGroupObject *) self)->msg == NULL) {
-			/* The family's __new__ is the group members' only writer; a
-			 * construction that reached the allocation without it -- the
-			 * fallback, or an author __new__ that allocated elsewhere --
-			 * still carries them, so str()/repr()/raise never read NULL.
-			 * The message mirrors the first supplied value. */
-			PY_MOVABLE(group_msg, (
-				positional_count > 0 ? PyObject_Str(arguments[0]) :
-				keyword_names != NULL && PyTuple_GET_SIZE(
-					keyword_names
-				) > 0 ? PyObject_Str(arguments[positional_count]) :
-				PyUnicode_FromString("")
-			));
-
-			if (group_msg == NULL) {
-				Py_CLEAR(self);
-			} else if (carry_group_members(type, self, group_msg, NULL, NULL, NULL) != RESULT_OK) {
-				return NULL;
-			}
-
-			if (self == NULL) {
-				return NULL;
-			}
-		}
-#endif
 	} else {
 		self = python_class->tp_alloc(python_class, 0);
 
@@ -513,6 +485,38 @@ PyObject * Struct_vectorcall(
 	) {
 		return NULL;
 	}
+
+#if PY_VERSION_HEX >= 0x030B0000
+	if (type->struct_group_family && ((PyBaseExceptionGroupObject *) self)->msg == NULL) {
+		/* The family's __new__ is the group members' only writer; a
+		 * construction that reached the allocation without it -- the
+		 * fallback, or an author __new__ that allocated elsewhere -- still
+		 * carries them, so str()/repr()/raise never read NULL. The
+		 * message mirrors the first supplied value, and a bound field
+		 * named exceptions carries the body the caller supplied. */
+		PY_MOVABLE(group_msg, (
+			positional_count > 0 ? PyObject_Str(arguments[0]) :
+			keyword_names != NULL && PyTuple_GET_SIZE(
+				keyword_names
+			) > 0 ? PyObject_Str(arguments[positional_count]) :
+			PyUnicode_FromString("")
+		));
+		PY_MOVABLE(group_excs, group_body_from_field(type, self));
+
+		if (group_msg == NULL || (group_excs == NULL && PyErr_Occurred())) {
+			Py_CLEAR(self);
+		} else if (
+			carry_group_members(type, self, group_msg, group_excs, NULL, NULL, NULL) !=
+			RESULT_OK
+		) {
+			return NULL;
+		}
+
+		if (self == NULL) {
+			return NULL;
+		}
+	}
+#endif
 
 	Py_ssize_t explicit_count = 0;
 
@@ -557,11 +561,14 @@ int Struct_init_wrapper(
 	/* The own-init path runs the author's or the family's init after the
 	 * allocation, so the fields are not bound here; the positional tuple
 	 * is the payload when the family's tp_new wrote nothing (a keyword
-	 * shaped family call normalizes its own). */
-	if (
-		PyType_FastSubclass(cls, Py_TPFLAGS_BASE_EXC_SUBCLASS) &&
-		PyType_FastSubclass(cls->tp_base, Py_TPFLAGS_BASE_EXC_SUBCLASS)
-	) {
+	 * shaped family call normalizes its own). A captured NULL answers
+	 * when the init was deleted from an ancestor, and the defaults fill
+	 * above is all the construction needs. */
+	if (type->struct_installed_init == NULL) {
+		return 0;
+	}
+
+	if (is_exception_struct(cls)) {
 		PyObject * args;
 
 		STRUCT_BEGIN_CRITICAL_SECTION(self);
@@ -629,8 +636,8 @@ PyObject * Struct_replace(
 
 		PY_MOVABLE(replaced, NULL);
 
-		if (type->struct_family_owned) {
-			/* The family's init owns the call shape and rejects field
+		if (type->struct_family_owned || type->struct_group_family) {
+			/* The family's construction owns the call shape and rejects field
 			 * keywords; the source's positional payload reconstructs the
 			 * members and args, and the changes land on the fields
 			 * directly. */
@@ -648,7 +655,15 @@ PyObject * Struct_replace(
 				return NULL;
 			}
 
-			replaced = PyObject_Call((PyObject *) cls, positionals, NULL);
+			if (PyTuple_GET_SIZE(positionals) > 0) {
+				replaced = PyObject_Call((PyObject *) cls, positionals, NULL);
+			} else {
+				/* An empty payload marks a from_mapping-built source: the
+				 * family's parse has nothing to reconstruct, and the plain
+				 * allocation keeps the members exactly as the source left
+				 * them -- unset, not fabricated. */
+				replaced = cls->tp_alloc(cls, 0);
+			}
 
 			if (replaced != NULL) {
 				/* The constructor pre-filled the defaults; the source's
@@ -778,11 +793,19 @@ PyObject * Struct_replace(
 	struct_slots_copy_into(type, self, copy, &source_dict);
 
 #if PY_VERSION_HEX >= 0x030B0000
-	if (is_group_family(cls)) {
+	if (type->struct_group_family) {
 		PyBaseExceptionGroupObject * const source_group = (PyBaseExceptionGroupObject *) self;
 
 		if (
-			carry_group_members(type, copy, source_group->msg, source_group->excs, NULL, NULL) !=
+			carry_group_members(
+				type,
+				copy,
+				source_group->msg,
+				source_group->excs,
+				group_excs_str(self),
+				NULL,
+				NULL
+			) !=
 			RESULT_OK
 		) {
 			return NULL;
@@ -794,9 +817,11 @@ PyObject * Struct_replace(
 	 * replaced instance carries it forward, so a change behind a gap keeps
 	 * the leading fields in the payload and the result pickles. */
 	Py_ssize_t const explicit_count = (
-		PyType_FastSubclass(cls, Py_TPFLAGS_BASE_EXC_SUBCLASS) &&
-		PyType_FastSubclass(cls->tp_base, Py_TPFLAGS_BASE_EXC_SUBCLASS)
-	) ? explicit_field_prefix(type, 0, keyword_names, carried_payload_count(type, self)) : 0;
+		is_exception_struct(
+			cls
+		) ? explicit_field_prefix(type, 0, keyword_names, carried_payload_count(type, self)) :
+		0
+	);
 
 	if (explicit_count < 0) {
 		return NULL;
@@ -805,7 +830,10 @@ PyObject * Struct_replace(
 	if (
 		set_exception_args_from_fields(type, copy, explicit_count) != RESULT_OK ||
 		run_post_init(type, copy) != RESULT_OK ||
-		set_exception_args_from_fields(type, copy, explicit_count) != RESULT_OK
+		(
+			type->struct_post_init != NULL &&
+			set_exception_args_from_fields(type, copy, explicit_count) != RESULT_OK
+		)
 	) {
 		return NULL;
 	}
@@ -1002,10 +1030,9 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 	}
 
 	Py_ssize_t const explicit_count = (
-		(
-			PyType_FastSubclass(cls, Py_TPFLAGS_BASE_EXC_SUBCLASS) &&
-			PyType_FastSubclass(cls->tp_base, Py_TPFLAGS_BASE_EXC_SUBCLASS)
-		) ? (
+		is_exception_struct(
+			cls
+		) && !type->struct_family_owned ? (
 			dict_values != NULL ? explicit_dict_prefix(type, dict_values) :
 			explicit_items_prefix(type, items, entry_count)
 		) :
@@ -1025,7 +1052,7 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 	}
 
 #if PY_VERSION_HEX >= 0x030B0000
-	if (is_group_family(cls)) {
+	if (type->struct_group_family) {
 		PyObject * const args = ((PyBaseExceptionObject *) built)->args;
 		PY_MOVABLE(group_msg, (
 			args != NULL && PyTuple_GET_SIZE(args) > 0 ? PyObject_Str(PyTuple_GET_ITEM(args, 0)) :
@@ -1063,7 +1090,8 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 
 			if (
 				exceptions_name == NULL ||
-				carry_group_members(type, built, group_msg, group_excs, NULL, NULL) != RESULT_OK
+				carry_group_members(type, built, group_msg, group_excs, NULL, NULL, NULL) !=
+					RESULT_OK
 			) {
 				return NULL;
 			}

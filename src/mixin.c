@@ -459,14 +459,23 @@ static PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 			return NULL;
 		}
 
-		PY_MOVABLE(rebuilt, PyObject_Call((PyObject *) cls, args, NULL));
-		Py_DECREF(args);
+		if (PyTuple_GET_SIZE(args) > 0) {
+			PY_MOVABLE(rebuilt, PyObject_Call((PyObject *) cls, args, NULL));
+			Py_DECREF(args);
 
-		if (rebuilt == NULL) {
-			return NULL;
+			if (rebuilt == NULL) {
+				return NULL;
+			}
+
+			copy = py_move(&rebuilt);
+		} else {
+			/* An empty payload marks a from_mapping-built source: the
+			 * family's parse has nothing to reconstruct, and the plain
+			 * allocation keeps the members exactly as the source left
+			 * them -- unset, not fabricated. */
+			Py_DECREF(args);
+			copy = cls->tp_alloc(cls, 0);
 		}
-
-		copy = py_move(&rebuilt);
 
 		for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
 			PyObject * const value = *struct_slot(type, self, i);
@@ -487,11 +496,19 @@ static PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 	struct_slots_copy_into(type, self, copy, &dict);
 
 #if PY_VERSION_HEX >= 0x030B0000
-	if (is_group_family(cls)) {
+	if (type->struct_group_family) {
 		PyBaseExceptionGroupObject * const source_group = (PyBaseExceptionGroupObject *) self;
 
 		if (
-			carry_group_members(type, copy, source_group->msg, source_group->excs, NULL, NULL) !=
+			carry_group_members(
+				type,
+				copy,
+				source_group->msg,
+				source_group->excs,
+				group_excs_str(self),
+				NULL,
+				NULL
+			) !=
 			RESULT_OK
 		) {
 			return NULL;
@@ -638,20 +655,29 @@ static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) 
 			return NULL;
 		}
 
-		PY_MOVABLE(deep_args, PyObject_CallFunctionObjArgs(deepcopy, args, memo, NULL));
-		Py_DECREF(args);
+		if (PyTuple_GET_SIZE(args) > 0) {
+			PY_MOVABLE(deep_args, PyObject_CallFunctionObjArgs(deepcopy, args, memo, NULL));
+			Py_DECREF(args);
 
-		if (deep_args == NULL) {
-			return memo_failure(memo, key);
+			if (deep_args == NULL) {
+				return memo_failure(memo, key);
+			}
+
+			PY_MOVABLE(rebuilt, PyObject_Call((PyObject *) cls, deep_args, NULL));
+
+			if (rebuilt == NULL) {
+				return NULL;
+			}
+
+			copy = py_move(&rebuilt);
+		} else {
+			/* An empty payload marks a from_mapping-built source: the
+			 * family's parse has nothing to reconstruct, and the plain
+			 * allocation keeps the members exactly as the source left
+			 * them -- unset, not fabricated. */
+			Py_DECREF(args);
+			copy = cls->tp_alloc(cls, 0);
 		}
-
-		PY_MOVABLE(rebuilt, PyObject_Call((PyObject *) cls, deep_args, NULL));
-
-		if (rebuilt == NULL) {
-			return NULL;
-		}
-
-		copy = py_move(&rebuilt);
 
 		for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
 			PyObject * const value = *struct_slot(type, self, i);
@@ -731,7 +757,7 @@ static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) 
 	}
 
 #if PY_VERSION_HEX >= 0x030B0000
-	if (is_group_family(cls)) {
+	if (type->struct_group_family) {
 		PyBaseExceptionGroupObject * const source_group = (PyBaseExceptionGroupObject *) self;
 
 		if (
@@ -740,6 +766,7 @@ static PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) 
 				copy,
 				source_group->msg,
 				source_group->excs,
+				group_excs_str(self),
 				deepcopy,
 				memo
 			) !=
