@@ -151,28 +151,6 @@ assert all(
 )
 
 
-def _shares_mutable_contents(value: object) -> bool:
-    """The type says it hashes and the instance then refuses, which is how a
-    container of something mutable answers. `refuse_shared_mutable_contents` in
-    src/fields.c is what this mirrors. ValueError as well as TypeError: a
-    writable memoryview raises the first.
-    """
-
-    if type(value).__hash__ is None:
-        return False
-
-    try:
-        hash(value)
-    except (TypeError, ValueError):
-        return True
-
-    return False
-
-
-# What salix refuses as a class-body default for holding something mutable that
-# every instance would otherwise share. Selected from EVERY rather than built
-# fresh, because the callers below test identity against the parametrized value.
-
 
 def identify(value: object) -> str:
     """A stable, readable parametrize id for values whose repr is unwieldy."""

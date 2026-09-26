@@ -310,18 +310,20 @@ class TestMutableDefaults:
         assert Holder._struct_defaults_[0] is value
 
     @pytest.mark.parametrize(
-        "value",
+        "value, inner",
         [
-            pytest.param(([],), id="a_tuple_of_a_list"),
-            pytest.param(((1, []),), id="a_tuple_two_deep"),
-            pytest.param((frozenset(), []), id="a_pair_holding_one_of_each"),
+            pytest.param(([],), (0,), id="a_tuple_of_a_list"),
+            pytest.param(((1, []),), (0, 1), id="a_tuple_two_deep"),
+            pytest.param((frozenset(), []), (1,), id="a_pair_holding_one_of_each"),
         ],
     )
-    def test_a_shallowly_immutable_container_of_something_mutable_is_deep_copied(self, value):
+    def test_a_shallowly_immutable_container_of_something_mutable_is_deep_copied(self, value, inner):
         """#167: where the old rule refused, the default is now accepted and
         deep-copied per instance -- `xs: object = ([],)` no longer hands every
-        instance the same inner list. Values a deepcopy cannot carry (a
-        writable memoryview) fall back to sharing, pinned by the test below.
+        instance the same inner list. The copy is deep: mutating an inner
+        element is invisible to the other instance. Values a deepcopy cannot
+        carry (a writable memoryview) fall back to sharing, pinned by the
+        test below.
         """
 
         class Holder(Struct):
@@ -330,6 +332,17 @@ class TestMutableDefaults:
         first, second = Holder(), Holder()
 
         assert first.v is not second.v
+
+        first_inner = first.v
+        second_inner = second.v
+
+        for step in inner:
+            first_inner = first_inner[step]
+            second_inner = second_inner[step]
+
+        first_inner.append(9)
+
+        assert 9 not in second_inner
 
     def test_a_value_a_deepcopy_cannot_carry_is_shared(self):
         """The deep path falls back to the old sharing for values deepcopy
@@ -386,10 +399,55 @@ class TestMutableDefaults:
         assert calls == [1]
         assert Holder().v is value
 
+    def test_an_author_hash_exception_propagates_past_later_fields(self):
+        """A later field's probe used to clear the pending exception; the
+        author's error must reach the class statement in either field order."""
+
+        class Angry:
+            def __hash__(self) -> int:
+                raise RuntimeError("boom")
+
+        with pytest.raises(RuntimeError, match="boom"):
+
+            class AngryFirst(Struct):
+                a: object = Angry()
+                b: object = ([],)
+
+        with pytest.raises(RuntimeError, match="boom"):
+
+            class AngrySecond(Struct):
+                a: object = ([],)
+                b: object = Angry()
+
+    def test_a_hash_that_raises_later_propagates_at_construction(self):
+        """The class-statement probe succeeded once, so the constructor's
+        re-probe must surface the author's exception, not a SystemError."""
+
+        class SometimesAngry:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def __hash__(self) -> int:
+                self.calls += 1
+
+                if self.calls > 1:
+                    raise RuntimeError("boom")
+
+                return 7
+
+        value = SometimesAngry()
+
+        class Holder(Struct):
+            v: object = value
+
+        with pytest.raises(RuntimeError, match="boom"):
+            Holder()
+
     def test_a_subclass_re_probes_an_inherited_default_once_per_class(self):
         """The probe runs when the singleton is built, once per class
         statement -- the inherited default is re-copied for the subclass's own
-        singleton, so the count is one per class, not one per instance."""
+        singleton. Instance construction re-probes the declared default, so
+        the count here precedes any instantiation."""
 
 
         calls = []
