@@ -35,6 +35,7 @@ BUILD: Final = BuildConfig(
         "src/meta/class/install.c",
         "src/meta/class/settle.c",
         "src/mixin.c",
+        "src/mixin/copy.c",
         "src/options.c",
         "src/repr.c",
     ),
