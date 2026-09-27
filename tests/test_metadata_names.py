@@ -209,9 +209,8 @@ def test_a_reserved_name_with_a_default_gets_the_reserved_refusal(name):
 
 @pytest.mark.parametrize("name", SALIX + MSGSPEC)
 def test_a_reserved_name_with_a_shared_mutable_default_gets_the_reserved_refusal(name):
-    """A shared-mutable default would otherwise surface its own refusal
-    first, and its advice cannot help a name that cannot be a field at all;
-    the reserved message fires instead.
+    """The reserved message fires whether or not the default would say
+    anything: its advice cannot help a name that cannot be a field at all.
     """
 
     with pytest.raises(TypeError, match="is reserved for salix's metadata"):

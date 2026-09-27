@@ -85,18 +85,18 @@ instance, not shared:
 
 ```
 
-The copy preserves the exact type or it is not a copy — a `defaultdict` copy
-would be a plain `dict` — so the rule stops at the four, and a subclass of one
-of them is stored as the class body's object itself, shared. A non-empty
-default of the four is refused at class creation, because a copy can only be
-shallow and the contents would still be shared: default it empty and fill it
-in `__post_init__` with `set_field` — unless the body writes its own
-`__init__`, which replaces the constructor that runs `__post_init__` (see
-What salix is and is not). A default whose type hashes but whose value cannot
-is refused the same way — `x: tuple = (1, [])` dies at class creation —
-because every instance would share it while its hash raises; a hash that
-fails by recursing slips through and is shared, and so does a type outside
-the four that declares `__hash__ = None`. A field without a default cannot
+A default of the four (and their subclasses) is copied per instance: a
+non-empty one is deep-copied, so an inner list in `x: tuple = (1, [])` is
+not shared, and an empty one copies through the declared type's own
+constructor (seeded with a base copy, so the constructor cannot retain or
+mutate the class-body object), preserving a subclass and falling back to a
+base-type copy when the constructor signature is not the iterable one — a
+`defaultdict` falls back and becomes a plain `dict`, its factory dropped.
+A value a deepcopy cannot carry (a writable memoryview — one uncarryable
+element shares the whole container) or one whose hash fails by recursing
+falls back to sharing the declared object. A type outside
+the four that declares `__hash__ = None` is shared. A field without a
+default cannot
 follow one that has it: append defaulted fields, or default the new field
 too. For the four, `__struct_defaults__` holds the
 class's own copy, severed from whatever the class body named: appending to

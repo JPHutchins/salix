@@ -128,7 +128,6 @@ static bool class_var_machinery_name(PyObject * const name) {
 	);
 }
 static PyObject * build_defaults(PyObject * all_names, PyObject * default_by_name);
-static enum result reject_unsafe_default(PyObject * field_name, PyObject * value);
 static PyObject * checked_annotations(PyObject * namespace);
 static enum inheritance inherits_field(StructType const * base, PyObject * field_name);
 static struct special_form special_form_of(
@@ -145,7 +144,6 @@ static bool top_level_suffix(PyObject * text, Py_ssize_t from);
 static bool class_var_top_level(PyObject * annotation, struct form_probes const * probes);
 static bool continues_identifier(Py_UCS4 character);
 static PyObject * module_attribute(char const * module_name, char const * attribute);
-static enum result refuse_shared_mutable_contents(PyObject * field_name, PyObject * value);
 
 struct field_plan field_plan_build(StructType const * const base, PyObject * const namespace) {
 	struct field_plan plan = {0};
@@ -435,13 +433,6 @@ static enum result append_declared(
 			case INHERITANCE_ERROR:
 				return RESULT_ERROR;
 			case INHERITANCE_INHERITED:
-				if (
-					declared_default != NULL &&
-					refuse_shared_mutable_contents(field_name, declared_default) != RESULT_OK
-				) {
-					return RESULT_ERROR;
-				}
-
 				continue;
 			case INHERITANCE_NEW:
 				break;
@@ -464,13 +455,6 @@ static enum result append_declared(
 			}
 
 			if (!top_level) {
-				if (
-					declared_default != NULL &&
-					refuse_shared_mutable_contents(field_name, declared_default) != RESULT_OK
-				) {
-					return RESULT_ERROR;
-				}
-
 				PyErr_Format(
 					PyExc_TypeError,
 					"'%U' is annotated %s, which salix does not support; "
@@ -505,13 +489,6 @@ static enum result append_declared(
 			}
 
 			continue;
-		}
-
-		if (
-			declared_default != NULL &&
-			refuse_shared_mutable_contents(field_name, declared_default) != RESULT_OK
-		) {
-			return RESULT_ERROR;
 		}
 
 		if (special.name != NULL) {
@@ -932,68 +909,6 @@ static PyObject * module_attribute(char const * const module_name, char const * 
 	return optional_attribute(module, attribute);
 }
 
-static enum result reject_unsafe_default(PyObject * const field_name, PyObject * const value) {
-	PyTypeObject * const kind = Py_TYPE(value);
-	Py_ssize_t const filled = struct_copies_default(kind) ? PyObject_Size(value) : 0;
-
-	if (filled <= 0) {
-		return filled < 0 ? RESULT_ERROR : RESULT_OK;
-	}
-
-	PyErr_Format(
-		PyExc_TypeError,
-		"field '%U' defaults to a non-empty %.100s, whose copy could only be "
-		"shallow and would leave the contents shared; default it to an empty "
-		"one and fill it with set_field -- from __post_init__, or from your own "
-		"__init__ if the body writes one, which displaces the constructor "
-		"__post_init__ runs from",
-		field_name,
-		kind->tp_name
-	);
-
-	return RESULT_ERROR;
-}
-
-static enum result refuse_shared_mutable_contents(
-	PyObject * const field_name,
-	PyObject * const value
-) {
-	PyTypeObject * const kind = Py_TYPE(value);
-
-	if (kind->tp_hash == NULL || kind->tp_hash == PyObject_HashNotImplemented) {
-		return RESULT_OK;
-	}
-
-	if (PyObject_Hash(value) != -1 || !PyErr_Occurred()) {
-		return RESULT_OK;
-	}
-
-	if (PyErr_ExceptionMatches(PyExc_RecursionError)) {
-		PyErr_Clear();
-
-		return RESULT_OK;
-	}
-
-	if (!PyErr_ExceptionMatches(PyExc_TypeError) && !PyErr_ExceptionMatches(PyExc_ValueError)) {
-		return RESULT_ERROR;
-	}
-
-	PyErr_Clear();
-
-	PyErr_Format(
-		PyExc_TypeError,
-		"field '%U' defaults to a %.100s whose type hashes and whose value will "
-		"not, which is how a container of something mutable answers; salix "
-		"shares such a default across every instance, so give the field one "
-		"that hashes and build the rest with set_field -- from __post_init__, "
-		"or from your own __init__ if the body writes one",
-		field_name,
-		kind->tp_name
-	);
-
-	return RESULT_ERROR;
-}
-
 static PyObject * build_defaults(PyObject * const all_names, PyObject * const default_by_name) {
 	Py_ssize_t const field_count = PyList_GET_SIZE(all_names);
 	Py_ssize_t first_default = field_count;
@@ -1039,32 +954,15 @@ static PyObject * build_defaults(PyObject * const all_names, PyObject * const de
 			return NULL;
 		}
 
-		/* Twice, on purpose. The first read is what raises in the ordinary case,
-		 * but its verdict is not final: it reads an object the module still
-		 * holds and can still write to between the two checks. It earns its
-		 * place by being O(1) and keeping a default that is going to be refused
-		 * from being built into a copy that is then thrown away -- that copy is
-		 * the whole of what it saves, since copying a set hashes nothing
-		 * (PySet_New copies the table).
-		 *
-		 * The second read is the one that counts, because it reads the copy --
-		 * what the class keeps, and what no module-level alias still points at.
-		 * A racing write is captured by the copy (the copy is made from the
-		 * declaration, so of course it is) and refused there, so the race costs
-		 * the work the first check exists to skip and not the invariant.
+		/* The stored default is what the class keeps, severed from the
+		 * class-body object wherever the copy path can sever it; the share
+		 * fallbacks deliberately keep the declared object.
 		 *
 		 * `_struct_defaults_` still hands the stored object out, so filling it
 		 * through there defeats this. That route is out of contract. */
-		if (reject_unsafe_default(field_name, value) != RESULT_OK) {
-			Py_DECREF(defaults);
-
-			return NULL;
-		}
-
 		PyObject * const stored = struct_default_copy(value);
 
-		if (stored == NULL || reject_unsafe_default(field_name, stored) != RESULT_OK) {
-			Py_XDECREF(stored);
+		if (stored == NULL) {
 			Py_DECREF(defaults);
 
 			return NULL;
