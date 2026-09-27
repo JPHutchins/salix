@@ -31,6 +31,7 @@ int main(void) {
 
 	class_tests();
 	construct_tests();
+	copy_tests();
 	exceptions_tests();
 	fields_tests();
 	meta_tests();

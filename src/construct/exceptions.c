@@ -475,10 +475,6 @@ static PyObject * exception_instance(void) {
 	);
 }
 
-static PyObject * two_field_instance(void) {
-	return testing_evaluate("class P(Struct):\n    alpha: int\n    beta: int\nresult = P(1, 2)\n");
-}
-
 static PyObject * beta_named_instance(void) {
 	return testing_evaluate(
 		"class P(Struct):\n    alpha: int\n    beta: int\nresult = P(1, beta=9)\n"
@@ -486,7 +482,7 @@ static PyObject * beta_named_instance(void) {
 }
 
 static void test_the_explicit_prefix_stops_at_the_first_unexplicit_field(void) {
-	PyObject * const plain = two_field_instance();
+	PyObject * const plain = testing_two_field_instance();
 	StructType * const type = struct_type_of(plain);
 	PyObject * const beta_name = PyTuple_Pack(1, PyTuple_GET_ITEM(type->struct_field_names, 1));
 
@@ -503,7 +499,7 @@ static void test_the_explicit_prefix_stops_at_the_first_unexplicit_field(void) {
 }
 
 static void test_the_explicit_prefix_counts_carried_positionals(void) {
-	PyObject * const instance = two_field_instance();
+	PyObject * const instance = testing_two_field_instance();
 
 	TEST_ASSERT_EQUAL_INT(2, explicit_field_prefix(struct_type_of(instance), 0, NULL, 2));
 
@@ -511,7 +507,7 @@ static void test_the_explicit_prefix_counts_carried_positionals(void) {
 }
 
 static void test_change_names_touch_answers_for_each_change_shape(void) {
-	PyObject * const instance = two_field_instance();
+	PyObject * const instance = testing_two_field_instance();
 	StructType * const type = struct_type_of(instance);
 	PyObject * const beta_name = PyTuple_Pack(1, PyTuple_GET_ITEM(type->struct_field_names, 1));
 
@@ -526,7 +522,7 @@ static void test_change_names_touch_answers_for_each_change_shape(void) {
 
 static void test_the_carried_payload_count_reads_the_stored_args(void) {
 	PyObject * const exception = exception_instance();
-	PyObject * const plain = two_field_instance();
+	PyObject * const plain = testing_two_field_instance();
 
 	TEST_ASSERT_EQUAL_INT(1, carried_payload_count(struct_type_of(exception), exception));
 	TEST_ASSERT_EQUAL_INT(0, carried_payload_count(struct_type_of(plain), plain));
