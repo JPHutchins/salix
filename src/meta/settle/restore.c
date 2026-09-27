@@ -109,9 +109,12 @@ static void test_a_rebind_writes_the_mixins_binding(void) {
 	PyObject * const cls = rebind_class();
 	StructType * const type = (StructType *) cls;
 	PyObject * const namespace = PyDict_New();
+	PyObject * const class_dict = type->heap_type.ht_type.tp_dict;
 
 	TEST_ASSERT_NOT_NULL(namespace);
+	TEST_ASSERT_EQUAL_INT(0, dict_has_string(class_dict, "__eq__"));
 	TEST_ASSERT_EQUAL_INT(RESULT_OK, settle_rebind_one(type, namespace, "__eq__", true));
+	TEST_ASSERT_EQUAL_INT(1, dict_has_string(class_dict, "__eq__"));
 
 	PyObject * const bound = PyObject_GetAttrString(cls, "__eq__");
 
@@ -126,12 +129,15 @@ static void test_a_rebind_leaves_a_body_binding_alone(void) {
 	PyObject * const cls = rebind_class();
 	StructType * const type = (StructType *) cls;
 	PyObject * const namespace = PyDict_New();
+	PyObject * const class_dict = type->heap_type.ht_type.tp_dict;
 	PyObject * const body_value = PyObject_GetAttrString((PyObject *) &PyBaseObject_Type, "__eq__");
 
 	TEST_ASSERT_NOT_NULL(namespace);
 	TEST_ASSERT_NOT_NULL(body_value);
 	TEST_ASSERT_EQUAL_INT(0, PyDict_SetItemString(namespace, "__eq__", body_value));
+	TEST_ASSERT_EQUAL_INT(0, dict_has_string(class_dict, "__eq__"));
 	TEST_ASSERT_EQUAL_INT(RESULT_OK, settle_rebind_one(type, namespace, "__eq__", true));
+	TEST_ASSERT_EQUAL_INT(0, dict_has_string(class_dict, "__eq__"));
 
 	PyObject * const bound = PyObject_GetAttrString(cls, "__eq__");
 
@@ -139,6 +145,26 @@ static void test_a_rebind_leaves_a_body_binding_alone(void) {
 
 	Py_DECREF(bound);
 	Py_DECREF(body_value);
+	Py_DECREF(namespace);
+	Py_DECREF(cls);
+}
+
+static void test_a_rebind_from_the_object_source_writes_objects_binding(void) {
+	PyObject * const cls = rebind_class();
+	StructType * const type = (StructType *) cls;
+	PyObject * const namespace = PyDict_New();
+	PyObject * const class_dict = type->heap_type.ht_type.tp_dict;
+
+	TEST_ASSERT_NOT_NULL(namespace);
+	TEST_ASSERT_EQUAL_INT(0, dict_has_string(class_dict, "__eq__"));
+	TEST_ASSERT_EQUAL_INT(RESULT_OK, settle_rebind_one(type, namespace, "__eq__", false));
+	TEST_ASSERT_EQUAL_INT(1, dict_has_string(class_dict, "__eq__"));
+
+	PyObject * const bound = PyObject_GetAttrString(cls, "__eq__");
+
+	TEST_ASSERT_EQUAL_PTR(type->struct_state->object_bindings[0], bound);
+
+	Py_DECREF(bound);
 	Py_DECREF(namespace);
 	Py_DECREF(cls);
 }
@@ -174,6 +200,7 @@ void restore_tests(void) {
 
 	RUN_TEST(test_a_rebind_writes_the_mixins_binding);
 	RUN_TEST(test_a_rebind_leaves_a_body_binding_alone);
+	RUN_TEST(test_a_rebind_from_the_object_source_writes_objects_binding);
 	RUN_TEST(test_a_restore_writes_the_body_value_back);
 }
 
