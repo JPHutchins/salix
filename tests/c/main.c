@@ -35,6 +35,7 @@ int main(void) {
 	copy_tests();
 	exceptions_tests();
 	fields_tests();
+	forms_tests();
 	meta_tests();
 	options_tests();
 	owned_tests();
