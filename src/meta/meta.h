@@ -85,7 +85,6 @@ struct salix_state {
 	PyObject * frozen_instance_error;
 };
 
-enum result settle_cache_fill(struct salix_state * state);
 PyModuleDef * salix_module_def(void);
 bool any_base_diverts_setattro(PyObject * bases);
 bool carries_weakref_slot(PyTypeObject const * type);
@@ -146,28 +145,6 @@ PyObject * build_struct_class(
 	PyObject * keywords,
 	struct salix_state * state
 );
-enum result settle_planned(
-	StructType * struct_class,
-	StructType const * base,
-	PyObject * bases,
-	PyObject * name,
-	struct field_plan const * plan,
-	PyObject * original_namespace,
-	struct options options,
-	struct options inherited,
-	bool frozen_across_bases,
-	bool body_defines_eq,
-	bool inherits_body_eq,
-	bool derive_not_equal
-);
-enum result settle_mro_bindings(
-	StructType * struct_class,
-	PyObject * bases,
-	PyObject * original_namespace,
-	struct binding_plan bindings,
-	struct options options
-);
-enum result verify_settle_names_readable(PyObject * original_namespace);
 enum result install_fields(
 	StructType * struct_class,
 	StructType const * base,
