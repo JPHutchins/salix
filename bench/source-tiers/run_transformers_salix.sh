@@ -2,7 +2,7 @@
 set -euo pipefail
 
 PYTHON_VERSION=3.13
-SALIX_VERSION=0.1.0
+SALIX_VERSION=0.1.0a1
 
 usage() {
     echo "usage: $0 --salix-wheel <wheel-or-dir> [--workdir <dir>] [--keep-venv] [--suite] [--stock]" >&2

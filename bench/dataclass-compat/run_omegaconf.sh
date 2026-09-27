@@ -43,7 +43,7 @@ if [[ -d "$SALIX_WHEEL" ]]; then
 else
     WHEEL_LINKS="$(dirname "$SALIX_WHEEL")"
 fi
-uv pip install --python "$VENV" --no-index --find-links "$WHEEL_LINKS" --reinstall salix==0.1.0
+uv pip install --python "$VENV" --no-index --find-links "$WHEEL_LINKS" --reinstall salix==0.1.0a1
 
 if command -v java >/dev/null 2>&1; then
     ( cd "$CHECKOUT" && "$VENV/bin/python" setup.py antlr )
