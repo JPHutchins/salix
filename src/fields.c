@@ -168,9 +168,17 @@ struct field_plan field_plan_build(StructType const * const base, PyObject * con
 		metadata_values != NULL &&
 		default_by_name != NULL &&
 		empty_extras != NULL &&
-		append_inherited(base, all_names, default_by_name, annotation_values, metadata_values) ==
-			RESULT_OK &&
-		append_declared(
+		(
+			append_inherited(
+				base,
+				all_names,
+				default_by_name,
+				annotation_values,
+				metadata_values
+			) == RESULT_OK
+		) &&
+		(
+			append_declared(
 				base,
 				annotations,
 				namespace,
@@ -180,8 +188,8 @@ struct field_plan field_plan_build(StructType const * const base, PyObject * con
 				annotation_values,
 				metadata_values,
 				empty_extras
-			) ==
-			RESULT_OK
+			) == RESULT_OK
+		)
 	) {
 		PyObject * built_defaults = build_defaults(all_names, default_by_name);
 		PyObject * built_annotations = PyList_AsTuple(annotation_values);
@@ -506,14 +514,15 @@ static enum result append_declared(
 		if (
 			PyList_Append(all_names, field_name) < 0 ||
 			PyList_Append(new_names, field_name) < 0 ||
-			append_annotation(
+			(
+				append_annotation(
 					annotation,
 					annotation_values,
 					metadata_values,
 					empty_extras,
 					probes.class_var != NULL
-				) !=
-				RESULT_OK
+				) != RESULT_OK
+			)
 		) {
 			return RESULT_ERROR;
 		}

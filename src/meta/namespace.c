@@ -86,7 +86,8 @@ PyObject * build_class_namespace(
 		drop_none_signature(namespace) == RESULT_OK &&
 		PyDict_SetItemString(namespace, "__slots__", slots) == 0 &&
 		set_match_args(namespace, all_names, options.match_args) == RESULT_OK &&
-		apply_options(
+		(
+			apply_options(
 				namespace,
 				options,
 				inherited,
@@ -95,8 +96,8 @@ PyObject * build_class_namespace(
 				body_defines_eq,
 				inherits_body_eq,
 				derive_not_equal
-			) ==
-			RESULT_OK
+			) == RESULT_OK
+		)
 	) {
 		return py_move(&namespace);
 	}

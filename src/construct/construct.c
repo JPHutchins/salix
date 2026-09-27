@@ -191,8 +191,7 @@ PyObject * Struct_replace(
 					changed,
 					PyTuple_GET_ITEM(keyword_names, i),
 					arguments[nargs + i]
-				) <
-				0
+				) < 0
 			) {
 				return NULL;
 			}
@@ -438,8 +437,7 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 					PyTuple_GET_ITEM(pair, 0),
 					PyTuple_GET_ITEM(pair, 1),
 					0
-				) !=
-				RESULT_OK
+				) != RESULT_OK
 			) {
 				return NULL;
 			}
@@ -494,8 +492,7 @@ static enum result bind_keywords(
 				PyTuple_GET_ITEM(keyword_names, i),
 				arguments[positional_count + i],
 				positional_count
-			) !=
-			RESULT_OK
+			) != RESULT_OK
 		) {
 			return RESULT_ERROR;
 		}
