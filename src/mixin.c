@@ -3,6 +3,7 @@
 #include "compare.h"
 #include "meta/meta.h"
 #include "construct.h"
+#include "construct/construct.h"
 #include "hash.h"
 #include "mixin.h"
 #include "owned.h"
@@ -531,8 +532,7 @@ static PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 				group_excs_str(self),
 				NULL,
 				NULL
-			) !=
-			RESULT_OK
+			) != RESULT_OK
 		) {
 			return NULL;
 		}
@@ -1140,8 +1140,7 @@ PyObject * Struct_get_signature(PyObject * const self, void * const closure) {
 					keywords,
 					"annotation",
 					PyTuple_GET_ITEM(type->struct_annotations, i)
-				) <
-				0
+				) < 0
 			)
 		) {
 			return NULL;
