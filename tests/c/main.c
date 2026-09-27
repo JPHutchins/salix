@@ -41,6 +41,7 @@ int main(void) {
 	owned_tests();
 	repr_tests();
 	restore_tests();
+	slots_tests();
 
 	int const failures = UNITY_END();
 
