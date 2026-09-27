@@ -510,6 +510,8 @@ static void test_the_explicit_prefix_counts_carried_positionals(void) {
 	Py_DECREF(instance);
 }
 
+#	if PY_VERSION_HEX >= 0x030B0000
+
 static void test_change_names_touch_answers_for_each_change_shape(void) {
 	PyObject * const instance = two_field_instance();
 	StructType * const type = struct_type_of(instance);
@@ -523,6 +525,8 @@ static void test_change_names_touch_answers_for_each_change_shape(void) {
 	Py_DECREF(beta_name);
 	Py_DECREF(instance);
 }
+
+#	endif
 
 static void test_the_carried_payload_count_reads_the_stored_args(void) {
 	PyObject * const exception = exception_instance();
@@ -546,20 +550,39 @@ static PyObject * group_instance(void) {
 	);
 }
 
-static void test_the_group_members_carry_answers_for_a_field_built_group(void) {
+static void test_the_group_members_carry_writes_the_bound_fields(void) {
 	PyObject * const instance = group_instance();
-	PyBaseExceptionGroupObject * const group = (PyBaseExceptionGroupObject *) instance;
+	StructType * const type = struct_type_of(instance);
+	PyObject * const shell = type->heap_type.ht_type.tp_alloc(&type->heap_type.ht_type, 0);
+	PyObject * const message = PyUnicode_FromString("boom");
+	PyObject * const exceptions = PyList_New(1);
+	PyBaseExceptionGroupObject * const group = (PyBaseExceptionGroupObject *) shell;
 
+	TEST_ASSERT_NOT_NULL(shell);
+	TEST_ASSERT_NOT_NULL(message);
+	TEST_ASSERT_NOT_NULL(exceptions);
+	TEST_ASSERT_NULL(group->msg);
+	TEST_ASSERT_NULL(group->excs);
+
+	PyList_SET_ITEM(exceptions, 0, PyObject_CallNoArgs(PyExc_ValueError));
+
+	TEST_ASSERT_EQUAL_INT(RESULT_OK, write_slot(type, shell, type->struct_message_index, message));
 	TEST_ASSERT_EQUAL_INT(
 		RESULT_OK,
-		group_members_from_fields(struct_type_of(instance), instance, NULL)
+		write_slot(type, shell, type->struct_exceptions_index, exceptions)
 	);
+	TEST_ASSERT_EQUAL_INT(RESULT_OK, group_members_from_fields(type, shell, NULL));
+
 	TEST_ASSERT_NOT_NULL(group->msg);
-	TEST_ASSERT_TRUE(PyUnicode_Check(group->msg));
+	TEST_ASSERT_EQUAL_INT(0, PyUnicode_CompareWithASCIIString(group->msg, "boom"));
 	TEST_ASSERT_NOT_NULL(group->excs);
 	TEST_ASSERT_TRUE(PyTuple_Check(group->excs));
 	TEST_ASSERT_EQUAL_INT(1, PyTuple_GET_SIZE(group->excs));
+	TEST_ASSERT_TRUE(PyExceptionInstance_Check(PyTuple_GET_ITEM(group->excs, 0)));
 
+	Py_DECREF(exceptions);
+	Py_DECREF(message);
+	Py_DECREF(shell);
 	Py_DECREF(instance);
 }
 
@@ -570,10 +593,10 @@ void exceptions_tests(void) {
 
 	RUN_TEST(test_the_explicit_prefix_stops_at_the_first_unexplicit_field);
 	RUN_TEST(test_the_explicit_prefix_counts_carried_positionals);
-	RUN_TEST(test_change_names_touch_answers_for_each_change_shape);
 	RUN_TEST(test_the_carried_payload_count_reads_the_stored_args);
 #	if PY_VERSION_HEX >= 0x030B0000
-	RUN_TEST(test_the_group_members_carry_answers_for_a_field_built_group);
+	RUN_TEST(test_change_names_touch_answers_for_each_change_shape);
+	RUN_TEST(test_the_group_members_carry_writes_the_bound_fields);
 #	endif
 }
 
