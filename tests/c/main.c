@@ -30,6 +30,7 @@ int main(void) {
 	UNITY_BEGIN();
 
 	class_tests();
+	comparison_tests();
 	construct_tests();
 	copy_tests();
 	exceptions_tests();
@@ -38,6 +39,7 @@ int main(void) {
 	options_tests();
 	owned_tests();
 	repr_tests();
+	restore_tests();
 
 	int const failures = UNITY_END();
 
