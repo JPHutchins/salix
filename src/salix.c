@@ -92,6 +92,7 @@ static void struct_free(void * const module) {
 	}
 
 	Py_CLEAR(state->frozen_instance_error);
+	defaults_free();
 
 	Py_CLEAR(state->handoff_attempt);
 	Py_CLEAR(state->handoff_declined);
