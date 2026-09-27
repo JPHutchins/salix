@@ -63,14 +63,10 @@ struct field_lookup find_field(StructType const * const type, PyObject * const n
 
 #	include "../testing.h"
 
-static PyObject * two_field_instance(void) {
-	return testing_evaluate("class P(Struct):\n    alpha: int\n    beta: int\nresult = P(1, 2)\n");
-}
-
 /* The identity scan is the fast path; the equality scan exists only for a name
  * that was not interned, which Python-level tests reach only by accident. */
 static void test_an_interned_name_resolves_by_identity(void) {
-	PyObject * const instance = two_field_instance();
+	PyObject * const instance = testing_two_field_instance();
 	PyObject * const name = PyUnicode_InternFromString("beta");
 	struct field_lookup const found = find_field(struct_type_of(instance), name);
 
@@ -82,7 +78,7 @@ static void test_an_interned_name_resolves_by_identity(void) {
 }
 
 static void test_a_name_assembled_at_runtime_resolves_by_comparison(void) {
-	PyObject * const instance = two_field_instance();
+	PyObject * const instance = testing_two_field_instance();
 	PyObject * const fields = struct_type_of(instance)->struct_field_names;
 	PyObject * const name = PyUnicode_FromFormat("%s%s", "al", "pha");
 
@@ -98,7 +94,7 @@ static void test_a_name_assembled_at_runtime_resolves_by_comparison(void) {
 }
 
 static void test_a_name_that_is_not_a_field_is_missing(void) {
-	PyObject * const instance = two_field_instance();
+	PyObject * const instance = testing_two_field_instance();
 	PyObject * const name = PyUnicode_FromString("gamma");
 	struct field_lookup const found = find_field(struct_type_of(instance), name);
 

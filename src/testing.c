@@ -101,4 +101,12 @@ PyObject * testing_evaluate(char const * const source) {
 	return result;
 }
 
+PyObject * testing_two_field_instance(void) {
+	return testing_evaluate("class P(Struct):\n    alpha: int\n    beta: int\nresult = P(1, 2)\n");
+}
+
+PyObject * testing_frozen_empty_instance(void) {
+	return testing_evaluate("class E(Struct):\n    pass\nresult = E()\n");
+}
+
 #endif
