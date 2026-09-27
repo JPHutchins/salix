@@ -25,6 +25,7 @@ BUILD: Final = BuildConfig(
         "src/construct/construct.c",
         "src/construct/binding.c",
         "src/construct/defaults.c",
+        "src/construct/exceptions.c",
         "src/fields.c",
         "src/hash.c",
         "src/meta/meta.c",

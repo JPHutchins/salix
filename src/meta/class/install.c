@@ -169,9 +169,11 @@ enum result install_constructor(
 
 		for (
 			PyTypeObject * chain = struct_class->heap_type.ht_type.tp_base;
-			captured_init == Struct_init_wrapper &&
+			(
+				captured_init == Struct_init_wrapper &&
 				chain != NULL &&
-				is_struct_class((PyObject *) chain);
+				is_struct_class((PyObject *) chain)
+			);
 			chain = chain->tp_base
 		) {
 			captured_init = ((StructType *) chain)->struct_installed_init;
