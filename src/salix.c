@@ -9,6 +9,7 @@
 #define SALIX_STRINGIZE(version) SALIX_STRINGIZE_INNER(version)
 
 #include "construct.h"
+#include "meta/settle/settle.h"
 #include "meta.h"
 #include "mixin.h"
 #include "owned.h"

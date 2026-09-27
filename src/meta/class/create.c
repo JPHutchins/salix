@@ -8,6 +8,7 @@
 #endif
 
 #include "../../fields.h"
+#include "../settle/settle.h"
 #include "../meta.h"
 #include "../../options.h"
 #include "../../owned.h"
