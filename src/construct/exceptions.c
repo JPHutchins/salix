@@ -6,7 +6,6 @@
 #include "../result.h"
 #include "../types.h"
 
-#if PY_VERSION_HEX >= 0x030B0000
 int change_names_touch(
 	StructType * const type,
 	PyObject * const keyword_names,
@@ -38,6 +37,7 @@ int change_names_touch(
 	return 0;
 }
 
+#if PY_VERSION_HEX >= 0x030B0000
 enum result group_members_from_fields(
 	StructType * const type,
 	PyObject * const self,
@@ -510,8 +510,6 @@ static void test_the_explicit_prefix_counts_carried_positionals(void) {
 	Py_DECREF(instance);
 }
 
-#	if PY_VERSION_HEX >= 0x030B0000
-
 static void test_change_names_touch_answers_for_each_change_shape(void) {
 	PyObject * const instance = two_field_instance();
 	StructType * const type = struct_type_of(instance);
@@ -525,8 +523,6 @@ static void test_change_names_touch_answers_for_each_change_shape(void) {
 	Py_DECREF(beta_name);
 	Py_DECREF(instance);
 }
-
-#	endif
 
 static void test_the_carried_payload_count_reads_the_stored_args(void) {
 	PyObject * const exception = exception_instance();
@@ -593,9 +589,9 @@ void exceptions_tests(void) {
 
 	RUN_TEST(test_the_explicit_prefix_stops_at_the_first_unexplicit_field);
 	RUN_TEST(test_the_explicit_prefix_counts_carried_positionals);
+	RUN_TEST(test_change_names_touch_answers_for_each_change_shape);
 	RUN_TEST(test_the_carried_payload_count_reads_the_stored_args);
 #	if PY_VERSION_HEX >= 0x030B0000
-	RUN_TEST(test_change_names_touch_answers_for_each_change_shape);
 	RUN_TEST(test_the_group_members_carry_writes_the_bound_fields);
 #	endif
 }

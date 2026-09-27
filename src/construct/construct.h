@@ -25,8 +25,6 @@ int change_names_touch(
 	Py_ssize_t field_index
 );
 
-enum result group_members_from_fields(StructType * type, PyObject * self, PyObject * msg_fallback);
-
 enum result carry_group_members(
 	StructType * type,
 	PyObject * self,
@@ -37,7 +35,11 @@ enum result carry_group_members(
 	PyObject * memo
 );
 
+#if PY_VERSION_HEX >= 0x030B0000
+enum result group_members_from_fields(StructType * type, PyObject * self, PyObject * msg_fallback);
+
 enum result store_group_args(StructType * type, PyObject * self, bool from_fields);
+#endif
 
 enum result set_exception_args_from_fields(
 	StructType * type,
