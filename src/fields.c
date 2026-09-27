@@ -175,8 +175,7 @@ struct field_plan field_plan_build(StructType const * const base, PyObject * con
 				default_by_name,
 				annotation_values,
 				metadata_values
-			) ==
-			RESULT_OK
+			) == RESULT_OK
 		) &&
 		(
 			append_declared(
@@ -189,8 +188,7 @@ struct field_plan field_plan_build(StructType const * const base, PyObject * con
 				annotation_values,
 				metadata_values,
 				empty_extras
-			) ==
-			RESULT_OK
+			) == RESULT_OK
 		)
 	) {
 		PyObject * built_defaults = build_defaults(all_names, default_by_name);
@@ -523,8 +521,7 @@ static enum result append_declared(
 					metadata_values,
 					empty_extras,
 					probes.class_var != NULL
-				) !=
-				RESULT_OK
+				) != RESULT_OK
 			)
 		) {
 			return RESULT_ERROR;
