@@ -19,15 +19,6 @@ static PyObject * copy_list(PyObject * const declared) {
 }
 
 static PyObject * copy_declared(PyObject * const declared, PyObject * const seed) {
-	/* The type's own constructor preserves the subclass, which runs the
-	 * subclass's __init__ (and __len__, at the class-statement emptiness
-	 * gate) on every copy. The seed is a base copy of the declared value, so
-	 * the constructor cannot retain or mutate the class-body object or the
-	 * class's stored default. A constructor whose signature is not the
-	 * iterable one (a defaultdict takes a factory) raises TypeError;
-	 * copy_or_base falls back to the base copy, dropping the subclass and
-	 * its extra state. Any TypeError raised by the constructor's own code is
-	 * swallowed the same way -- the fallback cannot tell the two apart. */
 	return PyObject_CallOneArg((PyObject *) Py_TYPE(declared), seed);
 }
 
@@ -35,12 +26,6 @@ static PyObject * copy_or_base(
 	PyObject * const declared,
 	PyObject * (* const base_copy) (PyObject *)
 ) {
-	/* #172: a non-empty value cannot be copied shallowly without sharing its
-	 * contents, so the deep path carries it; the empty one copies through the
-	 * declared type's constructor, with the base copy for constructors whose
-	 * signature is not the iterable one. Emptiness therefore decides the
-	 * copy: an empty defaultdict falls back and loses its factory, while a
-	 * seeded one is deep-copied with the factory intact. */
 	Py_ssize_t const size = PyObject_Size(declared);
 
 	if (size < 0) {
@@ -193,7 +178,6 @@ static enum default_probe probe_default(PyObject * const declared) {
 	}
 
 	if (!PyErr_ExceptionMatches(PyExc_TypeError) && !PyErr_ExceptionMatches(PyExc_ValueError)) {
-		/* The author's own exception propagates unchanged. */
 		return DEFAULT_PROBE_ERROR;
 	}
 
