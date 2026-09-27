@@ -1,3 +1,4 @@
+from dataclasses import FrozenInstanceError
 from typing import Annotated, ClassVar
 
 import pytest
@@ -52,7 +53,7 @@ def test_neither_spelling_may_be_assigned(name):
     with pytest.raises(AttributeError):
         setattr(Point, name, ("z",))
 
-    with pytest.raises(AttributeError, match="does not support attribute assignment"):
+    with pytest.raises(FrozenInstanceError, match="cannot assign to field"):
         setattr(Point(1), name, ("z",))
 
 
@@ -209,9 +210,8 @@ def test_a_reserved_name_with_a_default_gets_the_reserved_refusal(name):
 
 @pytest.mark.parametrize("name", SALIX + MSGSPEC)
 def test_a_reserved_name_with_a_shared_mutable_default_gets_the_reserved_refusal(name):
-    """A shared-mutable default would otherwise surface its own refusal
-    first, and its advice cannot help a name that cannot be a field at all;
-    the reserved message fires instead.
+    """The reserved message fires whether or not the default would say
+    anything: its advice cannot help a name that cannot be a field at all.
     """
 
     with pytest.raises(TypeError, match="is reserved for salix's metadata"):

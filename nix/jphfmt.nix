@@ -9,11 +9,11 @@
 
 rustPlatform.buildRustPackage rec {
   pname = "jphfmt";
-  version = "0.2.1";
+  version = "0.2.2";
 
   src = fetchCrate {
     inherit pname version;
-    hash = "sha256-8JcM1FrHQGBdlQUtMDn0fq+fILfGwR2tXLhZ3QKQnBE=";
+    hash = "sha256-NLpCZfhM5oVrg+jVTbGQ/zjBT+U9bZeVi73ENGyNVDU=";
   };
 
   # cargoHash would route the vendor step through nixpkgs' Python fetcher,

@@ -429,9 +429,17 @@ static int honours_a_body_comparison(
 		}
 
 		for (Py_ssize_t name = 0; name < 6; ++name) {
-			PyObject * const bound = dict_get_string(dict, (char const * const[6]){
-				"__eq__", "__ne__", "__lt__", "__le__", "__gt__", "__ge__",
-			}[name]);
+			PyObject * const bound = dict_get_string(
+				dict,
+				(char const * const[6]){
+					"__eq__",
+					"__ne__",
+					"__lt__",
+					"__le__",
+					"__gt__",
+					"__ge__",
+				}[name]
+			);
 
 			if (bound == NULL) {
 				if (PyErr_Occurred()) {
@@ -793,8 +801,10 @@ enum result settle_planned(
 
 	if (
 		bindings.rebind_comparison &&
-		settle_rebind(struct_class, original_namespace, rebind_comparison, options.eq) !=
+		(
+			settle_rebind(struct_class, original_namespace, rebind_comparison, options.eq) !=
 			RESULT_OK
+		)
 	) {
 		return RESULT_ERROR;
 	}
@@ -825,16 +835,25 @@ enum result settle_planned(
 
 	if (
 		bindings.rebind_representation &&
-		settle_rebind(struct_class, original_namespace, rebind_representation, options.repr) !=
+		(
+			settle_rebind(
+				struct_class,
+				original_namespace,
+				rebind_representation,
+				options.repr
+			) !=
 			RESULT_OK
+		)
 	) {
 		return RESULT_ERROR;
 	}
 
 	if (
 		bindings.rebind_mutability &&
-		settle_rebind(struct_class, original_namespace, rebind_mutability, options.frozen) !=
+		(
+			settle_rebind(struct_class, original_namespace, rebind_mutability, options.frozen) !=
 			RESULT_OK
+		)
 	) {
 		return RESULT_ERROR;
 	}
