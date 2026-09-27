@@ -96,7 +96,8 @@ PyObject * build_class_namespace(
 				body_defines_eq,
 				inherits_body_eq,
 				derive_not_equal
-			) == RESULT_OK
+			) ==
+			RESULT_OK
 		)
 	) {
 		return py_move(&namespace);

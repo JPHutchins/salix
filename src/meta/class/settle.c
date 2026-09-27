@@ -529,7 +529,8 @@ enum result settle_mro_bindings(
 			&le_owner,
 			&gt_owner,
 			&ge_owner
-		) != RESULT_OK
+		) !=
+		RESULT_OK
 	) {
 		return RESULT_ERROR;
 	}
@@ -560,7 +561,8 @@ enum result settle_mro_bindings(
 		(eq_is_salix_owned || !honoured_owner(eq_owner, first_struct))
 	) {
 		if (
-			settle_rebind_one(struct_class, original_namespace, "__eq__", options.eq) != RESULT_OK
+			settle_rebind_one(struct_class, original_namespace, "__eq__", options.eq) !=
+			RESULT_OK
 		) {
 			return RESULT_ERROR;
 		}
@@ -599,7 +601,8 @@ enum result settle_mro_bindings(
 					original_namespace,
 					orderings[i].name,
 					options.eq
-				) != RESULT_OK
+				) !=
+				RESULT_OK
 			) {
 				return RESULT_ERROR;
 			}
@@ -628,7 +631,8 @@ enum result settle_mro_bindings(
 				original_namespace,
 				rebind_not_equal,
 				!body_eq_answers && options.eq
-			) != RESULT_OK
+			) !=
+			RESULT_OK
 		) {
 			return RESULT_ERROR;
 		}
@@ -653,7 +657,8 @@ enum result settle_mro_bindings(
 				original_namespace,
 				rebind_representation,
 				options.repr
-			) != RESULT_OK
+			) !=
+			RESULT_OK
 		) {
 			return RESULT_ERROR;
 		}
@@ -788,7 +793,8 @@ enum result settle_planned(
 	}
 
 	if (
-		restore_stripped(struct_class, original_namespace, class_dict, settle_tables) != RESULT_OK
+		restore_stripped(struct_class, original_namespace, class_dict, settle_tables) !=
+		RESULT_OK
 	) {
 		return RESULT_ERROR;
 	}
@@ -796,12 +802,8 @@ enum result settle_planned(
 	if (
 		bindings.rebind_comparison &&
 		(
-			settle_rebind(
-				struct_class,
-				original_namespace,
-				rebind_comparison,
-				options.eq
-			) != RESULT_OK
+			settle_rebind(struct_class, original_namespace, rebind_comparison, options.eq) !=
+			RESULT_OK
 		)
 	) {
 		return RESULT_ERROR;
@@ -839,7 +841,8 @@ enum result settle_planned(
 				original_namespace,
 				rebind_representation,
 				options.repr
-			) != RESULT_OK
+			) !=
+			RESULT_OK
 		)
 	) {
 		return RESULT_ERROR;
@@ -848,12 +851,8 @@ enum result settle_planned(
 	if (
 		bindings.rebind_mutability &&
 		(
-			settle_rebind(
-				struct_class,
-				original_namespace,
-				rebind_mutability,
-				options.frozen
-			) != RESULT_OK
+			settle_rebind(struct_class, original_namespace, rebind_mutability, options.frozen) !=
+			RESULT_OK
 		)
 	) {
 		return RESULT_ERROR;
@@ -877,12 +876,8 @@ enum result settle_planned(
 		}
 		case HASH_BIND:
 			if (
-				settle_rebind(
-					struct_class,
-					original_namespace,
-					rebind_hash,
-					options.eq
-				) != RESULT_OK
+				settle_rebind(struct_class, original_namespace, rebind_hash, options.eq) !=
+				RESULT_OK
 			) {
 				return RESULT_ERROR;
 			}
