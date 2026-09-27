@@ -5,8 +5,6 @@
 #include "../owned.h"
 #include "../types.h"
 
-#include "../types.h"
-
 static struct special_form form_within(PyObject * annotation, struct form_probes const * probes);
 static struct special_form named_special_form(PyObject * text, struct form_probes const * probes);
 static struct special_form form_named_by(PyObject * text, struct form_probes const * probes);
