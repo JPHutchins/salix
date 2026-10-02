@@ -25,6 +25,7 @@ BUILD: Final = BuildConfig(
         "src/compare.c",
         "src/construct/construct.c",
         "src/construct/binding.c",
+        "src/construct/replace.c",
         "src/construct/defaults.c",
         "src/construct/exceptions.c",
         "src/fields/fields.c",

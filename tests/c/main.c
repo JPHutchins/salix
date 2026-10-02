@@ -41,6 +41,7 @@ int main(void) {
 	meta_tests();
 	options_tests();
 	owned_tests();
+	replace_tests();
 	repr_tests();
 	restore_tests();
 	slots_tests();
