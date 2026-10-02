@@ -483,6 +483,10 @@ PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 
 #	include "../testing.h"
 
+static char const copy_source[] = {
+#	embed "../../tests/c/fixtures/mixin/copy.py" suffix(, '\0')
+};
+
 static void test_an_interned_copy_answers_the_singleton(void) {
 	PyObject * const frozen = testing_frozen_empty_instance();
 	PyObject * const fielded = testing_two_field_instance();
@@ -514,12 +518,49 @@ static void test_a_copy_of_a_fielded_struct_is_equal_and_distinct(void) {
 	Py_DECREF(source);
 }
 
+static void test_a_string_reduction_copies_the_identity(void) {
+	PyObject * const fixtures = testing_evaluate(copy_source);
+	PyObject * const copied = copy_reconstruct(
+		testing_entry(fixtures, "pair"),
+		testing_entry(fixtures, "string_reduction"),
+		testing_entry(fixtures, "copy_module"),
+		Py_None
+	);
+
+	TEST_ASSERT_EQUAL_PTR(testing_entry(fixtures, "pair"), copied);
+
+	Py_DECREF(copied);
+	Py_DECREF(fixtures);
+}
+
+static void test_a_tuple_reduction_rebuilds_through_the_memo(void) {
+	PyObject * const fixtures = testing_evaluate(copy_source);
+	PyObject * const rebuilt = copy_reconstruct(
+		testing_entry(fixtures, "pair"),
+		testing_entry(fixtures, "tuple_reduction"),
+		testing_entry(fixtures, "copy_module"),
+		testing_entry(fixtures, "memo")
+	);
+
+	TEST_ASSERT_NOT_NULL(rebuilt);
+	TEST_ASSERT_EQUAL_INT(
+		1,
+		PyObject_RichCompareBool(rebuilt, testing_entry(fixtures, "rebuilt_pair"), Py_EQ)
+	);
+	TEST_ASSERT_EQUAL_INT(1, PyDict_GET_SIZE(testing_entry(fixtures, "memo")));
+
+	Py_DECREF(rebuilt);
+	Py_DECREF(fixtures);
+}
+
 void copy_tests(void) {
 	Unity.TestFile = __FILE__;
 
 	RUN_TEST(test_an_interned_copy_answers_the_singleton);
 	RUN_TEST(test_a_copy_of_a_frozen_empty_struct_is_the_singleton);
 	RUN_TEST(test_a_copy_of_a_fielded_struct_is_equal_and_distinct);
+	RUN_TEST(test_a_string_reduction_copies_the_identity);
+	RUN_TEST(test_a_tuple_reduction_rebuilds_through_the_memo);
 }
 
 #endif
