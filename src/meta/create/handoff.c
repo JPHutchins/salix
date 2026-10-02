@@ -309,30 +309,55 @@ static char const metaclasses_source[] = {
 #	embed "../../../tests/c/fixtures/handoff/metaclasses.py" suffix(, '\0')
 };
 
+static void assert_verdict(
+	struct chain_verdict const expected,
+	struct chain_verdict const actual,
+	UNITY_LINE_TYPE const line
+) {
+	UNITY_TEST_ASSERT_EQUAL_INT(expected.accepts_all, actual.accepts_all, line, "accepts_all");
+	UNITY_TEST_ASSERT_EQUAL_INT(
+		expected.accepts_weakref,
+		actual.accepts_weakref,
+		line,
+		"accepts_weakref"
+	);
+	UNITY_TEST_ASSERT_EQUAL_INT(expected.readable, actual.readable, line, "readable");
+}
+
 static void test_the_winning_metatype_is_the_most_derived(void) {
-	PyObject * const classes = testing_evaluate(metatypes_source);
-	PyTypeObject * const outer = (PyTypeObject *) PyTuple_GET_ITEM(classes, 0);
-	PyTypeObject * const inner = (PyTypeObject *) PyTuple_GET_ITEM(classes, 1);
+	PyObject * const metatypes = testing_evaluate(metatypes_source);
 
-	TEST_ASSERT_EQUAL_PTR(inner, winning_metatype(&PyType_Type, PyTuple_GET_ITEM(classes, 2)));
-	TEST_ASSERT_EQUAL_PTR(outer, winning_metatype(outer, PyTuple_GET_ITEM(classes, 3)));
+	TEST_ASSERT_EQUAL_PTR(
+		testing_entry(metatypes, "inner"),
+		winning_metatype(&PyType_Type, testing_entry(metatypes, "from_both"))
+	);
+	TEST_ASSERT_EQUAL_PTR(
+		testing_entry(metatypes, "outer"),
+		winning_metatype(
+			(PyTypeObject *) testing_entry(metatypes, "outer"),
+			testing_entry(metatypes, "from_object")
+		)
+	);
 
-	Py_DECREF(classes);
+	Py_DECREF(metatypes);
 }
 
 static void test_the_metaclass_chain_holds_each_python_new_above_struct_meta(void) {
 	PyObject * const metaclasses = testing_evaluate(metaclasses_source);
 	PyObject * const handing_chain = metaclass_chain(
-		(PyTypeObject *) PyTuple_GET_ITEM(metaclasses, 0)
+		(PyTypeObject *) testing_entry(metaclasses, "handing")
 	);
 	PyObject * const plain_chain = metaclass_chain(
-		(PyTypeObject *) PyTuple_GET_ITEM(metaclasses, 1)
+		(PyTypeObject *) testing_entry(metaclasses, "plain")
 	);
 
 	TEST_ASSERT_NOT_NULL(handing_chain);
 	TEST_ASSERT_NOT_NULL(plain_chain);
 	TEST_ASSERT_EQUAL_INT(1, PyList_GET_SIZE(handing_chain));
-	TEST_ASSERT_EQUAL_PTR(PyTuple_GET_ITEM(metaclasses, 2), PyList_GET_ITEM(handing_chain, 0));
+	TEST_ASSERT_EQUAL_PTR(
+		testing_entry(metaclasses, "handing_new"),
+		PyList_GET_ITEM(handing_chain, 0)
+	);
 	TEST_ASSERT_EQUAL_INT(0, PyList_GET_SIZE(plain_chain));
 
 	Py_DECREF(plain_chain);
@@ -342,26 +367,28 @@ static void test_the_metaclass_chain_holds_each_python_new_above_struct_meta(voi
 
 static void test_the_chain_probe_declines_a_positional_only_name(void) {
 	PyObject * const fixtures = testing_evaluate(probes_source);
-	PyObject * const chain = testing_entry(fixtures, "positional_only");
 	PyObject * declined = NULL;
 
-	struct chain_verdict const accepted = chain_probe(
-		chain,
-		testing_entry(fixtures, "named"),
-		false,
-		NULL
+	assert_verdict(
+		(struct chain_verdict){.accepts_all = 1, .accepts_weakref = 1, .readable = true},
+		chain_probe(
+			testing_entry(fixtures, "positional_only"),
+			testing_entry(fixtures, "named"),
+			false,
+			NULL
+		),
+		__LINE__
 	);
-	struct chain_verdict const refused = chain_probe(
-		chain,
-		testing_entry(fixtures, "positional"),
-		false,
-		&declined
+	assert_verdict(
+		(struct chain_verdict){.accepts_all = 0, .accepts_weakref = 1, .readable = true},
+		chain_probe(
+			testing_entry(fixtures, "positional_only"),
+			testing_entry(fixtures, "positional"),
+			false,
+			&declined
+		),
+		__LINE__
 	);
-
-	TEST_ASSERT_TRUE(accepted.readable);
-	TEST_ASSERT_EQUAL_INT(1, accepted.accepts_all);
-	TEST_ASSERT_TRUE(refused.readable);
-	TEST_ASSERT_EQUAL_INT(0, refused.accepts_all);
 	TEST_ASSERT_NOT_NULL(declined);
 	TEST_ASSERT_EQUAL_INT(0, PyUnicode_CompareWithASCIIString(declined, "a"));
 
@@ -371,16 +398,16 @@ static void test_the_chain_probe_declines_a_positional_only_name(void) {
 static void test_a_variadic_keyword_link_accepts_every_keyword(void) {
 	PyObject * const fixtures = testing_evaluate(probes_source);
 
-	struct chain_verdict const verdict = chain_probe(
-		testing_entry(fixtures, "takes_every_keyword"),
-		testing_entry(fixtures, "anything"),
-		true,
-		NULL
+	assert_verdict(
+		(struct chain_verdict){.accepts_all = 1, .accepts_weakref = 1, .readable = true},
+		chain_probe(
+			testing_entry(fixtures, "takes_every_keyword"),
+			testing_entry(fixtures, "anything"),
+			true,
+			NULL
+		),
+		__LINE__
 	);
-
-	TEST_ASSERT_TRUE(verdict.readable);
-	TEST_ASSERT_EQUAL_INT(1, verdict.accepts_all);
-	TEST_ASSERT_EQUAL_INT(1, verdict.accepts_weakref);
 
 	Py_DECREF(fixtures);
 }
@@ -388,40 +415,43 @@ static void test_a_variadic_keyword_link_accepts_every_keyword(void) {
 static void test_a_link_written_in_c_makes_the_chain_unreadable(void) {
 	PyObject * const fixtures = testing_evaluate(probes_source);
 
-	struct chain_verdict const verdict = chain_probe(
-		testing_entry(fixtures, "written_in_c"),
-		testing_entry(fixtures, "anything"),
-		true,
-		NULL
+	assert_verdict(
+		(struct chain_verdict){.accepts_all = 0, .accepts_weakref = 0, .readable = false},
+		chain_probe(
+			testing_entry(fixtures, "written_in_c"),
+			testing_entry(fixtures, "anything"),
+			true,
+			NULL
+		),
+		__LINE__
 	);
-
-	TEST_ASSERT_FALSE(verdict.readable);
-	TEST_ASSERT_EQUAL_INT(0, verdict.accepts_all);
-	TEST_ASSERT_EQUAL_INT(0, verdict.accepts_weakref);
 
 	Py_DECREF(fixtures);
 }
 
 static void test_the_weakref_column_reads_each_links_weakref_keyword(void) {
 	PyObject * const fixtures = testing_evaluate(probes_source);
-	PyObject * const none = testing_entry(fixtures, "none");
 
-	struct chain_verdict const naming = chain_probe(
-		testing_entry(fixtures, "names_weakref"),
-		none,
-		true,
-		NULL
+	assert_verdict(
+		(struct chain_verdict){.accepts_all = 0, .accepts_weakref = 1, .readable = true},
+		chain_probe(
+			testing_entry(fixtures, "names_weakref"),
+			testing_entry(fixtures, "named"),
+			true,
+			NULL
+		),
+		__LINE__
 	);
-	struct chain_verdict const silent = chain_probe(
-		testing_entry(fixtures, "positional_only"),
-		none,
-		true,
-		NULL
+	assert_verdict(
+		(struct chain_verdict){.accepts_all = 1, .accepts_weakref = 0, .readable = true},
+		chain_probe(
+			testing_entry(fixtures, "positional_only"),
+			testing_entry(fixtures, "named"),
+			true,
+			NULL
+		),
+		__LINE__
 	);
-
-	TEST_ASSERT_EQUAL_INT(1, naming.accepts_weakref);
-	TEST_ASSERT_EQUAL_INT(0, silent.accepts_weakref);
-	TEST_ASSERT_EQUAL_INT(1, silent.accepts_all);
 
 	Py_DECREF(fixtures);
 }

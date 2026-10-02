@@ -37,6 +37,7 @@ int main(void) {
 	fields_tests();
 	forms_tests();
 	handoff_tests();
+	init_owner_tests();
 	meta_tests();
 	options_tests();
 	owned_tests();

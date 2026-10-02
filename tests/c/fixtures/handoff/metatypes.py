@@ -14,4 +14,9 @@ class FromInner(metaclass=Inner):
     pass
 
 
-result = (Outer, Inner, (FromOuter, FromInner), (object,))
+result = {
+    "outer": Outer,
+    "inner": Inner,
+    "from_both": (FromOuter, FromInner),
+    "from_object": (object,),
+}

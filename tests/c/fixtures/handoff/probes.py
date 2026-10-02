@@ -6,7 +6,7 @@ def takes_every_keyword(**keywords: object) -> None:
     pass
 
 
-def names_weakref(mcs: type, weakref: bool = False) -> None:
+def names_weakref(metaclass: type, weakref: bool = False) -> None:
     pass
 
 
@@ -18,5 +18,4 @@ result = {
     "named": {"b": True, "c": True},
     "positional": {"a": True},
     "anything": {"anything": True},
-    "none": {},
 }
