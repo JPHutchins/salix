@@ -3,14 +3,12 @@
 
 #include "namespace.h"
 #include "../../owned.h"
-#include "../../result.h"
-#include "../../types.h"
 
-char const * weakref_slot_name(void) {
+static char const * weakref_slot_name(void) {
 	return "__weakref__";
 }
 
-char const * instance_dict_slot_name(void) {
+static char const * instance_dict_slot_name(void) {
 	return "__dict__";
 }
 
