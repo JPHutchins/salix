@@ -397,6 +397,47 @@ int Struct_set_signature(PyObject * const self, PyObject * const value, void * c
 	return 0;
 }
 
+static PyObject * frozen_instance_error(StructType const * const type) {
+	PyObject * const cached = type->struct_state->frozen_instance_error;
+
+	if (cached != NULL) {
+		return cached;
+	}
+
+	/* A failed resolution is not cached, so a later failure retries the
+	 * import instead of latching the fallback process-wide. */
+	PY_OWNED(module, PyImport_ImportModule("dataclasses"));
+
+	if (module == NULL) {
+		if (
+			!PyErr_ExceptionMatches(PyExc_ImportError) &&
+			!PyErr_ExceptionMatches(PyExc_AttributeError)
+		) {
+			return NULL;
+		}
+
+		PyErr_Clear();
+
+		return NULL;
+	}
+
+	PY_OWNED(resolved, optional_attribute(module, "FrozenInstanceError"));
+
+	if (resolved == NULL || !PyExceptionClass_Check(resolved)) {
+		return NULL;
+	}
+
+	/* Both racers hold the same module, so the critical section is on it; the
+	 * loser's reference drops with its scope. */
+	STRUCT_BEGIN_CRITICAL_SECTION(module);
+		if (type->struct_state->frozen_instance_error == NULL) {
+			type->struct_state->frozen_instance_error = Py_NewRef(resolved);
+		}
+	STRUCT_END_CRITICAL_SECTION();
+
+	return type->struct_state->frozen_instance_error;
+}
+
 static int Struct_set_attribute(
 	PyObject * const self,
 	PyObject * const name,
@@ -467,3 +508,31 @@ static PyObject * Struct_get_metadata(PyObject * const self, void * const closur
 static PyObject * Struct_get_metadata_as_msgspec(PyObject * const self, void * const closure) {
 	return metadata_of(self, STRUCT_METADATA, "__struct_metadata__");
 }
+
+#ifdef TESTING
+
+#	include "testing.h"
+
+static void test_the_frozen_error_resolution_caches_the_stock_class(void) {
+	PyObject * const instance = testing_frozen_empty_instance();
+	StructType const * const type = struct_type_of(instance);
+	PyObject * const first = frozen_instance_error(type);
+	PyObject * const second = frozen_instance_error(type);
+
+	TEST_ASSERT_NOT_NULL(first);
+	TEST_ASSERT_TRUE(PyExceptionClass_Check(first));
+	TEST_ASSERT_EQUAL_PTR(first, second);
+	TEST_ASSERT_TRUE(
+		PyType_IsSubtype((PyTypeObject *) first, (PyTypeObject *) PyExc_AttributeError)
+	);
+
+	Py_DECREF(instance);
+}
+
+void mixin_tests(void) {
+	Unity.TestFile = __FILE__;
+
+	RUN_TEST(test_the_frozen_error_resolution_caches_the_stock_class);
+}
+
+#endif

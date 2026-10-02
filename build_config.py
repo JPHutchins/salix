@@ -44,6 +44,7 @@ BUILD: Final = BuildConfig(
         "src/meta/settle/restore.c",
         "src/mixin.c",
         "src/mixin/copy.c",
+        "src/mixin/deepcopy.c",
         "src/options.c",
         "src/repr.c",
     ),
