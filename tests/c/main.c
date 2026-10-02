@@ -33,12 +33,14 @@ int main(void) {
 	comparison_tests();
 	construct_tests();
 	copy_tests();
+	deepcopy_tests();
 	exceptions_tests();
 	fields_tests();
 	forms_tests();
 	handoff_tests();
 	init_owner_tests();
 	meta_tests();
+	mixin_tests();
 	options_tests();
 	owned_tests();
 	replace_tests();
