@@ -78,6 +78,9 @@ static void test_build_slots_appends_the_weakref_name_only_when_asked(void) {
 
 	TEST_ASSERT_NOT_NULL(without);
 	TEST_ASSERT_NOT_NULL(with_weakref);
+	TEST_ASSERT_TRUE(PyTuple_CheckExact(without));
+	TEST_ASSERT_TRUE(PyTuple_CheckExact(with_weakref));
+	TEST_ASSERT_EQUAL_INT(2, PyList_GET_SIZE(names));
 	TEST_ASSERT_EQUAL_INT(2, PyTuple_GET_SIZE(without));
 	TEST_ASSERT_EQUAL_INT(3, PyTuple_GET_SIZE(with_weakref));
 	TEST_ASSERT_EQUAL_INT(
