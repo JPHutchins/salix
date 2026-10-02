@@ -14,9 +14,6 @@ from typing import NamedTuple
 K = 200
 RUNS = 5
 
-# The in-tree salix.*.so lives under src/ (or the repo root); make it
-# importable here and in every subprocess we spawn (subprocesses inherit
-# PYTHONPATH, not sys.path).
 _ROOT = Path(__file__).resolve().parent.parent
 _PATHS = [str(_ROOT / "src"), str(_ROOT)]
 for _p in reversed(_PATHS):
@@ -27,9 +24,9 @@ _ENV = {**os.environ, "PYTHONPATH": os.pathsep.join(
 
 
 class Construct(NamedTuple):
-    key: str  # unique module name (must differ from any real library)
+    key: str
     label: str
-    short: str  # the closing summary's column, which has no room for label
+    short: str
     dep: str | None
     header: str
     body: Callable[[int], str]
@@ -65,9 +62,6 @@ def _record_type(i: int) -> str:
     return f"@record\ndef C{i}(a: int, b: int, c: int) -> None: ...\n"
 
 
-# A rival's import belongs to its constructor and not to the module, so a
-# construct that cannot be built costs nothing to skip. typing is not a rival:
-# it is stdlib, and Construct and Row already need it up there.
 def _struct_ctor() -> Callable[[int, int, int], object]:
     from salix import Struct
 
@@ -108,16 +102,12 @@ def _dc_frozen_ctor() -> Callable[[int, int, int], object]:
 
 
 def _record_type_ctor() -> Callable[[int, int, int], object]:
-    # record reads the return annotation and refuses one that is not None,
-    # so this signature is the decorator's requirement, not an oversight.
     @record  # type: ignore[untyped-decorator]
     def C(a: int, b: int, c: int):  # type: ignore[no-untyped-def]
         ...
     return C  # type: ignore[no-any-return]
 
 
-# A rival to measure against, not a requirement: record-type carries a
-# python_version>='3.11' marker and is simply absent below that.
 RECORD_TYPE: Construct | None
 
 try:
@@ -169,7 +159,7 @@ def per_type_us(c: Construct, work: Path) -> float:
     mod = c.header + "\n\n\n" + "\n\n".join(c.body(i) for i in range(K)) + "\n"
     (cdir / f"{c.key}.py").write_text(mod)
     stmt = f"import {c.key}"
-    _importtime(stmt, c.key, cdir)  # prime .pyc
+    _importtime(stmt, c.key, cdir)
     samples = [_importtime(stmt, c.key, cdir)[0] for _ in range(RUNS)]
     return statistics.median(samples) / K
 

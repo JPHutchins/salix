@@ -14,8 +14,6 @@ from camas import (
 
 C_SOURCES = by_suffix((".c", ".h"), default=tuple(sorted(str(p) for p in Path("src").rglob("*.[ch]"))))
 
-# Analysis takes translation units; a header is reached through the unit that
-# includes it, and compiling one alone is an error under -Werror.
 C_TRANSLATION_UNITS = by_suffix(
     (".c",), default=tuple(sorted(str(p) for p in Path("src").rglob("*.c")))
 )
@@ -27,8 +25,6 @@ PYTHONS = tuple(Path(".python-version").read_text().split())
 OLDEST = min(PYTHONS, key=lambda python: tuple(map(int, python.split("."))))
 NEWEST = max(PYTHONS, key=lambda python: tuple(map(int, python.split("."))))
 
-# The wheel legs pin what they test to this, so a stale local wheel fails the
-# guard instead of testing the published artifact of another version.
 _PROJECT_VERSION = re.search(
     r'^version = "([^"]+)"',
     Path("pyproject.toml").read_text(encoding="utf-8"),
@@ -37,20 +33,11 @@ _PROJECT_VERSION = re.search(
 assert _PROJECT_VERSION is not None
 VERSION = _PROJECT_VERSION.group(1)
 
-# The tests member declares pytest and hypothesis, and supplies them: a
-# per-interpreter project environment is what keeps six of them from fighting
-# over the one .venv a workspace otherwise shares.
 PYTEST = (
     "uv run --package salix-tests --managed-python --python {PY} python -m pytest"
 )
 ENVIRONMENT_PER_INTERPRETER = {"UV_PROJECT_ENVIRONMENT": ".venvs/{PY}"}
 
-# setuptools is a build tool, not something the tests member should carry.
-# The two leaves must name the same interpreter, and neither may name a
-# version string the ambient VIRTUAL_ENV can flip to a free-threaded one:
-# uv venv creation is immune to that preference and resolves the plain
-# managed variant, so the venv the pytest leaf reuses is the one the
-# build leaf compiles against.
 MAKE_ENV = "uv venv --clear --python {PY} --managed-python .venvs/{PY}"
 make_env = Task(MAKE_ENV, mutates=True)
 
@@ -60,8 +47,6 @@ BUILD = (
     " python setup.py build_ext --inplace"
 )
 
-# -Werror is ours to opt into. setup.py leaves it off so that an sdist build on
-# someone else's compiler cannot fail on a warning nobody here has seen.
 STRICT_BUILD = {"SALIX_STRICT": "1"}
 
 NIX_INPUTS = ("src/", "nix/", "tools/", "tests/", "flake.nix", "flake.lock", "pyproject.toml")
@@ -74,7 +59,6 @@ pytest = Task(
     env=ENVIRONMENT_PER_INTERPRETER,
     agent_format=JUNIT_FORMAT,
 )
-# --no-sync: analyze reaches this from ci, and CI never installs the project.
 compile_flags = Task("uv run --no-sync python tools/compile_flags.py", mutates=True)
 
 clean = Task("git clean -xdf -e .venv -e .venvs -e .free-threaded-python -e .camas -e .claude", mutates=True)
@@ -88,17 +72,12 @@ format = Parallel(c_format, nix_format)
 format_check = Parallel(c_format_check, nix_format_check)
 lock_check = Task("uv lock --check")
 
-# Two engines rather than one: they are independent implementations, and the
-# flags carry -Werror, so gcc also holds the build to a second compiler.
 c_tidy = Task("clang-tidy --quiet {paths}", paths=C_TRANSLATION_UNITS)
 c_analyzer = Task(
     "gcc -fanalyzer -fsyntax-only @compile_flags.txt {paths}", paths=C_TRANSLATION_UNITS
 )
 analyze = Sequential(compile_flags, Parallel(c_tidy, c_analyzer))
 
-# A checker reads salix/__init__.pyi and never imports the extension, so
-# there is nothing to build first. Targeting the floor is the point: that is
-# where the stub has to hold, whatever interpreter the checker itself runs on.
 TYPE_CHECK = "uv run --no-project --with typing_extensions"
 mypy = Task(
     TYPE_CHECK + " --with mypy mypy --strict --warn-unused-ignores"
@@ -106,21 +85,10 @@ mypy = Task(
 )
 pyright = Task(TYPE_CHECK + " --with pyright pyright --pythonversion " + OLDEST + " tests/typing")
 
-# ty does not honour the suppression comments the other two do, so it reads the
-# acceptances; the rejections are asserted by the checkers that report a
-# suppression they did not need.
 ty = Task(
     TYPE_CHECK + " --with ty ty check --python-version " + OLDEST + " tests/typing/accepted.py"
 )
 
-# The repo's own Python, which is a different question from the stub's: these
-# are programs, not assertions about the API, so they are checked on the newest
-# interpreter rather than the floor, and record-type does not reach the floor
-# anyway. tests/ is excluded on purpose -- passing a wrong type is what most of
-# those tests do, and tests/typing is where typing is asserted.
-#
-# --explicit-package-bases, because bench/tasks.py and tasks.py are both
-# `tasks` otherwise.
 tooling = Task(
     TYPE_CHECK + " --with mypy --with camas --with setuptools --with types-setuptools"
     " --with msgspec --with record-type"
@@ -131,8 +99,6 @@ tooling = Task(
 )
 type_check = Parallel(mypy, pyright, ty, tooling)
 
-# Lint, not format: the style here is the style already in the files, so ruff
-# runs as a checker and never as a formatter. The rule set is in pyproject.
 RUFF_CHECK = "uv run --no-project --with ruff ruff check"
 HUNDREDS_OF_DIAGNOSTICS = 64_000
 LINT_FORMAT = AgentFormat("--output-format rdjson", "rdjson", limit=HUNDREDS_OF_DIAGNOSTICS)
@@ -150,22 +116,9 @@ lint = Parallel(
 
 bench = Project("bench")
 
-# Built by nix because they embed CPython: libpython and unity have to be on
-# the link line, and nix is where those paths come from.
 c_test = Task("nix build .#c-tests --no-link", when=NIX_INPUTS)
 
 wheels = Task("nix build .#default --out-link result-wheels", when=NIX_INPUTS, mutates=True)
-# Two steps, because building and evaluating are different questions and only
-# one of them is portable. `nix flake check` builds the checks for the machine
-# it is on and silently omits the rest. `--all-systems` does not fix that: it
-# makes nix *build* the others, which no single runner can do -- an x86_64 CI
-# box cannot build the aarch64-darwin check, and that is what turned CI red.
-#
-# `nix flake show` forces every output on every system to evaluate without
-# building any of it, in about a second, which is the part that catches a typo
-# in a darwin or aarch64 path.
-# sh -c, because camas does not run a shell and the point is the exit status,
-# not the 50KB of JSON that proves it got there.
 flake_evaluates = Task(
     "sh -c 'nix flake show --all-systems --json > /dev/null'", when=NIX_INPUTS
 )
@@ -173,16 +126,8 @@ flake_check = Sequential(flake_evaluates, Task("nix flake check", when=NIX_INPUT
 
 test = Parallel(Sequential(build, pytest), matrix={"PY": PYTHONS})
 
-# The wheel matrix does build free-threaded targets, derived from these names
-# rather than listed alongside them: a `3.14t` in .python-version would enter
-# the test matrix too, where uv cannot keep it apart from `3.14` (below). One
-# leg is enough -- a module that does not declare Py_mod_gil silently
-# re-enables the GIL, and this is the build that would notice.
 FREE_THREADED = "3.14t"
 
-# uv resolves a plain `--python 3.14` to a free-threaded interpreter as soon as
-# one is installed -- any patch, even with the default variant also installed --
-# so this one is kept in a root of its own where it cannot rebind the matrix.
 FREE_THREADED_ROOT = {"UV_PYTHON_INSTALL_DIR": ".free-threaded-python"}
 free_threaded_build = Sequential(
     Task(
@@ -204,28 +149,6 @@ benchmark = Sequential(
 )
 check = Parallel(test, free_threaded, format_check, lock_check, lint, analyze, c_test, type_check)
 
-# Installed, not compiled: MSVC has no __attribute__((cleanup)), so the Windows
-# leg cannot build this source at all.
-#
-# --no-project rather than the tests member, because this leg must not see the
-# workspace at all: salix is a member of it, and uv resolves the name to the
-# source tree and compiles it instead of taking the wheel. Naming the two
-# dependencies is the cost -- uv run takes neither a pyproject.toml for
-# --with-requirements nor a member whose sources it is told to ignore.
-#
-# --no-cache: uv keys its cache on name and version, so a rebuilt wheel of the
-# same released version is indistinguishable from one built before and it
-# serves the old archive. Neither --refresh-package nor --reinstall-package
-# dislodges it, and `uv cache clean` wants a lock no leaf in a parallel tree
-# can take.
-#
-# salix must come from the local tree, and once it is published the index
-# offers the same name. Both leaves pin the version, so the guard fails on a
-# local wheel that is missing or stale rather than passing against the
-# published artifact; the leg then resolves with the index, where the same
-# pin wins the local wheel (uv selects the flat-index wheel for an identical
-# name and version -- measured, and setup-uv pins the resolver that measured
-# it) while the index serves the test dependencies.
 WHEEL_RUN = "uv run --no-cache --no-project --managed-python --python {PY}"
 wheel_guard = Task(
     WHEEL_RUN + " --no-index --find-links ../result-wheels"
@@ -241,24 +164,10 @@ wheel_test = Task(
     env={"SALIX_REQUIRE_INSTALLED": "1"},
 )
 
-# python-build-standalone has no Windows ARM64 build below 3.11, so the wheel
-# set has no cp310 win_arm64 to import and the leg below cannot ask for one.
 WINDOWS_ARM_OLDEST = "3.11"
 
-# Spelled out, because a bare version is not enough on this one runner: uv
-# resolves `--python 3.15` there to the *x86_64* build, Windows ARM64 runs it
-# under emulation, and an emulated interpreter installs win_amd64 -- so the leg
-# passed twice while importing the wheel windows-latest already imports. The
-# architecture is the whole point of the leg, so it is named.
 WINDOWS_ARM_PYTHON = "cpython-{}-windows-aarch64"
 
-# Sampled rather than crossed, to stay inside the OSS concurrency limit.
-#
-# The last four legs are the machines that can load what the macos-latest and
-# windows-latest legs cannot: macos-latest is Apple silicon and windows-latest
-# is x86_64, which left macosx_10_13_x86_64 and win_arm64 shipping inspected by
-# check_wheel.py and imported by nothing (#37). Both are cross-compiled by zig,
-# which is the half of the build with nobody standing behind it.
 coverage = Parallel(
     Sequential(wheel_guard, wheel_test),
     variants=(
