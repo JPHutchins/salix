@@ -14,6 +14,7 @@ VERSION: Final = tomllib.loads(
 
 class BuildConfig(NamedTuple):
     sources: tuple[str, ...]
+    test_sources: tuple[str, ...]
     c_flags: tuple[str, ...]
 
 
@@ -44,6 +45,10 @@ BUILD: Final = BuildConfig(
         "src/mixin/copy.c",
         "src/options.c",
         "src/repr.c",
+    ),
+    test_sources=(
+        "src/testing.c",
+        "tests/c/main.c",
     ),
     # -Wno-unused-parameter: CPython slot signatures are fixed by the API and
     # routinely ignore an argument.
@@ -78,6 +83,8 @@ if __name__ == "__main__":
     match sys.argv[1:]:
         case ["sources"]:
             print("\n".join(BUILD.sources))
+        case ["test-sources"]:
+            print("\n".join(BUILD.test_sources))
         case ["c-flags"]:
             print("\n".join(BUILD.c_flags))
         case ["c-flags", "--strict"]:
@@ -88,5 +95,5 @@ if __name__ == "__main__":
             raise SystemExit("build_config.py: --shipped only follows --strict")
         case _:
             raise SystemExit(
-                "usage: build_config.py {sources|c-flags [--strict [--shipped]]}"
+                "usage: build_config.py {sources|test-sources|c-flags [--strict [--shipped]]}"
             )
