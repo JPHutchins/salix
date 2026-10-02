@@ -70,10 +70,6 @@ enum result install_fields(
 }
 
 static bool author_new_in_chain(PyTypeObject * const cls) {
-	/* The effective tp_new comes down the solid-base chain (type_new copies
-	 * it from the first solid base), so the first heap entry in that chain
-	 * whose dict defines __new__ is the one whose __new__ answers; a static
-	 * builtin ends the chain and its tp_new is the family's. */
 	for (PyTypeObject * entry = cls; entry != NULL; entry = entry->tp_base) {
 		if ((entry->tp_flags & Py_TPFLAGS_HEAPTYPE) == 0) {
 			break;
@@ -82,9 +78,6 @@ static bool author_new_in_chain(PyTypeObject * const cls) {
 		int const present = dict_has_string(entry->tp_dict, "__new__");
 
 		if (present < 0) {
-			/* A probe that cannot see has not learned presence; the
-			 * conservative answer keeps the fallback, and the probe error
-			 * cannot ride the class statement. */
 			PyErr_Clear();
 
 			return false;
@@ -106,29 +99,17 @@ enum result install_constructor(
 	bool const own_init = defines_own_init(struct_class, namespace);
 	struct_class->struct_own_init = own_init;
 
-	/* A body __new__ = None is the cannot-create marker; the flag is the
-	 * one record of it, so a subclass inheriting the NULL slot inherits
-	 * the refusal instead of the mixin's slotless NULL being re-set to
-	 * object's own. The class's own dict is the record -- the settle may
-	 * move the body's entries out of the original namespace before this
-	 * probe runs. */
 	PyObject * const new_entry = dict_get_string(
 		struct_class->heap_type.ht_type.tp_dict,
 		"__new__"
 	);
 
 	if (new_entry == NULL && PyErr_Occurred()) {
-		/* A probe that cannot see has not learned a marker; the error
-		 * cannot ride the class statement. */
 		PyErr_Clear();
 	}
 
 	bool cannot_create = new_entry == Py_None;
 
-	/* The nearest struct class whose dict defines __new__ decides the
-	 * marker, CPython's own slot semantics: a body __new__ overrides it
-	 * and the override is inheritable. The ancestors answer only when
-	 * the class's own dict carries no entry. */
 	if (new_entry == NULL) {
 		for (
 			PyTypeObject * chain = struct_class->heap_type.ht_type.tp_base;
@@ -154,15 +135,6 @@ enum result install_constructor(
 	struct_class->struct_cannot_create = cannot_create;
 
 	if (own_init) {
-		/* The wrapped init fills the defaults and writes the positional
-		 * payload before the author's or the family's own init answers;
-		 * tp_new stays the pre-install slot -- the body's, the family's
-		 * (whose C member writes are the construction), or object's own.
-		 * No class ever carries a salix slot as tp_new, so a body
-		 * __new__'s super() chain passes object_new's own guard in every
-		 * subclass shape. A struct base that is itself own-init hands
-		 * down the wrapper, so the capture resolves through the struct
-		 * ancestors to the init the first own-init ancestor captured. */
 		initproc captured_init = struct_class->heap_type.ht_type.tp_init;
 
 		for (
@@ -180,16 +152,7 @@ enum result install_constructor(
 		struct_class->struct_installed_init = captured_init;
 		struct_class->heap_type.ht_type.tp_init = Struct_init_wrapper;
 		struct_class->heap_type.ht_type.tp_vectorcall = NULL;
-
-		/* A marker class keeps the slot type_new gave it, CPython's own
-		 * shape: the plain class's dispatch slot, which subtype_new's
-		 * staticbase walk climbs past. The construction guards read the
-		 * cached flag instead of the slot. */
 	} else {
-		/* The root inherits the mixin's NULL tp_new, which object_new's
-		 * guard refuses on a body __new__'s super() chain; object's own
-		 * answers. The marker's slot stays whatever type_new gave it, the
-		 * same rule the own-init arm follows. */
 		if (!cannot_create && struct_class->heap_type.ht_type.tp_new == NULL) {
 			struct_class->heap_type.ht_type.tp_new = PyBaseObject_Type.tp_new;
 		}
@@ -197,15 +160,10 @@ enum result install_constructor(
 		struct_class->heap_type.ht_type.tp_vectorcall = Struct_vectorcall;
 	}
 
-	/* Both answers are fixed at class creation, so the construction and
-	 * copy paths read them instead of re-walking per call. */
 	struct_class->struct_author_new = author_new_in_chain(&struct_class->heap_type.ht_type);
 	struct_class->struct_family_owned = family_owns_in_mro(&struct_class->heap_type.ht_type);
 	struct_class->struct_group_family = group_family_in_mro(&struct_class->heap_type.ht_type);
 
-	/* The group members' field sources resolve once: the carry reads the
-	 * bound message and exceptions fields by index, so no construction
-	 * allocates the names or re-scans the field table. */
 	struct_class->struct_message_index = -1;
 	struct_class->struct_exceptions_index = -1;
 
@@ -254,9 +212,6 @@ enum result ensure_singleton(
 	PyObject * const namespace,
 	bool const bases_divert_setattro
 ) {
-	/* A body __new__ = None is the cannot-create marker, not the
-	 * slotless allocation the singleton interns; a probe error forfeits
-	 * the intern without riding the class statement. */
 	int const new_present = dict_has_string(namespace, "__new__");
 
 	if (new_present < 0) {
@@ -371,11 +326,6 @@ static Py_ssize_t * resolve_member_offsets(
 	Py_ssize_t const field_count,
 	Py_ssize_t * const member_count
 ) {
-	/* A non-struct base's own __slots__ members are not struct fields, so
-	 * the copy would never touch them without this table: one walk here, at
-	 * class creation, instead of rescanning every MRO dict on every copy.
-	 * The struct's own field descriptors are skipped by offset, and a
-	 * weakref slot is a getset descriptor, never a member one. */
 	*member_count = 0;
 
 	PyObject * const mro = struct_class->heap_type.ht_type.tp_mro;
