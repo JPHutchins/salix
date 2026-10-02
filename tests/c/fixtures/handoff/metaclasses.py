@@ -16,4 +16,8 @@ class Plain(type(Struct)):
     pass
 
 
-result = (Handing, Plain, Handing.__new__)
+result = {
+    "handing": Handing,
+    "plain": Plain,
+    "handing_new": Handing.__new__,
+}

@@ -196,10 +196,19 @@ static void test_a_body_init_owns_the_construction(void) {
 
 static void test_the_class_body_answers_while_the_type_is_built(void) {
 	PyObject * const owners = testing_evaluate(owners_source);
-	StructType * const raised = (StructType *) testing_entry(owners, "raised");
 
-	TEST_ASSERT_FALSE(defines_own_init(raised, testing_entry(owners, "empty_namespace")));
-	TEST_ASSERT_TRUE(defines_own_init(raised, testing_entry(owners, "authored_namespace")));
+	TEST_ASSERT_FALSE(
+		defines_own_init(
+			(StructType *) testing_entry(owners, "raised"),
+			testing_entry(owners, "empty_namespace")
+		)
+	);
+	TEST_ASSERT_TRUE(
+		defines_own_init(
+			(StructType *) testing_entry(owners, "raised"),
+			testing_entry(owners, "authored_namespace")
+		)
+	);
 
 	Py_DECREF(owners);
 }

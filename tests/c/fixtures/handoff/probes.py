@@ -18,5 +18,4 @@ result = {
     "named": {"b": True, "c": True},
     "positional": {"a": True},
     "anything": {"anything": True},
-    "none": {},
 }
