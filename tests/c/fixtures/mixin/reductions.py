@@ -12,7 +12,7 @@ result = {
     "pair": Pair(1, 2),
     "rebuilt_pair": Pair(3, 4),
     "tuple_reduction": (Pair, (3, 4)),
-    "string_reduction": "pair",
+    "string_reduction": "a string reduction",
     "copy_module": copy,
     "memo": {},
 }

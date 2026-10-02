@@ -20,7 +20,11 @@ class Refused(Struct):
         raise ValueError(self.x)
 
 
-calls: list[int] = []
+calls: list[object] = []
+first = object()
+second = object()
+original_x = object()
+original_y = object()
 
 result = {
     "point": Point,
@@ -28,9 +32,13 @@ result = {
     "refused": Refused,
     "calls": calls,
     "x": "x",
-    "y": "y",
     "z": "z",
     "keyword_y": ("y",),
-    "first": 1,
-    "second": 2,
+    "keyword_z": ("z",),
+    "first": first,
+    "second": second,
+    "replaceable": Point(original_x, original_y),
+    "original_x": original_x,
+    "original_y": original_y,
+    "not_a_struct": object(),
 }

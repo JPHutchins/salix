@@ -391,13 +391,40 @@ static void test_a_later_bases_slot_forces_the_record(void) {
 }
 
 static void test_only_struct_bases_are_counted(void) {
-	PyObject * const bases = testing_evaluate(bases_source);
+	PY_OWNED(bases, testing_evaluate(bases_source));
 
 	TEST_ASSERT_EQUAL_INT(2, struct_base_count(testing_entry(bases, "two_structs")));
 	TEST_ASSERT_EQUAL_INT(1, struct_base_count(testing_entry(bases, "one_struct")));
 	TEST_ASSERT_EQUAL_INT(0, struct_base_count(testing_entry(bases, "no_struct")));
+}
 
-	Py_DECREF(bases);
+static void test_the_repair_runs_only_past_one_struct_base(void) {
+	PY_OWNED(bases, testing_evaluate(bases_source));
+
+	TEST_ASSERT_EQUAL_INT(
+		1,
+		dict_has_string(((PyTypeObject *) testing_entry(bases, "both"))->tp_dict, "__eq__")
+	);
+	TEST_ASSERT_EQUAL_INT(
+		0,
+		PyObject_RichCompareBool(
+			PyTuple_GET_ITEM(testing_entry(bases, "both_pair"), 0),
+			PyTuple_GET_ITEM(testing_entry(bases, "both_pair"), 1),
+			Py_EQ
+		)
+	);
+	TEST_ASSERT_EQUAL_INT(
+		0,
+		dict_has_string(((PyTypeObject *) testing_entry(bases, "only"))->tp_dict, "__eq__")
+	);
+	TEST_ASSERT_EQUAL_INT(
+		1,
+		PyObject_RichCompareBool(
+			PyTuple_GET_ITEM(testing_entry(bases, "only_pair"), 0),
+			PyTuple_GET_ITEM(testing_entry(bases, "only_pair"), 1),
+			Py_EQ
+		)
+	);
 }
 
 void mro_tests(void) {
@@ -406,6 +433,7 @@ void mro_tests(void) {
 	RUN_TEST(test_a_raw_tp_setattro_co_base_does_not_divert_the_struct_slot);
 	RUN_TEST(test_a_later_bases_slot_forces_the_record);
 	RUN_TEST(test_only_struct_bases_are_counted);
+	RUN_TEST(test_the_repair_runs_only_past_one_struct_base);
 }
 
 #endif
