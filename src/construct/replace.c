@@ -11,9 +11,6 @@ PyObject * Struct_replace(
 	Py_ssize_t const nargs,
 	PyObject * const keyword_names
 ) {
-	/* METH_FASTCALL methods receive self as the first parameter, so the
-	 * positional count here excludes it: anything past zero is a second
-	 * positional argument. */
 	if (nargs != 0) {
 		PyErr_Format(
 			PyExc_TypeError,
@@ -34,9 +31,6 @@ PyObject * Struct_replace(
 	StructType * const type = struct_type_of(self);
 	Py_ssize_t const change_count = keyword_names != NULL ? PyTuple_GET_SIZE(keyword_names) : 0;
 
-	/* A body __new__ = None is the cannot-create marker; the cached flag
-	 * answers at every construction entry point, the metatype's dispatch
-	 * included. */
 	if (type->struct_cannot_create) {
 		PyErr_Format(PyExc_TypeError, "cannot create '%.100s' instances", struct_type_name(type));
 
@@ -67,10 +61,6 @@ PyObject * Struct_replace(
 		PY_MOVABLE(replaced, NULL);
 
 		if (type->struct_family_owned || type->struct_group_family) {
-			/* The family's construction owns the call shape and rejects field
-			 * keywords; the source's positional payload reconstructs the
-			 * members and args, and the changes land on the fields
-			 * directly. */
 			PY_MOVABLE(positionals, NULL);
 
 			STRUCT_BEGIN_CRITICAL_SECTION(self);
@@ -95,20 +85,10 @@ PyObject * Struct_replace(
 					PyErr_ExceptionMatches(PyExc_TypeError) &&
 					!type->struct_author_new
 				) {
-					/* A payload the family's arity rejects -- the group's
-					 * exact two, an author init's narrower shape -- takes the
-					 * allocation instead, the vectorcall's fallback pattern;
-					 * the members and args below answer what the family's
-					 * parse would have written. Only tp_new's own rejection
-					 * falls back: an author init's TypeError propagates. */
 					PyErr_Clear();
 					allocated_route = true;
 					replaced = cls->tp_alloc(cls, 0);
 				} else if (replaced != NULL && !PyObject_TypeCheck(replaced, cls)) {
-					/* The type_call sequence this mirrors hands an author
-					 * __new__'s foreign object back without initializing it;
-					 * the slot writes that follow assume the struct's own
-					 * layout. */
 					PyErr_Format(
 						PyExc_TypeError,
 						"%s.__new__(%s) is not safe, use %s.__new__()",
@@ -123,19 +103,11 @@ PyObject * Struct_replace(
 					}
 				}
 			} else {
-				/* An empty payload marks a from_mapping-built source: the
-				 * family's parse has nothing to reconstruct, and the plain
-				 * allocation keeps the members exactly as the source left
-				 * them -- unset, not fabricated. */
 				allocated_route = true;
 				replaced = cls->tp_alloc(cls, 0);
 			}
 
 			if (replaced != NULL) {
-				/* The constructor pre-filled the defaults; the source's
-				 * values -- mutations and prior replaces included --
-				 * overwrite them, then the changes overwrite those, and
-				 * every overwrite releases the pre-filled reference. */
 				for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
 					PyObject * const value = PyTuple_GET_ITEM(values, i);
 
@@ -204,10 +176,6 @@ PyObject * Struct_replace(
 							return NULL;
 						}
 
-						/* The allocation wrote no args -- the family's parse
-						 * never ran -- so the source's payload answers; a
-						 * member-less struct whose graded pack no-ops keeps
-						 * its args here. */
 						if (
 							set_exception_args_from_original(
 								type,
@@ -237,9 +205,6 @@ PyObject * Struct_replace(
 				}
 			}
 		} else {
-			/* The author's init owns the call shape; the field values and
-			 * the changes reach it as keywords, positionals stay out so a
-			 * field-named parameter binds once. */
 			PY_OWNED(changed, PyDict_New());
 
 			if (changed == NULL) {
@@ -348,9 +313,6 @@ PyObject * Struct_replace(
 		}
 
 		if (touched == 1) {
-			/* An exceptions change replaces what is raised, so the members
-			 * rebuild from the resulting fields instead of carrying the
-			 * source's; the message field answers the message. */
 			if (
 				group_members_from_fields(
 					type,
@@ -376,9 +338,6 @@ PyObject * Struct_replace(
 	}
 #endif
 
-	/* The source's payload was the explicit prefix at its construction; the
-	 * replaced instance carries it forward, so a change behind a gap keeps
-	 * the leading fields in the payload and the result pickles. */
 	Py_ssize_t const explicit_count = (
 		is_exception_struct(
 			cls
@@ -403,11 +362,6 @@ PyObject * Struct_replace(
 
 #if PY_VERSION_HEX >= 0x030B0000
 	if (type->struct_group_family) {
-		/* The payload mirrors the carried or rebuilt members, so args and
-		 * str() never disagree about the message; a struct without either
-		 * member field keeps the field-value payload written above. The
-		 * locked store answers because the post-init hook may have
-		 * published the copy. */
 		if (store_group_args(type, copy, false) != RESULT_OK) {
 			return NULL;
 		}

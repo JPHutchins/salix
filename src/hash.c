@@ -4,7 +4,6 @@
 #include "owned.h"
 #include "types.h"
 
-/* CPython reserves -1: a real hash of -1 is remapped to -2. */
 enum : Py_hash_t {
 	HASH_ERR = -1,
 };

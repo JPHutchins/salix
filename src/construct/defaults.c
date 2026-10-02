@@ -5,11 +5,6 @@
 #include "../result.h"
 #include "../types.h"
 
-/* A list of statements rather than a static array of {type, constructor}: on
- * Windows a `PyTypeObject` is imported from python3.dll, and the address of a
- * dllimport symbol is not a compile-time constant, so the array version
- * compiles everywhere except the platform half the wheels are cross-built for.
- */
 typedef PyObject * (*default_copier)(PyObject * declared);
 
 static PyObject * deepcopy_function(void);
@@ -45,10 +40,6 @@ static PyObject * copy_or_base(
 			return py_move(&deep_copied);
 		}
 
-		/* A TypeError is the deepcopy refusal shape (a memoryview); the old
-		 * rule shared those, so share them still. Anything else propagates.
-		 * A __deepcopy__ that returns its argument comes back through the
-		 * call itself: copy.deepcopy hands it over as the copy. */
 		if (!PyErr_ExceptionMatches(PyExc_TypeError)) {
 			return NULL;
 		}
@@ -66,9 +57,6 @@ static PyObject * copy_or_base(
 
 	PY_MOVABLE(copied, copy_declared(declared, seed));
 
-	/* A constructor that returns its argument is a caching or delegating
-	 * __new__; the result would re-alias the declared default, so it takes
-	 * the base-copy path like a rejecting constructor. */
 	if (copied != NULL && copied != declared) {
 		return py_move(&copied);
 	}
@@ -118,8 +106,6 @@ static default_copier copies_default(PyTypeObject * const kind) {
 	return NULL;
 }
 
-/* The module does not support multiple interpreters, so the static cache
- * is one per process, cleared by defaults_free at teardown. */
 static PyObject * cached_deepcopy = NULL;
 
 static PyObject * deepcopy_function(void) {
@@ -139,10 +125,6 @@ static PyObject * deepcopy_function(void) {
 		return NULL;
 	}
 
-	/* Both racers hold the same module, so the critical section is on it; the
-	 * loser's reference drops with its scope. The caller gets its own
-	 * reference, so a concurrent defaults_free cannot free the object the
-	 * caller is about to invoke. */
 	STRUCT_BEGIN_CRITICAL_SECTION(module);
 		if (cached_deepcopy == NULL) {
 			cached_deepcopy = Py_NewRef(resolved);
@@ -170,8 +152,6 @@ static enum default_probe probe_default(PyObject * const declared) {
 	}
 
 	if (PyErr_ExceptionMatches(PyExc_RecursionError)) {
-		/* A frozen struct pointing at itself hashes out of stack; sharing it
-		 * is safe, exactly as the old refusal ruled. */
 		PyErr_Clear();
 
 		return DEFAULT_PROBE_SHARE;
@@ -208,16 +188,12 @@ PyObject * struct_default_copy(PyObject * const declared) {
 		return NULL;
 	}
 
-	/* A fresh memo per field: two fields declaring the same object get
-	 * disjoint copies. */
 	PY_MOVABLE(copied, PyObject_CallOneArg(deepcopy, declared));
 
 	if (copied != NULL) {
 		return py_move(&copied);
 	}
 
-	/* A TypeError is the deepcopy refusal shape (a memoryview); the old rule
-	 * shared those, so share them still. Anything else propagates. */
 	if (!PyErr_ExceptionMatches(PyExc_TypeError)) {
 		return NULL;
 	}

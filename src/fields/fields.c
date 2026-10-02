@@ -247,8 +247,6 @@ static enum result append_annotation(
 	PyObject * const empty_extras,
 	bool const typing_loaded
 ) {
-	/* A type is the common case and cannot be the Annotated split; the probe
-	 * costs a raise-and-clear cycle per field, so types skip it. */
 	if (!typing_loaded || PyType_Check(annotation)) {
 		return (
 			(
@@ -404,9 +402,6 @@ static enum result append_declared(
 
 		struct special_form const special = special_form_of(annotation, &probes);
 
-		/* Before the answer is used at all, not only when it is "no form": the
-		 * text path allocates on the way to either verdict, and a failure there
-		 * must not be overwritten by a refusal that happens to agree. */
 		if (PyErr_Occurred()) {
 			return RESULT_ERROR;
 		}
@@ -550,12 +545,6 @@ static PyObject * build_defaults(PyObject * const all_names, PyObject * const de
 			return NULL;
 		}
 
-		/* The stored default is what the class keeps, severed from the
-		 * class-body object wherever the copy path can sever it; the share
-		 * fallbacks deliberately keep the declared object.
-		 *
-		 * `_struct_defaults_` still hands the stored object out, so filling it
-		 * through there defeats this. That route is out of contract. */
 		PyObject * const stored = struct_default_copy(value);
 
 		if (stored == NULL) {
@@ -645,7 +634,6 @@ static void test_a_required_field_after_a_default_is_rejected(void) {
 }
 
 void fields_tests(void) {
-	/* Unity takes its file from UNITY_BEGIN, which is the runner's. */
 	Unity.TestFile = __FILE__;
 
 	RUN_TEST(test_no_defaults_produces_an_empty_tuple);

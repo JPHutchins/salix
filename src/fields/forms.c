@@ -27,11 +27,6 @@ struct special_form const INIT_VAR_FORM = {
 };
 
 enum : int {
-	/* A budget on work rather than on depth, because bounding the shape stopped
-	 * bounding the effort when the walk became a tree. Four hops was enough for
-	 * a chain -- Optional[Annotated[ClassVar[int], 'm']] is four -- and this is
-	 * enough for the arguments beside them. It is also what stops a cycle:
-	 * whichever edge points back at an ancestor, the frontier runs out. */
 	SPECIAL_FORM_NODES = 32,
 };
 
@@ -46,8 +41,6 @@ static void form_frontier_clear(struct form_frontier * const frontier) {
 	}
 }
 
-/* Full is not a failure: the budget is the point, and a walk that runs out
- * answers "no form", which is what an unrecognised annotation answers. */
 static void form_frontier_push(struct form_frontier * const frontier, PyObject * const node) {
 	if (frontier->count < SPECIAL_FORM_NODES) {
 		frontier->nodes[frontier->count++] = Py_NewRef(node);
@@ -191,11 +184,6 @@ static struct special_form named_special_form(
 		return CLASS_VAR_FORM;
 	}
 
-	/* A scan can fail rather than answer -- PyUnicode_Find's own -2, or an
-	 * allocation in the boundary check -- and both spell that as false. The
-	 * second scan must not run on top of the first one's exception, and the
-	 * caller reads the exception before it reads the verdict, so leaving it set
-	 * is what reports the failure. */
 	if (PyErr_Occurred()) {
 		return (struct special_form){0};
 	}
@@ -363,19 +351,6 @@ static bool names_form_at_top(PyObject * const text, PyObject * const needle) {
 	return names_form_matching(text, needle, true);
 }
 
-/*
- * The attribute if its module is already loaded, and NULL if it is not --
- * without importing, which is the whole point. A new reference, so the caller
- * owns it: returning a borrowed one out of a PY_OWNED scope is the shape
- * owned.h warns about, even where the module would have kept it alive.
- *
- * NULL with no exception set is the absent module, which is the ordinary answer
- * and turns the guard off for this class. NULL *with* an exception set is a
- * failure, and the caller has to tell
- * them apart: swallowing the second one turns a MemoryError into a silently
- * unguarded class, where a ClassVar becomes a field again with no way to
- * notice.
- */
 PyObject * module_attribute(char const * const module_name, char const * const attribute) {
 	PY_OWNED(name, PyUnicode_FromString(module_name));
 
