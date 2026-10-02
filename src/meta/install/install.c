@@ -118,15 +118,13 @@ enum result install_constructor(
 		) {
 			PyObject * const entry = dict_get_string(chain->tp_dict, "__new__");
 
-			if (entry == NULL && PyErr_Occurred()) {
+			if (entry == NULL) {
 				PyErr_Clear();
 
 				continue;
 			}
 
-			if (entry == Py_None) {
-				cannot_create = true;
-			}
+			cannot_create = entry == Py_None;
 
 			break;
 		}

@@ -987,6 +987,43 @@ def test_a_subclass_of_a_none_new_struct_refuses_every_entry_point():
         salix.from_mapping(PB, {"x": 5})
 
 
+def test_a_grandchild_of_a_none_new_struct_refuses_every_entry_point() -> None:
+    import salix
+
+    class PA(Struct, frozen=False):
+        x: int = 0
+        __new__ = None
+
+    class PB(PA):
+        pass
+
+    class PC(PB):
+        pass
+
+    with pytest.raises(TypeError, match="cannot create"):
+        PC(7)
+
+    with pytest.raises(TypeError, match="cannot create"):
+        salix.from_mapping(PC, {"x": 5})
+
+
+def test_the_nearest_ancestor_defining_new_decides_the_marker() -> None:
+    class Refusing(Struct):
+        __new__ = None
+
+    class Overriding(Refusing):
+        def __new__(struct_type) -> object:
+            return object.__new__(struct_type)
+
+        def __init__(self) -> None:
+            pass
+
+    class Inheriting(Overriding):
+        pass
+
+    assert isinstance(Inheriting(), Inheriting)
+
+
 def test_a_frozen_zero_field_subclass_of_a_none_new_struct_defines_and_refuses():
     class FrozenNoneNew(Exception, Struct, frozen=True):
         __new__ = None
