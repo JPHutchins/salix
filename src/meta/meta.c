@@ -177,8 +177,6 @@ PyObject * struct_create_root(
 		return NULL;
 	}
 
-	/* The settle reaches the module state through the type chain, so the
-	 * root carries the association every subclass inherits the walk to. */
 	((StructType *) root)->struct_state = (struct salix_state *) PyModule_GetState(module);
 	Py_XSETREF(((PyHeapTypeObject *) root)->ht_module, Py_NewRef(module));
 
@@ -192,8 +190,6 @@ static PyObject * StructMeta_call(
 ) {
 	PyTypeObject * const type = (PyTypeObject *) self;
 
-	/* A body __new__ = None is the cannot-create marker; the cached flag
-	 * refuses at the one dispatch both construction arms share. */
 	if (((StructType *) self)->struct_cannot_create) {
 		PyErr_Format(PyExc_TypeError, "cannot create '%.100s' instances", type->tp_name);
 
@@ -203,10 +199,6 @@ static PyObject * StructMeta_call(
 	PY_MOVABLE(result, type->tp_vectorcall != NULL ? PyVectorcall_Call(self, args, keywords) :
 		PyType_Type.tp_call(self, args, keywords));
 
-	/* An author __new__ may return any object; 3.14's type_call hands a
-	 * non-instance back silently, and the slot writes that would follow
-	 * assume the struct's own layout. The guard answers here, once, for
-	 * both construction arms. */
 	if (result != NULL && !PyObject_TypeCheck(result, type)) {
 		PyErr_Format(
 			PyExc_TypeError,
@@ -250,8 +242,6 @@ struct member_lookup find_member(
 	return (struct member_lookup){.tag = MEMBER_LOOKUP_MISSING};
 }
 
-/* `visit` and `arg` are not free names: Py_VISIT expands to reference both by
- * those exact spellings, so renaming either one stops the macro compiling. */
 static int StructMeta_traverse(PyObject * const self, visitproc const visit, void * const arg) {
 	StructType * const struct_class = (StructType *) self;
 
@@ -296,8 +286,6 @@ static int StructMeta_clear(PyObject * const self) {
 #	include "../fields.h"
 #	include "../mixin.h"
 
-/* find_member reads a PyMemberDef array, which is trivially fabricated -- and
- * the miss is the branch that turns into a RuntimeError nothing else exercises. */
 static struct PyMemberDef const example_members[] = {
 	{.name = "alpha", .offset = 16},
 	{.name = "beta", .offset = 24},
@@ -367,8 +355,6 @@ static bool reserved_set_contains(char const * const name) {
 }
 
 static void test_the_reservation_and_the_getset_tables_agree(void) {
-	/* __signature__ is machinery, not metadata: it is not reserved, because a
-	 * class-body binding of the name deliberately overrides it. */
 	for (PyGetSetDef const * entry = StructMeta_Type.tp_getset; entry->name != NULL; ++entry) {
 		if (strcmp(entry->name, "__signature__") == 0) {
 			continue;
@@ -392,7 +378,6 @@ static void test_the_reservation_and_the_getset_tables_agree(void) {
 }
 
 void meta_tests(void) {
-	/* Unity takes its file from UNITY_BEGIN, which is the runner's. */
 	Unity.TestFile = __FILE__;
 
 	RUN_TEST(test_a_declared_member_yields_its_offset);

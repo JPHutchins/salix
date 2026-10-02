@@ -2,7 +2,7 @@ name: Code review
 
 on:
   workflow_run:
-    workflows: ["CI"]       # our CI workflow name — unmodified
+    workflows: ["CI"]
     types: [completed]
 
 permissions:
@@ -29,7 +29,7 @@ jobs:
       api_base_url:  ${{ vars.API_BASE_URL }}
       model_full:    deepseek-v4-pro[1m]
       model_mechanic: deepseek-v4-pro[1m]
-      subagent_model: deepseek-flash[1m]   # finder fan-out runs on flash; the main agent adjudicates on model_full
+      subagent_model: deepseek-flash[1m]
       use_setup_action: true
       egress_policy: block
       extra_endpoints: >-

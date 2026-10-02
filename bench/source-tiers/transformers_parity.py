@@ -26,7 +26,7 @@ seen: set[int] = set()
 for module in pkgutil.walk_packages(transformers.models.__path__, "transformers.models."):
     try:
         imported = importlib.import_module(module.name)
-    except Exception:  # noqa: BLE001 — any import failure counts against the parity
+    except Exception:  # noqa: BLE001
         failed_imports += 1
         continue
     try:
@@ -34,7 +34,7 @@ for module in pkgutil.walk_packages(transformers.models.__path__, "transformers.
             if isinstance(value, type) and hasattr(value, "config_class") and id(value) not in seen:
                 seen.add(id(value))
                 count += 1
-    except Exception:  # noqa: BLE001 — any scan failure counts against the parity
+    except Exception:  # noqa: BLE001
         failed_scans += 1
         continue
 print(f"model classes with config_class: {count}")

@@ -1,9 +1,3 @@
-# The source distribution.
-#
-# PyPI takes one alongside the wheels, and it is the only way in for a platform
-# the matrix does not cover. Windows is not such a platform: MSVC has no
-# __attribute__((cleanup)), so there is no source install there at any time,
-# which is why the wheel matrix covers both Windows architectures it can.
 {
   lib,
   stdenv,

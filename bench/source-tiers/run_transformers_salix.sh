@@ -64,13 +64,6 @@ trap cleanup EXIT
 if [[ ! -d "$VENV" ]]; then
     uv venv --python "$PYTHON_VERSION" "$VENV"
 fi
-# torch is what the model modules import at module scope, and the parity
-# walk never touches a tensor, so the CPU index serves the import without
-# the CUDA-bundled wheel. It is installed first: the testing extra pulls
-# accelerate, which requires torch, and a later line must not satisfy that
-# requirement from the default index first. The testing extra carries
-# pytest and its plugins. The shim itself lives in dataclass-compat and
-# rides PYTHONPATH, so the pinned checkout is never written to.
 uv pip install --python "$VENV" --index https://download.pytorch.org/whl/cpu torch
 uv pip install --python "$VENV" -e "$CHECKOUT[testing]"
 if [[ -d "$SALIX_WHEEL" ]]; then
@@ -80,11 +73,6 @@ else
 fi
 uv pip install --python "$VENV" --no-index --find-links "$WHEEL_LINKS" --reinstall "salix==$SALIX_VERSION"
 
-# The pin's proof, in a module the repo's checkers see: the repo-local shim
-# patches only transformers (the dependencies stay stock, so dependency
-# drift cannot break the proof), and every public class imports with its
-# dataclass fields read back. --stock runs the same count without the shim
-# for the baseline column. The suite subset exercises the config path.
 PYTHONPATH="$HERE/../dataclass-compat:$HERE" "$VENV/bin/python" -m transformers_parity "$([[ "$RUN_STOCK" -eq 1 ]] && echo --stock)"
 
 if [[ "$RUN_SUITE" -eq 1 ]]; then

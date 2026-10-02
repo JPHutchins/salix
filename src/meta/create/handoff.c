@@ -274,11 +274,6 @@ StructType * create_class(
 	return (StructType *) py_move(&created);
 }
 
-/* Measured, and smaller than the measurement: replacing the body with
- * `return requested` leaves class creation at 9.77-9.87 us for a 16-field
- * class either way, so the walk is bounded by the width of that band rather
- * than shown to be free. It is one Py_TYPE and one PyType_IsSubtype per base,
- * and a class has one. */
 PyTypeObject * winning_metatype(PyTypeObject * const requested, PyObject * const bases) {
 	PyTypeObject * winner = requested;
 

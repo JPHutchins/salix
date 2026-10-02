@@ -240,7 +240,7 @@ class TestWhichBaseAnswers:
             def __le__(self, other: object) -> object:
                 return "by-order-or-equal"
 
-        class ByEq(Struct):  # noqa: PLW1641 -- the body pair is the trigger
+        class ByEq(Struct):  # noqa: PLW1641
             b: int
 
             def __eq__(self, other: object) -> bool:
@@ -265,7 +265,7 @@ class TestWhichBaseAnswers:
         class ByOrder(Struct):
             pass
 
-        class ByEq(Struct):  # noqa: PLW1641 -- the body pair is the trigger
+        class ByEq(Struct):  # noqa: PLW1641
             b: int
 
             def __eq__(self, other: object) -> bool:

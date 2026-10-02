@@ -81,8 +81,6 @@ def introspection_is_typed_on_both_the_class_and_the_instance() -> None:
     assert_type(Point.__struct_annotations__, tuple[Any, ...])
     assert_type(Point._struct_metadata_, tuple[tuple[Any, ...], ...])
     assert_type(Point.__struct_metadata__, tuple[tuple[Any, ...], ...])
-    # Narrower than the stub declares: the transform synthesises the literal
-    # names, which is what makes a positional pattern check.
     assert_type(Point.__match_args__, tuple[Literal["x"], Literal["y"]])
 
 

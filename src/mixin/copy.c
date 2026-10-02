@@ -6,16 +6,6 @@
 #include "../result.h"
 #include "../types.h"
 
-/*
- * A __copy__ or __deepcopy__ defined by a co-base sits after _StructMixin in
- * the MRO, so the mixin's method would shadow it; copy.py resolves
- * __deepcopy__ on the instance and __copy__ on the class, and each branch
- * reproduces that lookup. The scan starts after the mixin: a method before it
- * was already found by getattr and called by copy.py, and a rebind of the
- * mixin's own method would otherwise re-enter it forever. A descriptor
- * __get__ AttributeError and None both mean "no method"; NULL means none was
- * found.
- */
 static PyObject * deferred_co_base_copy(PyObject * const self, PyObject * const name) {
 	PyTypeObject * const cls = Py_TYPE(self);
 	PyObject * const mro = cls->tp_mro;
@@ -80,9 +70,6 @@ static PyObject * deferred_co_base_copy(PyObject * const self, PyObject * const 
 				resolved = py_move(&value);
 			}
 		} else if (PyObject_TypeCheck(raw, &PyClassMethod_Type)) {
-			/* copy.py's getattr(cls, '__copy__', None) binds a classmethod
-			 * to the concrete class; the class-level access of the other
-			 * descriptors is the lookup below. */
 			PY_MOVABLE(
 				bound,
 				PyObject_CallMethod(raw, "__get__", "OO", Py_None, (PyObject *) Py_TYPE(self))
@@ -127,13 +114,6 @@ static PyObject * deferred_co_base_copy(PyObject * const self, PyObject * const 
 	return NULL;
 }
 
-/*
- * The dispatch prologue shared by the struct and impostor paths. `argument`
- * is what the deferred method is called with, the instance for __copy__ and
- * the memo for __deepcopy__; `dispatch_truthy` selects the gate copy.py
- * applies to the dispatch_table branch, identity for copy and truthiness
- * for deepcopy. `copy_module` and `copier` are owned when returned non-NULL.
- */
 PyObject * copy_dispatch_prologue(
 	PyObject * const self,
 	char const * const name,
@@ -176,8 +156,6 @@ PyObject * copy_dispatch_prologue(
 		return NULL;
 	}
 
-	/* The one gate copy.py applies differently to the two operations: the
-	 * copy branch tests identity, the deepcopy branch tests truthiness. */
 	if (registered == Py_None) {
 		Py_CLEAR(registered);
 	} else if (registered != NULL && dispatch_truthy) {
@@ -226,10 +204,6 @@ PyObject * copy_delegate(
 	if (copier != NULL) {
 		reduced = PyObject_CallOneArg(copier, self);
 	} else {
-		/* copy.py's reduce chain: __reduce_ex__ if present and not None
-		 * (identity, per copy.py), else __reduce__ likewise but gated on
-		 * truthiness (copy.py's own inconsistency), else the same
-		 * uncopyable-object copy.Error. */
 		PY_OWNED(reduce_ex, PyObject_GetAttrString(self, "__reduce_ex__"));
 
 		if (reduce_ex == NULL && PyErr_ExceptionMatches(PyExc_AttributeError)) {
@@ -285,12 +259,6 @@ PyObject * copy_delegate(
 	return reduced != NULL ? copy_reconstruct(self, reduced, copy_module, memo) : NULL;
 }
 
-/*
- * The reduce branch of copy: a string result means "copy the identity",
- * otherwise the result goes to copy._reconstruct the way copy.py's `*rv`
- * does, with the memo copy.py would pass -- None for copy, the caller's
- * for deepcopy.
- */
 PyObject * copy_reconstruct(
 	PyObject * const self,
 	PyObject * const reduced,
@@ -342,9 +310,6 @@ PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 	StructType * const type = struct_type_of(self);
 	PyTypeObject * const cls = &type->heap_type.ht_type;
 
-	/* A body __new__ = None is the cannot-create marker; the cached flag
-	 * answers at every construction entry point, the metatype's dispatch
-	 * included. */
 	if (type->struct_cannot_create) {
 		PyErr_Format(PyExc_TypeError, "cannot create '%.100s' instances", cls->tp_name);
 
@@ -381,12 +346,6 @@ PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 	PY_MOVABLE(copy, NULL);
 
 	if (type->struct_family_owned) {
-		/* The family's construction is its C members' only writer --
-		 * OSError's live in __new__ and its init no-ops without it -- so
-		 * the copy is the construction itself, with the source's
-		 * positional payload. The constructor pre-filled the defaults;
-		 * the source's values -- mutations and prior replaces included --
-		 * overwrite them, releasing the pre-filled references. */
 		PY_OWNED(values_snapshot, PyTuple_New(type->struct_field_count));
 
 		if (values_snapshot == NULL) {
@@ -419,10 +378,6 @@ PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 
 			copy = py_move(&rebuilt);
 		} else {
-			/* An empty payload marks a from_mapping-built source: the
-			 * family's parse has nothing to reconstruct, and the plain
-			 * allocation keeps the members exactly as the source left
-			 * them -- unset, not fabricated. */
 			Py_DECREF(args);
 			copy = cls->tp_alloc(cls, 0);
 

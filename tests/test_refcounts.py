@@ -70,7 +70,7 @@ def test_a_copied_default_hands_out_no_reference_to_itself():
     """
 
     class Holder(Struct):
-        xs: list = []  # noqa: RUF012 -- the copy is what is being counted
+        xs: list = []  # noqa: RUF012
 
     (stored,) = Holder._struct_defaults_
     before = sys.getrefcount(stored)
@@ -127,7 +127,7 @@ def test_a_body_init_shares_an_uncopied_default_the_same_way():
 
 def test_a_body_init_copies_a_mutable_default_without_retaining_it():
     class Declining(Struct, frozen=False):
-        xs: list = []  # noqa: RUF012 -- the copy is what is being counted
+        xs: list = []  # noqa: RUF012
 
         def __init__(self) -> None:
             pass
@@ -161,8 +161,6 @@ def test_a_body_init_that_raises_releases_the_defaults_tp_new_wrote():
 
     assert sys.getrefcount(sentinel) == before
 
-    # Without this the test is vacuously green on a build whose tp_new writes
-    # nothing: no reference taken is no reference to leak.
     class Writing(Struct, frozen=False):
         optional: object = Sentinel()
 
@@ -187,7 +185,6 @@ def test_reading_a_field_does_not_accumulate():
 
 @pytest.mark.parametrize(
     "operation",
-    # PLR0124: comparing an instance with itself is what exercises the dunder.
     [repr, hash, lambda pair: pair == pair, lambda pair: pair != pair],  # noqa: PLR0124
     ids=["repr", "hash", "eq", "ne"],
 )
@@ -362,10 +359,6 @@ def test_a_delegating_metatype_installs_the_field_table_once():
     assert built._struct_fields_ == ("x", "y")
     assert built(1, 2).y == 2
 
-    # `before` already counts the namespace dict's reference. The two are the
-    # built class's own __post_init__ binding and the struct_post_init that
-    # install_post_init resolved. A second install would take a third and never
-    # give it back.
     assert sys.getrefcount(post_init) - before == 2
 
 

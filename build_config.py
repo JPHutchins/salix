@@ -53,12 +53,6 @@ BUILD: Final = BuildConfig(
         "src/testing.c",
         "tests/c/main.c",
     ),
-    # -Wno-unused-parameter: CPython slot signatures are fixed by the API and
-    # routinely ignore an argument.
-    # -std=c2x, not -std=c23: they select the same language mode -- both give
-    # __STDC_VERSION__ 202311 -- but c2x is accepted by GCC 9+ and Clang 9+
-    # while c23 needs GCC 14+ or Clang 18+. An sdist has to compile on whatever
-    # the machine has, and Ubuntu 24.04 LTS still ships GCC 13.
     c_flags=(
         f"-DSALIX_VERSION={VERSION}",
         "-std=c2x",
@@ -70,13 +64,8 @@ BUILD: Final = BuildConfig(
     ),
 )
 
-# setup.py passes these after CFLAGS, so an sdist build cannot override them.
-# One new warning in a future compiler would then turn `pip install salix` into
-# a failure, on the machines that have no wheel and must compile.
 STRICT: Final = ("-Werror",)
 
-# 84% of a published payload was DWARF that nothing on the far end reads. Not
-# in c_flags, so a local build stays debuggable.
 SHIPPED: Final = ("-g0",)
 
 

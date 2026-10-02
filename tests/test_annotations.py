@@ -46,7 +46,7 @@ class TestANonFunctionAnnotate:
         if format != 1:
             raise NotImplementedError
 
-        return {"x": Undefined}  # noqa: F821 -- unresolvable on purpose
+        return {"x": Undefined}  # noqa: F821
 
     @staticmethod
     def wrapped_in_an_object(annotate):
@@ -79,9 +79,6 @@ class TestANonFunctionAnnotate:
         with pytest.raises(NameError, match="Undefined") as raised:
             type(Struct)("Wrapped", (Struct,), {"__annotate__": wrapped})
 
-        # The discriminator the message cannot carry: only the plain function
-        # reaches annotationlib, and only it comes back with a __context__ from
-        # having done so. Below 3.14 nothing escalates, so nobody has one.
         escalates = wrap == "plain" and sys.version_info >= (3, 14)
 
         assert (raised.value.__context__ is not None) is escalates
@@ -115,7 +112,7 @@ class TestANonFunctionAnnotate:
 
         def fake_globals_aware(format):
             if format in (1, 2):
-                return {"x": Undefined, "y": int}  # noqa: F821 -- unresolvable on purpose
+                return {"x": Undefined, "y": int}  # noqa: F821
 
             raise NotImplementedError
 
@@ -142,8 +139,6 @@ class TestANonFunctionAnnotate:
             if format == 1:
                 raise NameError("nope", name="nope")
 
-            # Keyed by format, so this fails rather than passes if the
-            # escalation ever asks for STRING (4) instead of FORWARDREF (3).
             return {f"answered_{format}": int}
 
         Built = type(Struct)("Built", (Struct,), {"__annotate__": inconsistent})
@@ -584,7 +579,7 @@ def test_an_interrupt_that_arrives_chained_keeps_the_chain_it_came_with():
         try:
             raise ValueError("earlier")
         except ValueError:
-            raise KeyboardInterrupt  # noqa: B904 -- the shape under test
+            raise KeyboardInterrupt  # noqa: B904
 
     with pytest.raises(KeyboardInterrupt) as raised:
         type(Struct)("Interrupted", (Struct,), {"__annotate__": annotate})

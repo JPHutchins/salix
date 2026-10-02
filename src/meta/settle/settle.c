@@ -65,10 +65,6 @@ static void probe_settle_name(char const * const name, void * const context) {
 	}
 }
 
-/* An exact-str key answers a probe by identity or in C, so a namespace of
- * them cannot fail the sweep; anything else might. The sweep is what turns
- * a poisoned lookup into a propagated error before type.__new__ misreads it
- * as absence and silently builds a half-settled class. */
 enum result verify_settle_names_readable(PyObject * const original_namespace) {
 	Py_ssize_t position = 0;
 	PyObject * key;
@@ -137,10 +133,6 @@ static enum result refuse_unplanned(StructType const * const struct_class) {
 	return RESULT_ERROR;
 }
 
-/* Filled once at module init, before any class can be built, so the settle
- * only ever reads these: no post-init mutation, no keying, no lock. The
- * arrays live in the module state, so each interpreter fills its own, and a
- * failed fill fails the import -- the settle never meets a half-filled cache. */
 enum result settle_cache_fill(struct salix_state * const state) {
 	static char const * const names[SETTLE_BINDING_COUNT] = {
 		"__eq__",
@@ -308,8 +300,6 @@ enum result settle_planned(
 		return RESULT_ERROR;
 	}
 
-	/* bind_not_equal's answered case on a live class: the fresh build binds
-	 * object's __ne__ when the body answered equality itself. */
 	if (bindings.answered_by_body) {
 		int const defines_ne = dict_has_string(original_namespace, rebind_not_equal[0]);
 
@@ -493,7 +483,6 @@ static void test_every_settle_name_refuses_a_hostile_key(void) {
 }
 
 void class_tests(void) {
-	/* Unity takes its file from UNITY_BEGIN, which is the runner's. */
 	Unity.TestFile = __FILE__;
 
 	RUN_TEST(test_every_settle_name_refuses_a_hostile_key);

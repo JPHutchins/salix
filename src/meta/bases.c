@@ -56,9 +56,6 @@ StructType * find_behaviour_base(PyObject * const bases) {
 }
 
 struct equality_source resolves_body_equality(PyObject * const bases) {
-	/* Only the first base can end the walk without reading anything: if it is a
-	 * struct its branch answers, and every other case is the co-base walk,
-	 * which is where the cost of looking lives. */
 	if (PyTuple_GET_SIZE(bases) == 0) {
 		return (struct equality_source){.tag = EQUALITY_RESOLVED, .from_a_body = false};
 	}
@@ -77,8 +74,6 @@ struct equality_source resolves_body_equality(PyObject * const bases) {
 	);
 }
 
-/* Split out so that the two names are interned once for the walk and not at
- * all for a class whose first base is a struct, which is nearly all of them. */
 static struct equality_source equality_from_the_co_bases(
 	PyObject * const bases,
 	Py_ssize_t const first

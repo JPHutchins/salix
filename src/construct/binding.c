@@ -5,17 +5,6 @@
 #include "../result.h"
 #include "../types.h"
 
-/*
- * Through CPython's own member setter rather than a store of our own, so the
- * free-threading guarantee is inherited here exactly as it is for `self.x = v`.
- * A plain Py_XSETREF is a load, a store and a decref: two threads read the same
- * previous value, both store, and both release it -- one reference, two
- * releases, and 3.14t dies on it. PyMember_SetOne takes a critical section on
- * the instance and defers the release past the end of it.
- *
- * The offset is the one type.__new__ gave this field, so the descriptor here
- * describes a slot that already exists rather than looking one up.
- */
 enum result write_slot(
 	StructType const * const type,
 	PyObject * const self,
@@ -79,13 +68,6 @@ void bind_positional(
 ) {
 #if PY_VERSION_HEX >= 0x030B0000
 	if (type->struct_group_family) {
-		/* The family's accepted shape is (msg, excs), so the positionals
-		 * bind by the resolved member indexes whatever the declaration
-		 * order; a one-item payload -- the graded pack's single-member
-		 * shape a pickle reconstructs through the fallback -- binds its
-		 * member field the same way. Rejected shapes with more positionals
-		 * are field values in declaration order, and a slot already
-		 * written keeps its value. */
 		bool const member_shape = family_constructed || positional_count == 1;
 
 		for (Py_ssize_t i = 0; i < positional_count; ++i) {
@@ -105,10 +87,6 @@ void bind_positional(
 			if (*struct_slot(type, self, target) == NULL) {
 				*struct_slot(type, self, target) = Py_NewRef(arguments[i]);
 			} else if (family_constructed && i == 1 && target == type->struct_exceptions_index) {
-				/* The family accepted the shape, so positional 1 IS the
-				 * body: it wins the exceptions slot over a positional 0
-				 * that fell through to declaration order at the same
-				 * index. */
 				Py_SETREF(*struct_slot(type, self, target), Py_NewRef(arguments[i]));
 			}
 		}
@@ -163,9 +141,6 @@ enum result bind_named(
 			break;
 	}
 
-	/* The slot itself answers whether a positional bound the field -- a
-	 * member-index mapping can leave leading slots untouched, so a count
-	 * cannot. */
 	PyObject * * const slot = struct_slot(type, self, found.index);
 
 	if (*slot != NULL) {
@@ -203,11 +178,6 @@ enum result fill_defaults(
 	PyObject * const self,
 	bool const require_all
 ) {
-	/* Slot-state driven: whatever bound each slot -- a positional, a
-	 * keyword, a member-index mapping -- a NULL slot is what needs a
-	 * default or the missing-required error. The wrapper passes false: on
-	 * the own-init path the author's init owns the required fields and an
-	 * unbound one is its state, not a call error. */
 	Py_ssize_t const required_count = struct_required_count(type);
 
 	for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
@@ -258,8 +228,6 @@ static PyObject * unbound_instance(PyObject * const cls) {
 	return ((PyTypeObject *) cls)->tp_alloc((PyTypeObject *) cls, 0);
 }
 
-/* The identity scan is the fast path; the equality scan exists only for a name
- * that was not interned, which Python-level tests reach only by accident. */
 static void test_an_interned_name_resolves_by_identity(void) {
 	PyObject * const instance = testing_two_field_instance();
 	PyObject * const name = PyUnicode_InternFromString("beta");
@@ -482,7 +450,6 @@ static void test_the_post_init_hook_runs_and_its_error_propagates(void) {
 }
 
 void construct_tests(void) {
-	/* Unity takes its file from UNITY_BEGIN, which is the runner's. */
 	Unity.TestFile = __FILE__;
 
 	RUN_TEST(test_an_interned_name_resolves_by_identity);

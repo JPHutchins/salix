@@ -45,9 +45,6 @@ def FrozenOnly(metatype: type) -> type:
     return Only
 
 
-# Both spellings of each, in one place: two literals drifted apart is a test
-# that silently stops covering a name. The order matches
-# test_metadata_names' SALIX + MSGSPEC concatenation, which is pinned.
 METADATA_NAMES = (
     "_struct_fields_",
     "_struct_defaults_",

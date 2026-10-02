@@ -138,7 +138,7 @@ class TestEq:
     def test_identity_replaces_structural_equality(self):
         instance = NoEq(1)
 
-        assert instance == instance  # noqa: PLR0124 -- reflexivity is the assertion
+        assert instance == instance  # noqa: PLR0124
         assert NoEq(1) != NoEq(1)
 
     def test_the_hash_becomes_the_identity_hash(self):
@@ -169,7 +169,7 @@ class TestEq:
         assert hash(Child(1)) == hash((1, 0))
 
     def test_a_body_eq_clears_the_hash_the_way_python_does(self):
-        class Custom(Struct):  # noqa: PLW1641 -- the absent __hash__ is the assertion
+        class Custom(Struct):  # noqa: PLW1641
             x: object
 
             def __eq__(self, other: object) -> bool:
@@ -186,7 +186,7 @@ class TestEq:
         equal instances in two slots of a set.
         """
 
-        class Custom(Struct):  # noqa: PLW1641 -- the absent __hash__ is the assertion
+        class Custom(Struct):  # noqa: PLW1641
             x: object
 
             def __eq__(self, other: object) -> bool:
@@ -207,7 +207,7 @@ class TestEq:
         about __eq__ survives into the child.
         """
 
-        class Loose(Struct, frozen=False):  # noqa: PLW1641 -- the absent __hash__ is the assertion
+        class Loose(Struct, frozen=False):  # noqa: PLW1641
             def __eq__(self, other: object) -> bool:
                 return True
 
@@ -237,7 +237,7 @@ class TestEq:
         assert len({Child(1, 0), Child(2, 0)}) == 1
 
     def test_a_subclass_may_take_equality_back_and_become_hashable(self):
-        class Custom(Struct):  # noqa: PLW1641 -- eq=False below is the replacement
+        class Custom(Struct):  # noqa: PLW1641
             x: object
 
             def __eq__(self, other: object) -> bool:

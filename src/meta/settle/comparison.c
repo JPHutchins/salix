@@ -83,10 +83,6 @@ enum result mro_dunders_of(
 
 	PyObject * const mro = type->tp_mro;
 
-	/* The ordering names read the class's own dict too: a pre-creation
-	 * rebind injected the comparison family there on an eq-option change,
-	 * and the honoured-body decision must see that injection rather than
-	 * decide behind its back. */
 	PyTypeObject * const own = (PyTypeObject *) PyTuple_GET_ITEM(mro, 0);
 	PY_OWNED(own_dict, struct_type_dict(own));
 
@@ -139,9 +135,6 @@ enum result mro_dunders_of(
 	return RESULT_OK;
 }
 
-/* Whether a binding's owner is one the single-base path would have honoured:
- * the first struct base's own MRO chain, or a non-struct base. A later struct
- * base's binding is shadowed by the record. */
 bool honoured_owner(PyTypeObject * const owner, PyTypeObject * const first_struct) {
 	if (owner == NULL || !is_struct_class((PyObject *) owner)) {
 		return true;
@@ -158,9 +151,6 @@ bool honoured_owner(PyTypeObject * const owner, PyTypeObject * const first_struc
 	return false;
 }
 
-/* Whether a comparison dunder the single-base path would honour is user code:
- * one in the class's own body, or one owned by the first struct base's chain
- * or a co-base, that is neither the mixin's nor object's. */
 int honours_a_body_comparison(
 	PyTypeObject * const type,
 	PyTypeObject * const first_struct,

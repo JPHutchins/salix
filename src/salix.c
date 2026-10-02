@@ -23,12 +23,6 @@ static PyObject * handoff_new(PyObject * self, PyObject * args);
 static PyObject * replace(PyObject * module, PyObject * args, PyObject * kwargs);
 static void struct_free(void * module);
 
-/*
- * A type's field metadata is written once at class creation and then only
- * read. An instance's slots are written by the constructor before it returns,
- * and afterwards only through PyMember_SetOne, so a free-threaded build's
- * guarantees there are inherited rather than reimplemented.
- */
 static PyModuleDef_Slot struct_slots[] = {
 	{Py_mod_exec, struct_exec},
 #ifdef Py_mod_multiple_interpreters
@@ -81,8 +75,6 @@ PyModuleDef * salix_module_def(void) {
 }
 
 static void struct_free(void * const module) {
-	/* m_free receives the module object on every supported version, so the
-	 * state is reached back through it. */
 	struct salix_state * const state = (struct salix_state *) PyModule_GetState(
 		(PyObject *) module
 	);

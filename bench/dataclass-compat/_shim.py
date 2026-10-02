@@ -256,10 +256,6 @@ def _builder_for(metaclass: type[Any]) -> type[Any]:
         )
     return cached
 
-# Members the metatype owns and that must not ride a rebuild namespace.
-# __hash__, __match_args__, and __firstlineno__ ride: salix honors a
-# body-defined hash and match-args, and inspect.findsource reads
-# __firstlineno__ from the class's own dict.
 _SALIX_MEMBERS = frozenset(
     {
         "__dict__",
@@ -545,9 +541,6 @@ def _fresh_default(value: Any) -> Any:
 
 
 def _rebind_class_cells(built: type[Any], old_cls: type[Any]) -> None:
-    # Body functions close over the statement-time class via their
-    # __class__ cell; the build replaces the class, so zero-arg super()
-    # and __class__ references would target the wrong object.
     for value in vars(built).values():
         func = getattr(value, "__func__", value)
         closure = getattr(func, "__closure__", None)
@@ -561,9 +554,6 @@ def _rebind_class_cells(built: type[Any], old_cls: type[Any]) -> None:
                     cell.cell_contents = built
 
 
-# A namespace __setattr__ flips salix's hash plan to unhashable, so the shim
-# does not inject one: unfrozen structs already accept plain assignment via
-# salix's C setattro, and frozen structs raise stock's FrozenInstanceError.
 def _exec_name(base: str, taken: set[str]) -> str:
     candidate = base
     counter = 0
@@ -829,9 +819,6 @@ def _rebuild_struct_subclass(
     )
     namespace["__dataclass_params__"] = _dataclass_params(init, repr, eq, order, unsafe_hash, frozen, match_args, kw_only)
     if not names and _called_from_init_subclass(cls):
-        # Mid-__init_subclass__: salix has not finalized the struct metadata,
-        # and rebuilding here would re-trigger __init_subclass__ recursively.
-        # Defer to the decorator that runs after the class statement.
         return cls
 
 
@@ -877,12 +864,6 @@ def dataclass(
 ) -> Callable[[type[_T]], type[_T]] | type[_T]:
     def wrap(cls: type[_T]) -> type[_T]:
         if is_struct(cls):
-            # The class statement already built this class as a Struct: a
-            # Struct base binds the metatype, which runs before the decorator
-            # sees the class. The statement-time namespace is recoverable
-            # (salix aligns inherited annotations first and defaults trailing)
-            # and the rebuild translates field() and honors the options. The
-            # exclusion cannot unbuild it.
             return _rebuild_struct_subclass(cls, init, repr, eq, order, unsafe_hash, frozen, match_args, kw_only)
         if _caller_excluded():
             return _to_stock(cls, init, repr, eq, order, unsafe_hash, frozen, match_args, kw_only, slots, weakref_slot)

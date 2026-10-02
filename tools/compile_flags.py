@@ -17,9 +17,6 @@ FLAGS: Final = (
     f"-I{sysconfig.get_config_var('prefix')}/include",
     f"-I{sysconfig.get_paths()['include']}",
     *BUILD.c_flags,
-    # Unconditional here, unlike setup.py's opt-in: this database feeds clangd,
-    # clang-tidy and the analyzer, which are this repository's own tools and
-    # never a stranger's build.
     *STRICT,
 )
 

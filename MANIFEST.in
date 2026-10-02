@@ -2,9 +2,6 @@ include CODE_OF_CONDUCT.md
 include build_config.py
 recursive-include src *.h
 
-# A workspace member directory that ships without its pyproject.toml makes the
-# sdist uninstallable under uv. The members are development scopes; an sdist
-# exists to build the wheel.
 prune bench
 prune tests
 prune tools

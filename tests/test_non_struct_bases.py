@@ -7,7 +7,7 @@ class Base(Struct):
     x: object
 
 
-class Equal:  # noqa: PLW1641 -- the absent __hash__ is the assertion
+class Equal:  # noqa: PLW1641
     """Equality without a hash, so Python's own rule makes it unhashable and
     salix has to leave that alone rather than bind a hash beside it.
     """
@@ -33,7 +33,7 @@ class Raising:
         raise RuntimeError("no equality here")
 
 
-class Hostile:  # noqa: PLW1641 -- the __eq__ that raises is the shape
+class Hostile:  # noqa: PLW1641
     __eq__ = Raising()  # type: ignore[assignment]
 
 
@@ -133,7 +133,6 @@ def test_the_struct_base_behind_it_still_answers_when_it_comes_first():
     assert B.__eq__ is not Equal.__eq__
     assert Reversed.__eq__ is Equal.__eq__
 
-    # The same two bases, and the order is the whole difference.
     assert (B(1, 0) == B(2, 0)) is False
     assert (Reversed(1, 0) == Reversed(2, 0)) is True
     assert hash(B(1, 0)) != hash(B(2, 0))
@@ -254,7 +253,7 @@ def test_a_body_that_writes_its_own_equality_is_not_asked_for_a_bases():
     what refused it.
     """
 
-    class B(Hostile, Base):  # noqa: PLW1641 -- the absent __hash__ is asserted below
+    class B(Hostile, Base):  # noqa: PLW1641
         def __eq__(self, other: object) -> bool:
             return True
 
@@ -398,7 +397,7 @@ def test_a_co_base_that_paired_them_itself_keeps_its_own_inequality():
     other test in this file green, so without this the guard could go.
     """
 
-    class Paired_:  # noqa: PLW1641 -- the absent __hash__ is not what is under test
+    class Paired_:  # noqa: PLW1641
         def __eq__(self, other: object) -> bool:
             return True
 
@@ -444,7 +443,7 @@ def test_a_co_base_between_two_struct_bases_answers_equality_with_the_hash_paire
     class Second(Struct):
         pass
 
-    class Equality:  # noqa: PLW1641 -- the absent __hash__ is what is under test
+    class Equality:  # noqa: PLW1641
         def __eq__(self, other: object) -> bool:
             return True
 
@@ -509,7 +508,7 @@ def test_a_body_that_writes_object_equality_has_still_written_one():
     because the value is object's either way; the class dict can.
     """
 
-    class OptedOut:  # noqa: PLW1641 -- the absent __hash__ is the assertion
+    class OptedOut:  # noqa: PLW1641
         __eq__ = object.__eq__
 
     class B(OptedOut, Base):

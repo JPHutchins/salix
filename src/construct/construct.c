@@ -45,16 +45,12 @@ PyObject * Struct_vectorcall(
 	PyTypeObject * const python_class = &type->heap_type.ht_type;
 	bool const exception_struct = is_exception_struct(python_class);
 
-	/* A body __new__ = None is the cannot-create marker; the cached flag
-	 * answers here too, because a class carrying the vectorcall flag is
-	 * called through its slot directly, past the metatype's dispatch. */
 	if (type->struct_cannot_create) {
 		PyErr_Format(PyExc_TypeError, "cannot create '%.100s' instances", python_class->tp_name);
 
 		return NULL;
 	}
 
-	/* A genuinely NULL slot is the same refusal, whatever path left it. */
 	if (python_class->tp_new == NULL) {
 		PyErr_Format(PyExc_TypeError, "cannot create '%.100s' instances", python_class->tp_name);
 
@@ -65,14 +61,6 @@ PyObject * Struct_vectorcall(
 	bool fallback_allocated = false;
 
 	if (exception_struct) {
-		/* The inherited tp_new is the exception family's construction: it
-		 * initializes args and the family's C members (errno, filename,
-		 * ...), which tp_alloc would leave zeroed. It receives the call's
-		 * real shape -- a user __new__ sees the keywords the caller passed,
-		 * and a family tp_new with its own arity contract is not answered by
-		 * a one-tuple. A non-exception struct's body __new__ is discarded by
-		 * construction, the pinned contract; the plain allocation is the
-		 * whole of it. */
 		PY_OWNED(positionals, PyTuple_New(positional_count));
 
 		if (positionals == NULL) {
@@ -105,34 +93,22 @@ PyObject * Struct_vectorcall(
 			}
 		}
 
-		/* An author __new__ raising TypeError owns the construction and the
-		 * failure; the install cached the answer. */
 		bool const author_new = type->struct_author_new;
 
 		self = python_class->tp_new(python_class, positionals, keywords);
 
 		if (self == NULL && PyErr_ExceptionMatches(PyExc_TypeError)) {
-			/* A family tp_new with its own arity contract rejects the
-			 * field-constructor call shape; the allocation answers instead,
-			 * the C members zeroed. */
 			if (!author_new) {
 				PyErr_Clear();
 				fallback_allocated = true;
 				self = python_class->tp_alloc(python_class, 0);
 
 				if (self != NULL) {
-					/* The family tp_new would have written args; the fallback
-					 * writes the same payload before any hook runs, so a
-					 * __post_init__ that formats the instance never reads
-					 * NULL. */
 					set_exception_args_from_positionals(python_class, self, positionals);
 				}
 			}
 		}
 
-		/* An author __new__ may return any object; the slot writes that
-		 * follow assume the struct's own layout, so the type_call guard
-		 * answers here. */
 		if (self != NULL && !PyObject_TypeCheck(self, python_class)) {
 			PyErr_Format(
 				PyExc_TypeError,
@@ -170,12 +146,6 @@ PyObject * Struct_vectorcall(
 
 #if PY_VERSION_HEX >= 0x030B0000
 	if (type->struct_group_family && ((PyBaseExceptionGroupObject *) self)->msg == NULL) {
-		/* The family's __new__ is the group members' one writer; a
-		 * construction that reached the allocation without it -- the
-		 * fallback, or an author __new__ that allocated elsewhere -- carries
-		 * the members from the bound fields, validated, so str()/repr()/
-		 * raise never read NULL and never see a non-exception body. A
-		 * struct without a message field mirrors the first supplied value. */
 		PY_MOVABLE(group_msg_fallback, NULL);
 
 		if (type->struct_message_index < 0) {
@@ -209,10 +179,6 @@ PyObject * Struct_vectorcall(
 		}
 	}
 
-	/* The family's tp_new already set args, so a hook that formats the
-	 * exception never dereferences NULL; the rewrite follows __post_init__
-	 * so the payload is the explicit field prefix and reflects the hook's
-	 * mutations. */
 	if (run_post_init(type, self) != RESULT_OK) {
 		return NULL;
 	}
@@ -248,12 +214,6 @@ int Struct_init_wrapper(
 		return -1;
 	}
 
-	/* The own-init path runs the author's or the family's init after the
-	 * allocation, so the fields are not bound here; the positional tuple
-	 * is the payload when the family's tp_new wrote nothing (a keyword
-	 * shaped family call normalizes its own). A captured NULL answers
-	 * when the init was deleted from an ancestor, and the defaults fill
-	 * above is all the construction needs. */
 	if (type->struct_installed_init == NULL) {
 		return 0;
 	}
@@ -295,22 +255,12 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 
 	StructType * const type = (StructType *) struct_class;
 
-	/* A body __new__ = None is the cannot-create marker; the cached flag
-	 * answers at every construction entry point, the metatype's dispatch
-	 * included. */
 	if (type->struct_cannot_create) {
 		PyErr_Format(PyExc_TypeError, "cannot create '%.100s' instances", struct_type_name(type));
 
 		return NULL;
 	}
 
-	/* The fallback acquires items once and validates every pair at the
-	 * boundary, so the bind loop, the own-init kwargs and the pair-shape
-	 * error all read the same list. A list is PyMapping_Check-true through
-	 * its subscript slot and an ABC-style mapping carries the sequence
-	 * slots through __len__ and __getitem__, so the items probe names a
-	 * mapping where neither slot check does; dicts, the hot path, never
-	 * take it. */
 	PyObject * const dict_values = PyDict_Check(values) ? values : NULL;
 	PY_MOVABLE(items, NULL);
 
@@ -526,8 +476,6 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 			!type->struct_family_owned &&
 			type->struct_installed_init != NULL
 		) {
-			/* The author's init owns validation on direct construction and
-			 * replace; the mapping's keywords reach it the same way. */
 			PY_OWNED(no_arguments, PyTuple_New(0));
 
 			if (

@@ -27,16 +27,6 @@ static int struct_base_count(PyObject * const bases) {
 	return count;
 }
 
-/* What the class's MRO hands out below the class's own dict for the three
- * names, asked after the class exists so the answer is the real resolution,
- * in one walk, with the defining entry tracked for each. */
-
-/* CPython copies the comparison slots from the first base only when the new
- * class's namespace overrides nothing, so a multi-base class whose namespace
- * carries salix's own bindings falls back to the default slots. With two
- * struct bases the real MRO can also answer a dunder from a base the
- * pre-build walk never read. Both are repaired here, where the class exists
- * and the MRO is the real one. */
 enum result settle_mro_bindings(
 	StructType * const struct_class,
 	PyObject * const bases,
@@ -46,14 +36,6 @@ enum result settle_mro_bindings(
 ) {
 	PyTypeObject * const type = (PyTypeObject *) struct_class;
 
-	/* The pre-creation rebind lands the slot on the block's own wrapper, so
-	 * this repair fires only when the body defines __setattr__: the escape
-	 * half is skipped per name and the other half is rebound so it keeps
-	 * refusing. In a re-entered build the namespace carries the outer
-	 * build's rebind injections rather than the true body, and the outer
-	 * settle is the source of truth. The mutable column needs no repair:
-	 * CPython's own dispatch honours hooks and foreign C-level slots exactly
-	 * as it does for plain classes. */
 	if (options.frozen && type->tp_setattro != StructMixin_Type.tp_setattro) {
 #ifdef TESTING
 		frozen_column_repair_owner = type;
@@ -233,8 +215,6 @@ enum result settle_mro_bindings(
 	}
 
 	if (body_eq_answers && bindings.hash == HASH_BIND) {
-		/* The plan bound the structural hash beside a honoured body __eq__ it
-		 * never saw. Python's own rule pairs that equality with unhashability. */
 		PY_OWNED(class_dict, struct_type_dict(type));
 
 		if (class_dict == NULL || PyDict_SetItemString(class_dict, "__hash__", Py_None) < 0) {

@@ -37,10 +37,6 @@ struct options_request options_read(
 	struct base_facts const facts,
 	PyObject * * const forwarded
 ) {
-	/* The record a reader hands in must already carry the base-derived facts;
-	 * inherited_options is the only producer and forces both columns. A caller
-	 * that skips the force would otherwise get a refusal for a keyword nobody
-	 * wrote, or a record that contradicts the settle verify downstream. */
 	*forwarded = NULL;
 
 	if (
@@ -481,7 +477,6 @@ static void test_an_unforced_inherited_record_over_carried_facts_is_an_internal_
 }
 
 void options_tests(void) {
-	/* Unity takes its file from UNITY_BEGIN, which is the runner's. */
 	Unity.TestFile = __FILE__;
 
 	RUN_TEST(test_no_keywords_inherit_the_base);

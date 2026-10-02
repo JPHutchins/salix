@@ -12,9 +12,6 @@ class Pair(Struct):
 
 IDENTIFIERS = st.from_regex(r"\A[a-z][a-z0-9_]{0,10}\Z")
 
-# No NaN: it is not equal to itself, which is a property of float rather than
-# of anything here. Structs are in the leaves as well as the branches, so a
-# field holding another struct is generated rather than only hand-written.
 LEAVES = (
     st.sampled_from(HASHABLE)
     | st.none()
@@ -33,8 +30,6 @@ VALUES = st.recursive(
     | st.builds(Frozen, st.text()),
     max_leaves=5,
 )
-# Built rather than sampled: hypothesis hashes a sampled_from pool to dedupe it,
-# and a writable memoryview raises ValueError there rather than TypeError.
 UNHASHABLE_VALUES = (
     st.lists(LEAVES)
     | st.dictionaries(LEAVES, LEAVES)
@@ -66,7 +61,6 @@ def test_a_struct_hashes_as_the_tuple_of_its_values(first, second):
 def test_equality_implies_equal_hashes(first, second):
     left, right = Pair(first, second), Pair(first, second)
 
-    # SIM201: the claim is about __eq__, and != is a different operator.
     assert not (left == right) or hash(left) == hash(right)  # noqa: SIM201
 
 

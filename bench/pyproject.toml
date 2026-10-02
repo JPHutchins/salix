@@ -2,9 +2,6 @@
 name = "salix-bench"
 version = "0"
 requires-python = ">=3.10"
-
-# The `records` module floors at 3.11, which must not drag the library's own
-# floor up with it.
 dependencies = [
     "msgspec>=0.21",
     "record-type>=2023.1.post1; python_version>='3.11'",

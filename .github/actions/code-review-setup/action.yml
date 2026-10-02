@@ -1,32 +1,12 @@
-# salix's OWN setup for code-review check-running, invoked by the reusable workflow
-# (use_setup_action: true) at this fixed path. The reusable workflow stays ecosystem-agnostic; the
-# Nix toolchain, store cache, and the warm-up live here, in salix's repo. Mirrors CI, including the
-# cache key -- the review runs from the default branch on a workflow_run, so an identical key
-# restores the store the CI run that triggered it just saved.
 name: code-review-setup
 description: Nix toolchain + store cache + a warmed dev shell and uv environment, so the review agent can run `nix develop --command uv run camas <task>`
 runs:
   using: composite
   steps:
-    # The SAME installer as CI, and that parity is load-bearing rather than tidiness: the store this
-    # restores below is the one CI built, and CI's installer is multi-user, so those paths are
-    # root-owned and only the daemon writes them. A single-user install (nix-quick-install) runs nix
-    # as the runner and cannot take a write lock in that store -- `nix develop` dies with
-    # `opening lock file ...-source.lock: Permission denied` on a cache hit.
-    #
-    # Pinned by digest, and CI now pins the same one: this step runs in the job that holds the model
-    # key, so what it installs has to be a thing that cannot change under us.
     - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
-    # Digest-pinned for the same reason, so the pin above is not theatre -- both of these run before
-    # the agent, in the same job, with the same key in the environment.
-    #
-    # No purge settings, unlike CI: this job reads the store cache CI populates and must not evict it.
     - uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7.0.2
       with:
         primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix', 'nix/**') }}
         restore-prefixes-first-match: nix-${{ runner.os }}-
-    # Both halves of `nix develop; uv run camas <task>` warmed OUTSIDE the agent's wall: the dev shell
-    # (which builds jphfmt from crates.io on a cold store) and the uv environment (which downloads the
-    # interpreter .python-version names, since the shell deliberately carries no python).
     - shell: bash
       run: nix develop --command uv sync --no-install-workspace

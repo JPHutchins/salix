@@ -6,8 +6,6 @@ import pytest
 
 CHECK_TAG = Path(__file__).resolve().parent.parent / "tools" / "check_tag.py"
 
-# wheel-smoke copies tests/ into the nix store on its own, and the release
-# invokes the script through `uv run`, which takes 3.14.
 pytestmark = [
     pytest.mark.skipif(not CHECK_TAG.exists(), reason="tools/ is not beside these tests"),
     pytest.mark.skipif(sys.version_info < (3, 11), reason="check_tag.py needs tomllib"),

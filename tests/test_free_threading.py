@@ -30,7 +30,7 @@ def run_on_every_thread(work):
     def guarded():
         try:
             work()
-        except BaseException as failure:  # noqa: BLE001 -- any failure in a thread is the result
+        except BaseException as failure:  # noqa: BLE001
             failures.append(failure)
 
     threads = [threading.Thread(target=guarded) for _ in range(THREADS)]
@@ -45,9 +45,6 @@ def run_on_every_thread(work):
 
 
 def run_in_roles(work_pairs):
-    # Sliced to the thread count rather than doubled from half of it, so an odd
-    # THREADS is one role short of a writer instead of one thread short of a
-    # role.
     roles = iter((work_pairs * THREADS)[:THREADS])
     claim = threading.Lock()
 
@@ -155,23 +152,14 @@ def test_a_shared_struct_is_safe_to_read_while_another_thread_writes_it():
     class Shared(Struct, frozen=False):
         value: object
 
-    # Frozen, so that it is hashable -- and still writable through set_field,
-    # which is what makes hash the third reader this can race rather than a
-    # fourth it cannot.
     class Sealed(Struct):
         value: object
 
     shared = Shared([0, 0])
     sealed = Sealed((0, 0))
 
-    # Never equal to any list the writer produces, so the comparison is a real
-    # walk of both slots every time rather than an early out -- and never equal
-    # by accident when the writer happens to reach the value it holds.
     other = Shared(object())
 
-    # Denser than the tests above, because the window is between a load and the
-    # incref that follows it and an assertion in the loop is wide enough to hide
-    # it: at ITERATIONS with a check every pass, the unfixed build survives.
     rounds = ITERATIONS * 5
 
     def write():
@@ -220,9 +208,6 @@ def test_a_shared_ordered_struct_is_safe_to_compare_while_another_thread_writes_
 
     shared = Ranked((0, 0))
 
-    # Below every tuple the writer produces, so the comparison has a determinate
-    # answer however far the writer has got -- and unequal at the first field,
-    # which is the branch that hands both slots to PyObject_RichCompare.
     floor = Ranked((-1, -1))
     rounds = ITERATIONS * 5
 

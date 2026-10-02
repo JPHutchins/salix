@@ -221,14 +221,12 @@ def test_an_identity_co_base_deepcopy_result_is_not_memoized_like_copy_dot_py():
 def test_a_one_argument_classmethod_co_base_deepcopy_fails_like_copy_dot_py():
     class CM:
         @classmethod
-        def __deepcopy__(cls) -> str:  # noqa: PLE0302 -- the arity is the case under test
+        def __deepcopy__(cls) -> str:  # noqa: PLE0302
             return "cm-deepcopy"
 
     class RealStruct(Struct, CM, frozen=False):
         x: int
 
-    # copy.py binds the classmethod, then calls the bound method with the
-    # memo -- two arguments to a one-argument classmethod.
     with pytest.raises(TypeError, match="positional"):
         copy.deepcopy(RealStruct(1))
 
@@ -251,14 +249,12 @@ def test_a_two_argument_classmethod_co_base_deepcopy_receives_the_leaf_class_and
 def test_a_property_co_base_deepcopy_fails_like_copy_dot_py():
     class Prop:
         @property
-        def __deepcopy__(self) -> str:  # noqa: PLE0302 -- the arity is the case under test
+        def __deepcopy__(self) -> str:  # noqa: PLE0302
             return "prop-deepcopy"
 
     class RealStruct(Struct, Prop, frozen=False):
         x: int
 
-    # copy.py resolves the property on the instance, then calls the resolved
-    # value with the memo.
     with pytest.raises(TypeError, match=r"is not callable"):
         copy.deepcopy(RealStruct(1))
 
@@ -270,8 +266,6 @@ def test_a_member_descriptor_co_base_deepcopy_falls_through_like_copy_dot_py():
     class RealStruct(Struct, Slotted, frozen=False):
         x: int
 
-    # copy.py's instance lookup reads the unset slot as AttributeError, so
-    # the method counts as absent and the struct is deep-copied raw.
     copied = copy.deepcopy(RealStruct(1))
 
     assert type(copied) is RealStruct
@@ -387,7 +381,6 @@ def test_an_uncopyable_impostor_raises_copy_dot_error():
         __reduce_ex__ = None
         __reduce__ = None
 
-    # copy.py's message is `% cls`, which renders the class repr.
     with pytest.raises(
         copy.Error, match=r"un\(deep\)copyable object of type <class '.*Uncopyable'>"
     ):
@@ -401,8 +394,6 @@ def test_a_falsy_reduce_ex_is_called_like_copy_dot_py():
         def __reduce__(self):
             return (list, ([7, 8],))
 
-    # copy.py gates __reduce_ex__ on `is not None`, so a falsy non-None is
-    # called (and fails); the truthiness gate is only on __reduce__.
     with pytest.raises(TypeError):
         copy.deepcopy(FalsyReduceEx())
 
@@ -475,8 +466,6 @@ def test_a_user_memo_can_presupply_the_copy():
 
     assert copied is stand_in
 
-    # The dunder honors a presupplied entry the same way copy.deepcopy's
-    # entry check does, so a direct protocol call matches its aliasing.
     assert instance.__deepcopy__(memo) is stand_in
 
 
@@ -486,9 +475,6 @@ def test_a_falsy_dispatch_table_entry_is_skipped_on_deepcopy():
     try:
         copied = copy.deepcopy(Point(1, "two"))
 
-        # deepcopy gates the dispatch_table branch on truthiness (copy.py's
-        # `if reductor:`), where copy gates it on identity, so the falsy
-        # entry is skipped and the raw path runs instead of calling 0.
         assert copied == Point(1, "two")
     finally:
         del copy.dispatch_table[Point]
@@ -509,8 +495,6 @@ def test_a_rebound_mixin_deepcopy_does_not_reenter_forever():
         x: int
         __deepcopy__ = Struct.__deepcopy__
 
-    # The body's rebind of the mixin's own method is found by getattr and
-    # called; the deferral must not then re-find it in the class's dict.
     copied = copy.deepcopy(Pin(1))
 
     assert type(copied) is Pin

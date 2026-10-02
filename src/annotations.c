@@ -5,7 +5,6 @@
 #include "owned.h"
 #include "types.h"
 
-/* annotationlib.Format. The numbering is the API. */
 enum annotation_format {
 	ANNOTATION_FORMAT_VALUE = 1,
 	ANNOTATION_FORMAT_VALUE_WITH_FAKE_GLOBALS = 2,
@@ -40,9 +39,6 @@ PyObject * struct_annotations(PyObject * const namespace) {
 		return NULL;
 	}
 
-	/* Owned rather than borrowed: on 3.14+ evaluate imports a module, which runs
-	 * arbitrary Python the first time, and the namespace this came out of is
-	 * within that code's reach. */
 	PY_OWNED(annotate, Py_XNewRef(borrow_annotate(namespace)));
 
 	if (annotate == NULL) {
@@ -100,13 +96,6 @@ static PyObject * evaluate(PyObject * const annotate) {
 }
 
 #if PY_VERSION_HEX >= 0x030E0000
-/* The import is a plain path-based one and could in principle find a user
- * module of that name; a checkout that shadows a stdlib module has larger
- * problems.
- *
- * No `owner`: the class does not exist yet, so annotationlib builds every
- * ForwardRef unowned and class-scope resolution is off the table. Only the keys
- * are read here, so nothing depends on it. */
 static PyObject * escalate(PyObject * const annotate) {
 	PY_OWNED(annotationlib, PyImport_ImportModule("annotationlib"));
 
@@ -122,11 +111,6 @@ static PyObject * escalate(PyObject * const annotate) {
 	);
 }
 
-/*
- * Both arguments are owned, and neither is NULL: every caller takes its
- * `failure` from PyErr_GetRaisedException straight after a call that returned
- * NULL, and CPython sets an exception on every one of those.
- */
 static void raise_over(PyObject * const displaced, PyObject * const failure) {
 	bool const exits = !PyErr_GivenExceptionMatches(failure, PyExc_Exception);
 	PY_MOVABLE(primary, exits ? failure : displaced);

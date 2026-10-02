@@ -5,8 +5,6 @@
 #	include <Python.h>
 #	include <unity.h>
 
-/* Run `source` as a module body with `salix` already imported, and return
- * the value bound to `result`. Aborts the test on any Python error. */
 PyObject * testing_evaluate(char const * source);
 PyObject * testing_entry(PyObject * fixtures, char const * name);
 PyObject * testing_two_field_instance(void);
