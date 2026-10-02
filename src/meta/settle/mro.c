@@ -253,6 +253,10 @@ enum result settle_mro_bindings(
 
 #	include "../../testing.h"
 
+static char const bases_source[] = {
+#	embed "../../../tests/c/fixtures/settle/bases.py" suffix(, '\0')
+};
+
 static Py_ssize_t swallow_calls = 0;
 
 static int swallowing_setattro(PyObject * self, PyObject * name, PyObject * value) {
@@ -406,11 +410,22 @@ static void test_a_later_bases_slot_forces_the_record(void) {
 	TEST_ASSERT_TRUE(carries_weakref_slot((PyTypeObject *) mixed_child));
 }
 
+static void test_only_struct_bases_are_counted(void) {
+	PyObject * const bases = testing_evaluate(bases_source);
+
+	TEST_ASSERT_EQUAL_INT(2, struct_base_count(testing_entry(bases, "two_structs")));
+	TEST_ASSERT_EQUAL_INT(1, struct_base_count(testing_entry(bases, "one_struct")));
+	TEST_ASSERT_EQUAL_INT(0, struct_base_count(testing_entry(bases, "no_struct")));
+
+	Py_DECREF(bases);
+}
+
 void mro_tests(void) {
 	Unity.TestFile = __FILE__;
 
 	RUN_TEST(test_a_raw_tp_setattro_co_base_does_not_divert_the_struct_slot);
 	RUN_TEST(test_a_later_bases_slot_forces_the_record);
+	RUN_TEST(test_only_struct_bases_are_counted);
 }
 
 #endif
