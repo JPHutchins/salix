@@ -41,6 +41,7 @@ int main(void) {
 	init_owner_tests();
 	meta_tests();
 	mixin_tests();
+	mro_tests();
 	options_tests();
 	owned_tests();
 	replace_tests();

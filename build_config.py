@@ -40,6 +40,7 @@ BUILD: Final = BuildConfig(
         "src/meta/install/install.c",
         "src/meta/install/init_owner.c",
         "src/meta/settle/settle.c",
+        "src/meta/settle/mro.c",
         "src/meta/settle/comparison.c",
         "src/meta/settle/restore.c",
         "src/mixin.c",
