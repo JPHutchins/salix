@@ -220,9 +220,15 @@ enum result fill_defaults(
 
 #	include "../testing.h"
 
-static char const binding_source[] = {
-#	embed "../../tests/c/fixtures/construct/binding.py" suffix(, '\0')
+static char const points_source[] = {
+#	embed "../../tests/c/fixtures/construct/points.py" suffix(, '\0')
 };
+
+#	if PY_VERSION_HEX >= 0x030B0000
+static char const groups_source[] = {
+#		embed "../../tests/c/fixtures/construct/groups.py" suffix(, '\0')
+};
+#	endif
 
 static PyObject * unbound_instance(PyObject * const cls) {
 	return ((PyTypeObject *) cls)->tp_alloc((PyTypeObject *) cls, 0);
@@ -268,7 +274,7 @@ static void test_a_name_that_is_not_a_field_is_missing(void) {
 }
 
 static void test_a_named_value_binds_an_unbound_field_once(void) {
-	PyObject * const fixtures = testing_evaluate(binding_source);
+	PyObject * const fixtures = testing_evaluate(points_source);
 	PyObject * const point = unbound_instance(testing_entry(fixtures, "point"));
 
 	TEST_ASSERT_NOT_NULL(point);
@@ -306,7 +312,7 @@ static void test_a_named_value_binds_an_unbound_field_once(void) {
 }
 
 static void test_a_named_value_for_a_name_that_is_not_a_field_is_refused(void) {
-	PyObject * const fixtures = testing_evaluate(binding_source);
+	PyObject * const fixtures = testing_evaluate(points_source);
 	PyObject * const point = unbound_instance(testing_entry(fixtures, "point"));
 
 	TEST_ASSERT_NOT_NULL(point);
@@ -327,7 +333,7 @@ static void test_a_named_value_for_a_name_that_is_not_a_field_is_refused(void) {
 }
 
 static void test_positionals_bind_in_declaration_order(void) {
-	PyObject * const fixtures = testing_evaluate(binding_source);
+	PyObject * const fixtures = testing_evaluate(points_source);
 	PyObject * const point = unbound_instance(testing_entry(fixtures, "point"));
 
 	TEST_ASSERT_NOT_NULL(point);
@@ -354,10 +360,19 @@ static void test_positionals_bind_in_declaration_order(void) {
 }
 
 static void test_keywords_bind_after_the_positionals_they_follow(void) {
-	PyObject * const fixtures = testing_evaluate(binding_source);
+	PyObject * const fixtures = testing_evaluate(points_source);
 	PyObject * const point = unbound_instance(testing_entry(fixtures, "point"));
 
 	TEST_ASSERT_NOT_NULL(point);
+
+	bind_positional(
+		struct_type_of(point),
+		point,
+		(PyObject * const []){testing_entry(fixtures, "first")},
+		1,
+		false
+	);
+
 	TEST_ASSERT_EQUAL_INT(
 		RESULT_OK,
 		bind_keywords(
@@ -369,6 +384,10 @@ static void test_keywords_bind_after_the_positionals_they_follow(void) {
 		)
 	);
 	TEST_ASSERT_EQUAL_PTR(
+		testing_entry(fixtures, "first"),
+		*struct_slot(struct_type_of(point), point, 0)
+	);
+	TEST_ASSERT_EQUAL_PTR(
 		testing_entry(fixtures, "second"),
 		*struct_slot(struct_type_of(point), point, 1)
 	);
@@ -378,7 +397,7 @@ static void test_keywords_bind_after_the_positionals_they_follow(void) {
 }
 
 static void test_a_default_fills_only_an_unbound_slot(void) {
-	PyObject * const fixtures = testing_evaluate(binding_source);
+	PyObject * const fixtures = testing_evaluate(points_source);
 	PyObject * const point = unbound_instance(testing_entry(fixtures, "point"));
 
 	TEST_ASSERT_NOT_NULL(point);
@@ -398,8 +417,33 @@ static void test_a_default_fills_only_an_unbound_slot(void) {
 	Py_DECREF(fixtures);
 }
 
+static void test_a_bound_default_keeps_its_value(void) {
+	PyObject * const fixtures = testing_evaluate(points_source);
+	PyObject * const point = unbound_instance(testing_entry(fixtures, "point"));
+
+	TEST_ASSERT_NOT_NULL(point);
+	TEST_ASSERT_EQUAL_INT(
+		RESULT_OK,
+		bind_keywords(
+			struct_type_of(point),
+			point,
+			(PyObject * const []){testing_entry(fixtures, "second")},
+			0,
+			testing_entry(fixtures, "keyword_y")
+		)
+	);
+	TEST_ASSERT_EQUAL_INT(RESULT_OK, fill_defaults(struct_type_of(point), point, false));
+	TEST_ASSERT_EQUAL_PTR(
+		testing_entry(fixtures, "second"),
+		*struct_slot(struct_type_of(point), point, 1)
+	);
+
+	Py_DECREF(point);
+	Py_DECREF(fixtures);
+}
+
 static void test_an_unbound_required_field_is_an_error_only_when_required(void) {
-	PyObject * const fixtures = testing_evaluate(binding_source);
+	PyObject * const fixtures = testing_evaluate(points_source);
 	PyObject * const point = unbound_instance(testing_entry(fixtures, "point"));
 
 	TEST_ASSERT_NOT_NULL(point);
@@ -414,7 +458,7 @@ static void test_an_unbound_required_field_is_an_error_only_when_required(void) 
 }
 
 static void test_the_post_init_hook_runs_and_its_error_propagates(void) {
-	PyObject * const fixtures = testing_evaluate(binding_source);
+	PyObject * const fixtures = testing_evaluate(points_source);
 	PyObject * const logged = unbound_instance(testing_entry(fixtures, "logged"));
 	PyObject * const refused = unbound_instance(testing_entry(fixtures, "refused"));
 
@@ -449,6 +493,53 @@ static void test_the_post_init_hook_runs_and_its_error_propagates(void) {
 	Py_DECREF(fixtures);
 }
 
+#	if PY_VERSION_HEX >= 0x030B0000
+static void test_a_group_payload_binds_by_member_index(void) {
+	PyObject * const fixtures = testing_evaluate(groups_source);
+	PyObject * const accepted = unbound_instance(testing_entry(fixtures, "grouped"));
+	PyObject * const single = unbound_instance(testing_entry(fixtures, "grouped"));
+
+	TEST_ASSERT_NOT_NULL(accepted);
+	TEST_ASSERT_NOT_NULL(single);
+
+	bind_positional(
+		struct_type_of(accepted),
+		accepted,
+		(PyObject * const []){
+			testing_entry(fixtures, "message"),
+			testing_entry(fixtures, "exceptions"),
+		},
+		2,
+		true
+	);
+	bind_positional(
+		struct_type_of(single),
+		single,
+		(PyObject * const []){testing_entry(fixtures, "message")},
+		1,
+		false
+	);
+
+	TEST_ASSERT_EQUAL_PTR(
+		testing_entry(fixtures, "exceptions"),
+		*struct_slot(struct_type_of(accepted), accepted, 0)
+	);
+	TEST_ASSERT_EQUAL_PTR(
+		testing_entry(fixtures, "message"),
+		*struct_slot(struct_type_of(accepted), accepted, 1)
+	);
+	TEST_ASSERT_NULL(*struct_slot(struct_type_of(single), single, 0));
+	TEST_ASSERT_EQUAL_PTR(
+		testing_entry(fixtures, "message"),
+		*struct_slot(struct_type_of(single), single, 1)
+	);
+
+	Py_DECREF(single);
+	Py_DECREF(accepted);
+	Py_DECREF(fixtures);
+}
+#	endif
+
 void construct_tests(void) {
 	Unity.TestFile = __FILE__;
 
@@ -460,8 +551,12 @@ void construct_tests(void) {
 	RUN_TEST(test_positionals_bind_in_declaration_order);
 	RUN_TEST(test_keywords_bind_after_the_positionals_they_follow);
 	RUN_TEST(test_a_default_fills_only_an_unbound_slot);
+	RUN_TEST(test_a_bound_default_keeps_its_value);
 	RUN_TEST(test_an_unbound_required_field_is_an_error_only_when_required);
 	RUN_TEST(test_the_post_init_hook_runs_and_its_error_propagates);
+#	if PY_VERSION_HEX >= 0x030B0000
+	RUN_TEST(test_a_group_payload_binds_by_member_index);
+#	endif
 }
 
 #endif

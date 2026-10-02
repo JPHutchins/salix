@@ -438,8 +438,8 @@ PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 
 #	include "../testing.h"
 
-static char const copy_source[] = {
-#	embed "../../tests/c/fixtures/mixin/copy.py" suffix(, '\0')
+static char const reductions_source[] = {
+#	embed "../../tests/c/fixtures/mixin/reductions.py" suffix(, '\0')
 };
 
 static void test_an_interned_copy_answers_the_singleton(void) {
@@ -474,7 +474,7 @@ static void test_a_copy_of_a_fielded_struct_is_equal_and_distinct(void) {
 }
 
 static void test_a_string_reduction_copies_the_identity(void) {
-	PyObject * const fixtures = testing_evaluate(copy_source);
+	PyObject * const fixtures = testing_evaluate(reductions_source);
 	PyObject * const copied = copy_reconstruct(
 		testing_entry(fixtures, "pair"),
 		testing_entry(fixtures, "string_reduction"),
@@ -482,6 +482,7 @@ static void test_a_string_reduction_copies_the_identity(void) {
 		Py_None
 	);
 
+	TEST_ASSERT_NOT_NULL(copied);
 	TEST_ASSERT_EQUAL_PTR(testing_entry(fixtures, "pair"), copied);
 
 	Py_DECREF(copied);
@@ -489,7 +490,7 @@ static void test_a_string_reduction_copies_the_identity(void) {
 }
 
 static void test_a_tuple_reduction_rebuilds_through_the_memo(void) {
-	PyObject * const fixtures = testing_evaluate(copy_source);
+	PyObject * const fixtures = testing_evaluate(reductions_source);
 	PyObject * const rebuilt = copy_reconstruct(
 		testing_entry(fixtures, "pair"),
 		testing_entry(fixtures, "tuple_reduction"),

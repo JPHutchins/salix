@@ -191,6 +191,8 @@ static void test_an_exception_family_with_its_own_init_owns_the_construction(voi
 	TEST_ASSERT_TRUE(family_owns_in_mro((PyTypeObject *) testing_entry(owners, "system_failure")));
 	TEST_ASSERT_FALSE(family_owns_in_mro((PyTypeObject *) testing_entry(owners, "raised")));
 	TEST_ASSERT_FALSE(family_owns_in_mro((PyTypeObject *) testing_entry(owners, "plain")));
+	TEST_ASSERT_TRUE(((StructType *) testing_entry(owners, "system_failure"))->struct_family_owned);
+	TEST_ASSERT_FALSE(((StructType *) testing_entry(owners, "raised"))->struct_family_owned);
 
 	Py_DECREF(owners);
 }
@@ -201,6 +203,7 @@ static void test_a_group_family_is_found_in_the_mro(void) {
 	PyObject * const grouped = testing_evaluate(groups_source);
 
 	TEST_ASSERT_TRUE(group_family_in_mro((PyTypeObject *) grouped));
+	TEST_ASSERT_TRUE(((StructType *) grouped)->struct_group_family);
 	TEST_ASSERT_FALSE(group_family_in_mro((PyTypeObject *) testing_entry(owners, "raised")));
 
 	Py_DECREF(grouped);

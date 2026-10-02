@@ -379,45 +379,74 @@ PyObject * Struct_replace(
 
 #	include "../testing.h"
 
-static char const replace_source[] = {
-#	embed "../../tests/c/fixtures/construct/replace.py" suffix(, '\0')
+static char const points_source[] = {
+#	embed "../../tests/c/fixtures/construct/points.py" suffix(, '\0')
+};
+
+static char const families_source[] = {
+#	embed "../../tests/c/fixtures/construct/families.py" suffix(, '\0')
 };
 
 static void test_a_replace_changes_only_the_named_field(void) {
-	PyObject * const fixtures = testing_evaluate(replace_source);
+	PyObject * const fixtures = testing_evaluate(points_source);
 	PyObject * const replaced = Struct_replace(
-		testing_entry(fixtures, "point"),
-		(PyObject * const []){testing_entry(fixtures, "value")},
+		testing_entry(fixtures, "replaceable"),
+		(PyObject * const []){testing_entry(fixtures, "first")},
 		0,
 		testing_entry(fixtures, "keyword_y")
 	);
 
 	TEST_ASSERT_NOT_NULL(replaced);
-	TEST_ASSERT_NOT_EQUAL(testing_entry(fixtures, "point"), replaced);
+	TEST_ASSERT_NOT_EQUAL(testing_entry(fixtures, "replaceable"), replaced);
 	TEST_ASSERT_EQUAL_PTR(
-		*struct_slot(struct_type_of(replaced), testing_entry(fixtures, "point"), 0),
+		testing_entry(fixtures, "original_x"),
 		*struct_slot(struct_type_of(replaced), replaced, 0)
 	);
 	TEST_ASSERT_EQUAL_PTR(
-		testing_entry(fixtures, "value"),
+		testing_entry(fixtures, "first"),
 		*struct_slot(struct_type_of(replaced), replaced, 1)
 	);
-	TEST_ASSERT_EQUAL_INT(
-		2,
-		PyLong_AsLong(*struct_slot(struct_type_of(replaced), testing_entry(fixtures, "point"), 1))
+	TEST_ASSERT_EQUAL_PTR(
+		testing_entry(fixtures, "original_y"),
+		*struct_slot(struct_type_of(replaced), testing_entry(fixtures, "replaceable"), 1)
 	);
 
 	Py_DECREF(replaced);
 	Py_DECREF(fixtures);
 }
 
+static void test_a_family_replace_reconstructs_from_the_source_payload(void) {
+	PyObject * const fixtures = testing_evaluate(families_source);
+	PyObject * const replaced = Struct_replace(
+		testing_entry(fixtures, "file_error"),
+		(PyObject * const []){testing_entry(fixtures, "code_change")},
+		0,
+		testing_entry(fixtures, "keyword_code")
+	);
+
+	TEST_ASSERT_NOT_NULL(replaced);
+
+	PyObject * const errno_value = PyObject_GetAttrString(replaced, "errno");
+
+	TEST_ASSERT_NOT_NULL(errno_value);
+	TEST_ASSERT_EQUAL_INT(2, PyLong_AsLong(errno_value));
+	TEST_ASSERT_EQUAL_PTR(
+		testing_entry(fixtures, "code_change"),
+		*struct_slot(struct_type_of(replaced), replaced, 0)
+	);
+
+	Py_DECREF(errno_value);
+	Py_DECREF(replaced);
+	Py_DECREF(fixtures);
+}
+
 static void test_a_replace_refuses_a_positional_argument(void) {
-	PyObject * const fixtures = testing_evaluate(replace_source);
+	PyObject * const fixtures = testing_evaluate(points_source);
 
 	TEST_ASSERT_NULL(
 		Struct_replace(
-			testing_entry(fixtures, "point"),
-			(PyObject * const []){testing_entry(fixtures, "value")},
+			testing_entry(fixtures, "replaceable"),
+			(PyObject * const []){testing_entry(fixtures, "first")},
 			1,
 			NULL
 		)
@@ -429,12 +458,12 @@ static void test_a_replace_refuses_a_positional_argument(void) {
 }
 
 static void test_a_replace_refuses_a_name_that_is_not_a_field(void) {
-	PyObject * const fixtures = testing_evaluate(replace_source);
+	PyObject * const fixtures = testing_evaluate(points_source);
 
 	TEST_ASSERT_NULL(
 		Struct_replace(
-			testing_entry(fixtures, "point"),
-			(PyObject * const []){testing_entry(fixtures, "value")},
+			testing_entry(fixtures, "replaceable"),
+			(PyObject * const []){testing_entry(fixtures, "first")},
 			0,
 			testing_entry(fixtures, "keyword_z")
 		)
@@ -446,7 +475,7 @@ static void test_a_replace_refuses_a_name_that_is_not_a_field(void) {
 }
 
 static void test_a_replace_refuses_a_receiver_that_is_not_a_struct(void) {
-	PyObject * const fixtures = testing_evaluate(replace_source);
+	PyObject * const fixtures = testing_evaluate(points_source);
 
 	TEST_ASSERT_NULL(Struct_replace(testing_entry(fixtures, "not_a_struct"), NULL, 0, NULL));
 	TEST_ASSERT_TRUE(PyErr_ExceptionMatches(PyExc_TypeError));
@@ -459,6 +488,7 @@ void replace_tests(void) {
 	Unity.TestFile = __FILE__;
 
 	RUN_TEST(test_a_replace_changes_only_the_named_field);
+	RUN_TEST(test_a_family_replace_reconstructs_from_the_source_payload);
 	RUN_TEST(test_a_replace_refuses_a_positional_argument);
 	RUN_TEST(test_a_replace_refuses_a_name_that_is_not_a_field);
 	RUN_TEST(test_a_replace_refuses_a_receiver_that_is_not_a_struct);

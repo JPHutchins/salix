@@ -451,12 +451,53 @@ static void test_the_weakref_column_reads_each_links_weakref_keyword(void) {
 	Py_DECREF(fixtures);
 }
 
+static void test_the_chain_probe_names_the_first_declined_keyword(void) {
+	PyObject * const fixtures = testing_evaluate(probes_source);
+	PyObject * declined = NULL;
+
+	assert_verdict(
+		(struct chain_verdict){.accepts_all = 0, .accepts_weakref = 1, .readable = true},
+		chain_probe(
+			testing_entry(fixtures, "positional_only"),
+			testing_entry(fixtures, "unknowns_after_a_known"),
+			false,
+			&declined
+		),
+		__LINE__
+	);
+	TEST_ASSERT_NOT_NULL(declined);
+	TEST_ASSERT_EQUAL_INT(0, PyUnicode_CompareWithASCIIString(declined, "q"));
+
+	Py_DECREF(fixtures);
+}
+
+static void test_an_unreadable_keyword_fails_the_probe(void) {
+	PyObject * const fixtures = testing_evaluate(probes_source);
+
+	assert_verdict(
+		(struct chain_verdict){.accepts_all = -1, .accepts_weakref = 1, .readable = true},
+		chain_probe(
+			testing_entry(fixtures, "positional_only"),
+			testing_entry(fixtures, "not_a_string_key"),
+			false,
+			NULL
+		),
+		__LINE__
+	);
+	TEST_ASSERT_NOT_NULL(PyErr_Occurred());
+	PyErr_Clear();
+
+	Py_DECREF(fixtures);
+}
+
 void handoff_tests(void) {
 	Unity.TestFile = __FILE__;
 
 	RUN_TEST(test_the_winning_metatype_is_the_most_derived);
 	RUN_TEST(test_the_metaclass_chain_holds_each_python_new_above_struct_meta);
 	RUN_TEST(test_the_chain_probe_declines_a_positional_only_name);
+	RUN_TEST(test_the_chain_probe_names_the_first_declined_keyword);
+	RUN_TEST(test_an_unreadable_keyword_fails_the_probe);
 	RUN_TEST(test_a_variadic_keyword_link_accepts_every_keyword);
 	RUN_TEST(test_a_link_written_in_c_makes_the_chain_unreadable);
 	RUN_TEST(test_the_weakref_column_reads_each_links_weakref_keyword);

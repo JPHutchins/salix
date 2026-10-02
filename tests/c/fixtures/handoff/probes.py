@@ -18,4 +18,6 @@ result = {
     "named": {"b": True, "c": True},
     "positional": {"a": True},
     "anything": {"anything": True},
+    "unknowns_after_a_known": {"b": True, "q": True, "r": True},
+    "not_a_string_key": {1: True},
 }
