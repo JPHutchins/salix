@@ -101,6 +101,16 @@ PyObject * testing_evaluate(char const * const source) {
 	return result;
 }
 
+PyObject * testing_entry(PyObject * const fixtures, char const * const name) {
+	PyObject * const entry = PyDict_GetItemString(fixtures, name);
+
+	if (entry == NULL) {
+		TEST_FAIL_MESSAGE(name);
+	}
+
+	return entry;
+}
+
 PyObject * testing_two_field_instance(void) {
 	return testing_evaluate("class P(Struct):\n    alpha: int\n    beta: int\nresult = P(1, 2)\n");
 }
