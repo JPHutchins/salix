@@ -20,6 +20,7 @@ void exceptions_tests(void);
 void fields_tests(void);
 void forms_tests(void);
 void handoff_tests(void);
+void init_owner_tests(void);
 void meta_tests(void);
 void options_tests(void);
 void owned_tests(void);
