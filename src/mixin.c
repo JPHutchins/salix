@@ -186,10 +186,6 @@ PyObject * Struct_get_signature(PyObject * const self, void * const closure) {
 		PyTypeObject * const entry_type = (PyTypeObject *) entry;
 
 		if (PyType_FastSubclass(entry_type, Py_TPFLAGS_BASE_EXC_SUBCLASS)) {
-			/* The exception family carries its own signatures; the field
-			 * constructor's answers instead. A user-authored binding on an
-			 * exception-struct ancestor is redefined, not inherited, and
-			 * answers. */
 			PY_OWNED(entry_dict, struct_type_dict(entry_type));
 
 			if (entry_dict == NULL) {
@@ -210,9 +206,6 @@ PyObject * Struct_get_signature(PyObject * const self, void * const closure) {
 				continue;
 			}
 
-			/* None declares 'no signature' -- the uniform loop keeps
-			 * looking, and so does this branch. A heap entry's binding is
-			 * definitionally its own redefinition and answers. */
 			if (entry_binding == Py_None) {
 				continue;
 			}
@@ -404,8 +397,6 @@ static PyObject * frozen_instance_error(StructType const * const type) {
 		return cached;
 	}
 
-	/* A failed resolution is not cached, so a later failure retries the
-	 * import instead of latching the fallback process-wide. */
 	PY_OWNED(module, PyImport_ImportModule("dataclasses"));
 
 	if (module == NULL) {
@@ -427,8 +418,6 @@ static PyObject * frozen_instance_error(StructType const * const type) {
 		return NULL;
 	}
 
-	/* Both racers hold the same module, so the critical section is on it; the
-	 * loser's reference drops with its scope. */
 	STRUCT_BEGIN_CRITICAL_SECTION(module);
 		if (type->struct_state->frozen_instance_error == NULL) {
 			type->struct_state->frozen_instance_error = Py_NewRef(resolved);
@@ -451,8 +440,6 @@ static int Struct_set_attribute(
 		return 0;
 	}
 
-	/* Stock frozen dataclasses raise FrozenInstanceError; it subclasses
-	 * AttributeError, so generic catchers still work. */
 	if (value != NULL && PyUnicode_Check(name) && struct_type_of(self)->struct_options.frozen) {
 		PyObject * const frozen_error = frozen_instance_error(struct_type_of(self));
 

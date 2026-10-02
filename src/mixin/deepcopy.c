@@ -27,8 +27,6 @@ PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) {
 		return NULL;
 	}
 
-	/* copy.deepcopy's entry check, reproduced so a direct protocol call
-	 * honors a seeded memo. */
 	PY_OWNED(key, PyLong_FromVoidPtr(self));
 
 	if (key == NULL) {
@@ -61,9 +59,6 @@ PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) {
 	StructType * const type = struct_type_of(self);
 	PyTypeObject * const cls = &type->heap_type.ht_type;
 
-	/* A body __new__ = None is the cannot-create marker; the cached flag
-	 * answers at every construction entry point, the metatype's dispatch
-	 * included. */
 	if (type->struct_cannot_create) {
 		PyErr_Format(PyExc_TypeError, "cannot create '%.100s' instances", cls->tp_name);
 
@@ -123,14 +118,6 @@ PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) {
 	PY_MOVABLE(copy, NULL);
 
 	if (type->struct_family_owned) {
-		/* The family's construction is its C members' only writer --
-		 * OSError's live in __new__ and its init no-ops without it -- so
-		 * the copy is the construction itself, with the source's
-		 * positional payload deep-copied first: the C members hold the
-		 * detached elements, not the original's. The constructor
-		 * pre-filled the defaults; the source's values -- mutations and
-		 * prior replaces included -- overwrite them, releasing the
-		 * pre-filled references. */
 		PY_OWNED(values_snapshot, PyTuple_New(type->struct_field_count));
 
 		if (values_snapshot == NULL) {
@@ -154,14 +141,6 @@ PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) {
 		}
 
 		if (PyTuple_GET_SIZE(args) > 0) {
-			/* The shell registers before the payload's deep copy, so a
-			 * self-referential args tuple resolves to it instead of
-			 * re-entering deepcopy on the source forever; the memo entry
-			 * then moves to the rebuilt copy. The family's construction
-			 * formats the payload, and the self-reference the memo resolves
-			 * to the shell may be the element it formats: the shell carries
-			 * an empty payload so the NULL-args read every version guards
-			 * against never fires. */
 			PY_MOVABLE(shell, cls->tp_alloc(cls, 0));
 
 			if (shell == NULL) {
@@ -207,10 +186,6 @@ PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) {
 				return NULL;
 			}
 		} else {
-			/* An empty payload marks a from_mapping-built source: the
-			 * family's parse has nothing to reconstruct, and the plain
-			 * allocation keeps the members exactly as the source left
-			 * them -- unset, not fabricated. */
 			Py_DECREF(args);
 			copy = cls->tp_alloc(cls, 0);
 
@@ -234,10 +209,6 @@ PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) {
 		return NULL;
 	}
 
-	/* The shell is registered in the memo before its state is copied, so a
-	 * field that references the source resolves to the shell instead of
-	 * re-entering deepcopy; the shell's own loop then fills that field with
-	 * the copy itself. */
 	if (PyDict_SetItem(memo, key, copy) < 0) {
 		return NULL;
 	}
@@ -245,8 +216,6 @@ PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) {
 	PY_MOVABLE(dict, NULL);
 	struct_slots_copy_into(type, self, copy, &dict);
 
-	/* Each shallow copy is replaced by its deep copy, made outside the
-	 * section because copy.deepcopy runs arbitrary Python. */
 	for (Py_ssize_t i = 0; i < type->struct_field_count; i += 1) {
 		PyObject * const value = *struct_slot(type, copy, i);
 
@@ -277,8 +246,6 @@ PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) {
 	}
 
 	if (dict != NULL) {
-		/* PyDict_Copy runs under the dict's own lock, so the deepcopy walks
-		 * a snapshot no concurrent writer can change size under. */
 		PY_OWNED(snapshot, PyDict_Copy(dict));
 
 		if (snapshot == NULL) {
@@ -306,14 +273,10 @@ PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) {
 				copy,
 				source_group->msg,
 				source_group->excs,
-				/* The body is a fresh deep copy, so the source's cached repr
-				 * would describe members the copy does not hold; NULL
-				 * rebuilds it from the detached body. */
 				NULL,
 				deepcopy,
 				memo
-			) !=
-			RESULT_OK
+			) != RESULT_OK
 		) {
 			return memo_failure(memo, key);
 		}

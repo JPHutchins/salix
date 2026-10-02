@@ -7,11 +7,6 @@
 #include "meta.h"
 #include "options.h"
 
-/* PyMemberDef only became visible through Python.h in 3.12, and the member
- * type constants gained their Py_ prefix in the same move. Both halves of that
- * rename live here, so the whole adaptation goes away together whenever the
- * floor reaches 3.12. SLOT_MEMBER_TYPE is what type.__new__ makes a __slots__
- * entry, and so what addresses one by offset. */
 #if PY_VERSION_HEX < 0x030C0000
 #	include <structmember.h>
 
@@ -50,19 +45,8 @@ typedef struct StructType {
 	Py_ssize_t struct_exceptions_index;
 } StructType;
 
-/*
- * Only an instance of StructMeta has the storage declared above; every other
- * type stops at PyHeapTypeObject, and reading a field off one is a read past
- * the end of its allocation. _StructMixin is a permitted base and Struct.__mro__
- * hands it out, so a subclass of it whose metaclass is plain `type` reaches
- * every slot the mixin installs while being no such thing.
- */
 static inline bool group_layout_has_excs_str(void) {
 #if PY_VERSION_HEX >= 0x030D0C00
-	/* 3.13.12+ backported the cached string; a wheel built on newer headers
-	 * can run on an older 3.13 patch whose group layout is shorter, and
-	 * Py_Version is a build-time macro off the limited API -- the runtime
-	 * basicsize answers what a version compare cannot. */
 	return ((PyTypeObject *) PyExc_BaseExceptionGroup)->tp_basicsize >=
 		(Py_ssize_t) (offsetof(PyBaseExceptionGroupObject, excs_str) + sizeof(PyObject *));
 #endif
@@ -73,8 +57,6 @@ static inline bool group_layout_has_excs_str(void) {
 static inline PyObject * group_excs_str(PyObject * const source) {
 #if PY_VERSION_HEX >= 0x030D0C00
 	if (group_layout_has_excs_str()) {
-		/* Borrowed: the carry takes its own reference, and a new one here
-		 * leaks the intermediate. */
 		return ((PyBaseExceptionGroupObject *) source)->excs_str;
 	}
 #endif
@@ -113,17 +95,6 @@ static inline PyObject * * struct_slot(
 	return (PyObject * *) ((char *) self + type->struct_slot_offsets[index]);
 }
 
-/*
- * Py_BEGIN_CRITICAL_SECTION arrived in 3.13, and expands to a bare scope on a
- * build with the GIL -- which is every build below it.
- *
- * A macro because a critical section is a lexical scope holding a stack frame
- * the interpreter links into a per-thread stack; no function can open one and
- * return with it still open. Same reason owned.h is macros.
- */
-/* A class's own dict, as a strong reference either way. PyType_GetDict arrived
- * in 3.12; before it, tp_dict is the same object and the caller owns nothing,
- * so a reference is taken to make the two spellings interchangeable. */
 #if PY_VERSION_HEX < 0x030C0000
 static inline PyObject * struct_type_dict(PyTypeObject * const type) {
 	return Py_XNewRef(type->tp_dict);
@@ -134,18 +105,6 @@ static inline PyObject * struct_type_dict(PyTypeObject * const type) {
 }
 #endif
 
-/*
- * A strong reference to the value, or NULL if the key is gone.
- *
- * PyDict_GetItem hands back a borrowed one, and taking a reference to it is two
- * steps: on a free-threaded build another thread can remove the key and drop
- * the last reference in between. PyDict_GetItemRef takes it under the dict's
- * own lock instead -- 3.13+, which is also every version that can have the
- * race, so the older branch is the plain read it always was.
- *
- * It also reports a failed lookup rather than swallowing it, which is why the
- * caller separates "gone" from "could not tell".
- */
 static inline PyObject * dict_value_ref(PyObject * const mapping, PyObject * const key) {
 #if PY_VERSION_HEX >= 0x030D0000
 	PyObject * value = NULL;
@@ -158,10 +117,6 @@ static inline PyObject * dict_value_ref(PyObject * const mapping, PyObject * con
 #endif
 }
 
-/* The class-build dict probes share this pair: PyDict_GetItemString
- * suppresses a lookup error on every version, so presence and value probes
- * go through WithError, whose NULL reports a failure the caller must not
- * read as absence. The value is borrowed -- the mapping outlives its use. */
 static inline PyObject * dict_get_string(PyObject * const mapping, char const * const name) {
 	PyObject * const key = PyUnicode_FromString(name);
 
@@ -202,37 +157,6 @@ struct slot_pair {
 	PyObject * theirs;
 };
 
-/*
- * A new reference to a field, taken under the same lock the writer takes.
- *
- * The write side is safe because it goes through PyMember_SetOne, which holds
- * a critical section on the instance over the store and defers the release past
- * the end of it. Every reader here loaded the slot and then increffed what it
- * found, which is two steps with a window between them: on a free-threaded
- * build a concurrent write frees the pointer inside that window, and repr and
- * == segfault. Measured, 3.14t, four writers and three readers of one kind:
- * `repr` exited 134/139/134 and `==` 139/134/134, while the same loop reading
- * through CPython's own member descriptor survived every time.
- *
- * Every acquisition is in this file, so a fifth reader cannot forget one. The
- * macros are a bare scope on a build with the GIL, so all three of these are
- * the same load and incref they always were there.
- *
- * What a reader gets is per-slot atomicity, not a snapshot of the struct: a
- * write landing between two of repr's fields renders a pair the object never
- * held. That is what reading two member descriptors in a row gives as well.
- *
- * Hash is the exception, and the only one: its loop stays in C, so one
- * acquisition spans the whole of it and what it hashes is a state the struct
- * really held. repr and the comparisons run PyObject_Repr and
- * PyObject_RichCompareBool between fields, and a section held across arbitrary
- * Python is suspended the moment the thread detaches -- so hoisting one around
- * those loops would read as a guarantee and not be one.
- *
- * A slot stays NULL until something writes it, which is observable on a
- * half-built struct, and this hands that back as NULL: repr is the caller that
- * renders it.
- */
 static inline PyObject * struct_slot_ref(
 	StructType const * const type,
 	PyObject * const self,
@@ -247,15 +171,6 @@ static inline PyObject * struct_slot_ref(
 	return value;
 }
 
-/*
- * Both sides of one field, under a single acquisition covering both instances.
- * The comparison paths walk them in pairs, and one section where there were two
- * is the whole of what the lock can be made to cost them: 3.14t, an eight-field
- * struct, `a == b` 134.5ns per field-pair section against 110.7 for one.
- *
- * Reading an unwritten slot as None keeps == total instead of making each
- * caller re-derive the guard.
- */
 static inline struct slot_pair struct_slot_pair_ref(
 	StructType const * const self_type,
 	PyObject * const self,
@@ -276,14 +191,6 @@ static inline struct slot_pair struct_slot_pair_ref(
 	return (struct slot_pair){.mine = mine, .theirs = theirs};
 }
 
-/*
- * Every field into `values`, which must be a tuple of struct_field_count and
- * whose items must be unset. One acquisition rather than one per field, and so
- * a real snapshot -- hash is the reader that can have both, because nothing in
- * this loop calls back into Python. An unwritten slot takes `missing`: Py_None
- * for readers that render, NULL for callers that skip. 3.14t, eight fields:
- * 111.4ns to 81.1, against 77.5 for the unsynchronised read this replaced.
- */
 static inline void struct_slots_ref_into(
 	StructType const * const type,
 	PyObject * const self,
@@ -301,18 +208,6 @@ static inline void struct_slots_ref_into(
 	STRUCT_END_CRITICAL_SECTION();
 }
 
-/*
- * Every slot the type owns, plus the instance dict pointer, under one
- * acquisition: the struct fields and the non-struct base members whose
- * offsets install_fields resolved. An unwritten slot stays unwritten in the
- * destination, and one the destination already holds keeps its value, so a
- * caller may write changes before the copy and have them survive it.
- * `dict` receives a strong reference to the instance dict if the slot holds
- * one; reading never creates the dict, so copying a struct that never had a
- * __dict__ does not materialize one on the source. The dict's contents are
- * copied by the caller, outside this section. The loop stores only, so
- * nothing here can fail.
- */
 static inline void struct_slots_copy_into(
 	StructType const * const type,
 	PyObject * const source,
@@ -349,13 +244,6 @@ static inline void struct_slots_copy_into(
 	STRUCT_END_CRITICAL_SECTION();
 }
 
-/*
- * Installs a copy of the source dict, with entries the destination already
- * holds winning: a constructor or __post_init__ that wrote its own dict
- * keeps what it computed, and the copy fills the rest. The caller hands in
- * the strong reference struct_slots_copy_into took, so nothing here reads
- * the source again.
- */
 static inline int struct_dict_copy_merged(
 	PyObject * const source_dict,
 	PyObject * const destination
@@ -399,8 +287,6 @@ static inline PyObject * struct_metadata(
 	StructType const * const type,
 	enum struct_metadata const which
 ) {
-	/* Matched rather than tested, so that a third kind of metadata is a
-	 * compiler error here instead of whatever the false arm happened to be. */
 	switch (which) {
 		case STRUCT_FIELD_NAMES:
 			return struct_tuple_or_empty(type->struct_field_names);
@@ -415,9 +301,6 @@ static inline PyObject * struct_metadata(
 	Py_UNREACHABLE();
 }
 
-/* Access the PyMemberDef array that floats behind a heap type. Mirrors
- * msgspec's MS_PyHeapType_GET_MEMBERS: the members live just past the type
- * object, which (for a custom metaclass) is sized by the metaclass basicsize. */
 static inline PyMemberDef * struct_heap_type_members(StructType * const type) {
 	return (PyMemberDef *) ((char *) type + Py_TYPE(type)->tp_basicsize);
 }
