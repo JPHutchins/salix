@@ -18,6 +18,25 @@ enum result write_slot(
 	PyObject * value
 );
 
+void bind_positional(
+	StructType const * type,
+	PyObject * self,
+	PyObject * const * arguments,
+	Py_ssize_t positional_count,
+	bool family_constructed
+);
+enum result bind_keywords(
+	StructType const * type,
+	PyObject * self,
+	PyObject * const * arguments,
+	Py_ssize_t positional_count,
+	PyObject * keyword_names
+);
+enum result bind_named(StructType const * type, PyObject * self, PyObject * name, PyObject * value);
+struct field_lookup named_field(StructType const * type, PyObject * name);
+enum result fill_defaults(StructType const * type, PyObject * self, bool require_all);
+enum result run_post_init(StructType const * type, PyObject * self);
+
 int change_names_touch(
 	StructType * type,
 	PyObject * keyword_names,
