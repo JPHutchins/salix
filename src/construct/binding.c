@@ -250,6 +250,14 @@ enum result fill_defaults(
 
 #	include "../testing.h"
 
+static char const binding_source[] = {
+#	embed "../../tests/c/fixtures/construct/binding.py" suffix(, '\0')
+};
+
+static PyObject * unbound_instance(PyObject * const cls) {
+	return ((PyTypeObject *) cls)->tp_alloc((PyTypeObject *) cls, 0);
+}
+
 /* The identity scan is the fast path; the equality scan exists only for a name
  * that was not interned, which Python-level tests reach only by accident. */
 static void test_an_interned_name_resolves_by_identity(void) {
@@ -291,6 +299,188 @@ static void test_a_name_that_is_not_a_field_is_missing(void) {
 	Py_DECREF(instance);
 }
 
+static void test_a_named_value_binds_an_unbound_field_once(void) {
+	PyObject * const fixtures = testing_evaluate(binding_source);
+	PyObject * const point = unbound_instance(testing_entry(fixtures, "point"));
+
+	TEST_ASSERT_NOT_NULL(point);
+	TEST_ASSERT_EQUAL_INT(
+		RESULT_OK,
+		bind_named(
+			struct_type_of(point),
+			point,
+			testing_entry(fixtures, "x"),
+			testing_entry(fixtures, "first")
+		)
+	);
+	TEST_ASSERT_EQUAL_PTR(
+		testing_entry(fixtures, "first"),
+		*struct_slot(struct_type_of(point), point, 0)
+	);
+	TEST_ASSERT_EQUAL_INT(
+		RESULT_ERROR,
+		bind_named(
+			struct_type_of(point),
+			point,
+			testing_entry(fixtures, "x"),
+			testing_entry(fixtures, "second")
+		)
+	);
+	TEST_ASSERT_TRUE(PyErr_ExceptionMatches(PyExc_TypeError));
+	PyErr_Clear();
+	TEST_ASSERT_EQUAL_PTR(
+		testing_entry(fixtures, "first"),
+		*struct_slot(struct_type_of(point), point, 0)
+	);
+
+	Py_DECREF(point);
+	Py_DECREF(fixtures);
+}
+
+static void test_a_named_value_for_a_name_that_is_not_a_field_is_refused(void) {
+	PyObject * const fixtures = testing_evaluate(binding_source);
+	PyObject * const point = unbound_instance(testing_entry(fixtures, "point"));
+
+	TEST_ASSERT_NOT_NULL(point);
+	TEST_ASSERT_EQUAL_INT(
+		RESULT_ERROR,
+		bind_named(
+			struct_type_of(point),
+			point,
+			testing_entry(fixtures, "z"),
+			testing_entry(fixtures, "first")
+		)
+	);
+	TEST_ASSERT_TRUE(PyErr_ExceptionMatches(PyExc_TypeError));
+	PyErr_Clear();
+
+	Py_DECREF(point);
+	Py_DECREF(fixtures);
+}
+
+static void test_positionals_bind_in_declaration_order(void) {
+	PyObject * const fixtures = testing_evaluate(binding_source);
+	PyObject * const point = unbound_instance(testing_entry(fixtures, "point"));
+
+	TEST_ASSERT_NOT_NULL(point);
+
+	bind_positional(
+		struct_type_of(point),
+		point,
+		(PyObject * const []){testing_entry(fixtures, "first"), testing_entry(fixtures, "second")},
+		2,
+		false
+	);
+
+	TEST_ASSERT_EQUAL_PTR(
+		testing_entry(fixtures, "first"),
+		*struct_slot(struct_type_of(point), point, 0)
+	);
+	TEST_ASSERT_EQUAL_PTR(
+		testing_entry(fixtures, "second"),
+		*struct_slot(struct_type_of(point), point, 1)
+	);
+
+	Py_DECREF(point);
+	Py_DECREF(fixtures);
+}
+
+static void test_keywords_bind_after_the_positionals_they_follow(void) {
+	PyObject * const fixtures = testing_evaluate(binding_source);
+	PyObject * const point = unbound_instance(testing_entry(fixtures, "point"));
+
+	TEST_ASSERT_NOT_NULL(point);
+	TEST_ASSERT_EQUAL_INT(
+		RESULT_OK,
+		bind_keywords(
+			struct_type_of(point),
+			point,
+			(PyObject * const []){testing_entry(fixtures, "first"), testing_entry(fixtures, "second")},
+			1,
+			testing_entry(fixtures, "keyword_y")
+		)
+	);
+	TEST_ASSERT_EQUAL_PTR(
+		testing_entry(fixtures, "second"),
+		*struct_slot(struct_type_of(point), point, 1)
+	);
+
+	Py_DECREF(point);
+	Py_DECREF(fixtures);
+}
+
+static void test_a_default_fills_only_an_unbound_slot(void) {
+	PyObject * const fixtures = testing_evaluate(binding_source);
+	PyObject * const point = unbound_instance(testing_entry(fixtures, "point"));
+
+	TEST_ASSERT_NOT_NULL(point);
+	TEST_ASSERT_EQUAL_INT(
+		RESULT_OK,
+		bind_named(
+			struct_type_of(point),
+			point,
+			testing_entry(fixtures, "x"),
+			testing_entry(fixtures, "first")
+		)
+	);
+	TEST_ASSERT_EQUAL_INT(RESULT_OK, fill_defaults(struct_type_of(point), point, true));
+	TEST_ASSERT_EQUAL_INT(7, PyLong_AsLong(*struct_slot(struct_type_of(point), point, 1)));
+
+	Py_DECREF(point);
+	Py_DECREF(fixtures);
+}
+
+static void test_an_unbound_required_field_is_an_error_only_when_required(void) {
+	PyObject * const fixtures = testing_evaluate(binding_source);
+	PyObject * const point = unbound_instance(testing_entry(fixtures, "point"));
+
+	TEST_ASSERT_NOT_NULL(point);
+	TEST_ASSERT_EQUAL_INT(RESULT_OK, fill_defaults(struct_type_of(point), point, false));
+	TEST_ASSERT_EQUAL_INT(7, PyLong_AsLong(*struct_slot(struct_type_of(point), point, 1)));
+	TEST_ASSERT_EQUAL_INT(RESULT_ERROR, fill_defaults(struct_type_of(point), point, true));
+	TEST_ASSERT_TRUE(PyErr_ExceptionMatches(PyExc_TypeError));
+	PyErr_Clear();
+
+	Py_DECREF(point);
+	Py_DECREF(fixtures);
+}
+
+static void test_the_post_init_hook_runs_and_its_error_propagates(void) {
+	PyObject * const fixtures = testing_evaluate(binding_source);
+	PyObject * const logged = unbound_instance(testing_entry(fixtures, "logged"));
+	PyObject * const refused = unbound_instance(testing_entry(fixtures, "refused"));
+
+	TEST_ASSERT_NOT_NULL(logged);
+	TEST_ASSERT_NOT_NULL(refused);
+	TEST_ASSERT_EQUAL_INT(
+		RESULT_OK,
+		bind_named(
+			struct_type_of(logged),
+			logged,
+			testing_entry(fixtures, "x"),
+			testing_entry(fixtures, "first")
+		)
+	);
+	TEST_ASSERT_EQUAL_INT(
+		RESULT_OK,
+		bind_named(
+			struct_type_of(refused),
+			refused,
+			testing_entry(fixtures, "x"),
+			testing_entry(fixtures, "first")
+		)
+	);
+	TEST_ASSERT_EQUAL_INT(RESULT_OK, run_post_init(struct_type_of(logged), logged));
+	TEST_ASSERT_EQUAL_INT(1, PyList_GET_SIZE(testing_entry(fixtures, "calls")));
+	TEST_ASSERT_EQUAL_INT(RESULT_ERROR, run_post_init(struct_type_of(refused), refused));
+	TEST_ASSERT_TRUE(PyErr_ExceptionMatches(PyExc_ValueError));
+	PyErr_Clear();
+
+	Py_DECREF(refused);
+	Py_DECREF(logged);
+	Py_DECREF(fixtures);
+}
+
 void construct_tests(void) {
 	/* Unity takes its file from UNITY_BEGIN, which is the runner's. */
 	Unity.TestFile = __FILE__;
@@ -298,6 +488,13 @@ void construct_tests(void) {
 	RUN_TEST(test_an_interned_name_resolves_by_identity);
 	RUN_TEST(test_a_name_assembled_at_runtime_resolves_by_comparison);
 	RUN_TEST(test_a_name_that_is_not_a_field_is_missing);
+	RUN_TEST(test_a_named_value_binds_an_unbound_field_once);
+	RUN_TEST(test_a_named_value_for_a_name_that_is_not_a_field_is_refused);
+	RUN_TEST(test_positionals_bind_in_declaration_order);
+	RUN_TEST(test_keywords_bind_after_the_positionals_they_follow);
+	RUN_TEST(test_a_default_fills_only_an_unbound_slot);
+	RUN_TEST(test_an_unbound_required_field_is_an_error_only_when_required);
+	RUN_TEST(test_the_post_init_hook_runs_and_its_error_propagates);
 }
 
 #endif

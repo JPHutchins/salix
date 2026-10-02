@@ -24,6 +24,7 @@ void init_owner_tests(void);
 void meta_tests(void);
 void options_tests(void);
 void owned_tests(void);
+void replace_tests(void);
 void repr_tests(void);
 void restore_tests(void);
 void slots_tests(void);
