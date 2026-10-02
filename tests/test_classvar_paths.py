@@ -117,7 +117,7 @@ def test_value_equal_instances_share_one_cache_entry():
     class Cached(Struct):
         x: int
 
-        @functools.cache  # noqa: B019 -- the retained instances are the point
+        @functools.cache  # noqa: B019
         def slow(self) -> int:
             calls.append(self.x)
 
@@ -133,7 +133,7 @@ def test_mutating_a_cached_instance_misses_and_leaks_the_entry():
     class Cached(Struct):
         x: int
 
-        @functools.cache  # noqa: B019 -- the leaked entry is the point
+        @functools.cache  # noqa: B019
         def slow(self) -> int:
             return self.x * 2
 
@@ -151,7 +151,7 @@ def test_an_unhashable_struct_refuses_the_cache():
     class Mutable(Struct, frozen=False):
         x: int
 
-        @functools.cache  # noqa: B019 -- the refusal is the point
+        @functools.cache  # noqa: B019
         def slow(self) -> int:
             return self.x
 
@@ -160,13 +160,13 @@ def test_an_unhashable_struct_refuses_the_cache():
 
 
 def test_a_body_defined_eq_is_unhashable_and_the_cache_refuses():
-    class BodyEq(Struct):  # noqa: PLW1641 -- the unhashability is the point
+    class BodyEq(Struct):  # noqa: PLW1641
         x: int
 
         def __eq__(self, other: object) -> bool:
             return True
 
-        @functools.cache  # noqa: B019 -- the refusal is the point
+        @functools.cache  # noqa: B019
         def slow(self) -> int:
             return self.x
 
@@ -178,7 +178,7 @@ def test_eq_false_hashes_by_identity_and_the_cache_returns_stale_values():
     class Identity(Struct, eq=False):
         x: int
 
-        @functools.cache  # noqa: B019 -- the stale hit is the point
+        @functools.cache  # noqa: B019
         def slow(self) -> int:
             return self.x * 2
 
@@ -204,7 +204,7 @@ def test_eq_false_mutable_structs_are_hashable():
 
 
 def test_a_body_defined_eq_still_makes_an_eq_false_struct_unhashable():
-    class BodyEq(Struct, eq=False):  # noqa: PLW1641 -- the unhashability is the point
+    class BodyEq(Struct, eq=False):  # noqa: PLW1641
         x: int
 
         def __eq__(self, other: object) -> bool:
@@ -257,7 +257,7 @@ def test_a_field_hash_misses_after_set_field_under_eq_false():
         def __hash__(self) -> int:
             return self.x
 
-        @functools.cache  # noqa: B019 -- the miss is the point
+        @functools.cache  # noqa: B019
         def slow(self) -> int:
             return self.x * 2
 
@@ -287,7 +287,7 @@ def test_a_struct_base_body_init_displaces_post_init():
 
 
 def test_equality_inherited_from_a_struct_base_makes_the_subclass_unhashable():
-    class EqStruct(Struct):  # noqa: PLW1641 -- the inherited unhashability is the point
+    class EqStruct(Struct):  # noqa: PLW1641
         x: int
 
         def __eq__(self, other: object) -> bool:

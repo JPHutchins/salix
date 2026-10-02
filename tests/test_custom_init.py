@@ -172,7 +172,7 @@ def test_each_instance_gets_its_own_mutable_default():
     """
 
     class Mutable(Struct, frozen=False):
-        xs: list = []  # noqa: RUF012 -- the copy is the feature under test
+        xs: list = []  # noqa: RUF012
 
         def __init__(self) -> None:
             pass

@@ -179,8 +179,6 @@ def test_a_classmethod_co_base_copy_fails_like_copy_dot_py():
     class RealStruct(Struct, CM, frozen=False):
         x: int
 
-    # copy.py binds the classmethod, then calls the bound method with the
-    # instance — two arguments to a one-argument classmethod.
     with pytest.raises(TypeError, match="positional"):
         copy.copy(RealStruct(1))
 
@@ -188,7 +186,7 @@ def test_a_classmethod_co_base_copy_fails_like_copy_dot_py():
 def test_a_two_argument_classmethod_co_base_copy_receives_the_leaf_class():
     class CM:
         @classmethod
-        def __copy__(cls, x: int) -> str:  # noqa: PLE0302 -- the arity is the case under test
+        def __copy__(cls, x: int) -> str:  # noqa: PLE0302
             return f"got class {cls.__name__}"
 
     class RealStruct(Struct, CM, frozen=False):
@@ -197,8 +195,6 @@ def test_a_two_argument_classmethod_co_base_copy_receives_the_leaf_class():
     class PlainCM(CM):
         pass
 
-    # copy.py binds the classmethod to the concrete class; the struct must
-    # receive its own class, not the co-base that defines the method.
     assert copy.copy(PlainCM()) == "got class PlainCM"
     assert copy.copy(RealStruct(7)) == "got class RealStruct"
 
@@ -276,7 +272,6 @@ def test_an_uncopyable_impostor_raises_copy_dot_error():
         __reduce_ex__ = None
         __reduce__ = None
 
-    # copy.py's message is `% cls`, which renders the class repr.
     with pytest.raises(copy.Error, match=r"un\(shallow\)copyable object of type <class '.*Uncopyable'>"):
         copy.copy(Uncopyable())
 
@@ -288,8 +283,6 @@ def test_a_falsy_reduce_ex_is_called_like_copy_dot_py():
         def __reduce__(self):
             return (list, ([7, 8],))
 
-    # copy.py gates __reduce_ex__ on `is not None`, so a falsy non-None is
-    # called (and fails); the truthiness gate is only on __reduce__.
     with pytest.raises(TypeError):
         copy.copy(FalsyReduceEx())
 
@@ -316,9 +309,6 @@ def test_a_dispatch_table_copier_is_honored_for_an_impostor():
     try:
         copied = copy.copy(Impostor())
 
-        # The copier's reduce tuple won: without the dispatch_table consult
-        # the delegate would have fallen back to __reduce_ex__ and produced
-        # an Impostor.
         assert type(copied) is list
         assert copied == [1, 2, 3]
     finally:

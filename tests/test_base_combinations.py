@@ -198,8 +198,6 @@ ALONE = {
     shape: built for shape in SHAPES if is_a_class(built := build((shape,)))
 }
 
-# What each shape does on its own, observed once. Every question this file asks
-# of a first base is a question about one of eleven classes, not about 784.
 BEHAVIOUR_ALONE = {shape: observe(built) for shape, built in ALONE.items()}
 ORDERS_ALONE = {shape: seen.order for shape, seen in BEHAVIOUR_ALONE.items()}
 EQUALITY_ALONE = {shape: seen.equality for shape, seen in BEHAVIOUR_ALONE.items()}

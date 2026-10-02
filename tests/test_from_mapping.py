@@ -54,7 +54,7 @@ def test_absent_keys_take_their_defaults():
 def test_an_absent_mutable_default_is_copied_per_instance():
     class Holder(Struct):
         required: int
-        xs: list = []  # noqa: RUF012 -- the copy is what is being pinned
+        xs: list = []  # noqa: RUF012
 
     (stored,) = Holder._struct_defaults_
     built = from_mapping(Holder, {"required": 1})

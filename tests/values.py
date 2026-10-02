@@ -8,24 +8,10 @@ import typing
 
 from salix import Struct
 
-# These four and their subclasses: an empty default copies through the
-# declared type's own constructor where its signature is the iterable one, and
-# falls back to the base copy otherwise (a defaultdict keeps neither its
-# factory nor its type on that path); a non-empty one is deep-copied per
-# instance, and a value a deepcopy cannot carry falls back to sharing. Any
-# TypeError the constructor itself raises is swallowed the same way -- the
-# fallback cannot tell the two apart. `src/construct/defaults.c` is what this
-# mirrors, and it is the only list of the four that the suite keeps.
 COPIED_WHEN_EMPTY = (list, dict, set, bytearray)
 
-# A non-empty instance of each, for the deep-copy half of the rule. The types
-# come from the tuple above; only the contents are spelled here, because no one
-# seed constructs all four -- dict wants pairs and bytearray wants small ints.
-# The assertion is what keeps the two from drifting.
 NON_EMPTY = {list: [1], dict: {"k": 1}, set: {1}, bytearray: bytearray(b"x")}
 
-# A seed is an exact instance of its own key, and it is non-empty; `b"x"` is a
-# bytes rather than a bytearray and would not take the deep path at all.
 assert set(NON_EMPTY) == set(COPIED_WHEN_EMPTY)
 assert all(type(value) is kind and len(value) > 0 for kind, value in NON_EMPTY.items())
 
@@ -143,10 +129,6 @@ HASHABLE = _hashable()
 UNHASHABLE = _unhashable()
 EVERY = HASHABLE + UNHASHABLE
 
-# Both halves of the rule are reached by parametrizing over these, so each of
-# the four needs an empty instance and a non-empty one. set and bytearray had
-# only the non-empty one, which left the copy -- and with it the severing that
-# class creation does -- asserted for list and dict alone.
 assert all(
     {not value for value in UNHASHABLE if type(value) is kind} == {True, False}
     for kind in COPIED_WHEN_EMPTY

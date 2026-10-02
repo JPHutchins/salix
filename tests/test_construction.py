@@ -78,7 +78,7 @@ def test_the_same_field_given_twice():
 def test_a_keyword_name_built_at_runtime_still_resolves():
     """The fast path compares interned names by identity; this misses it."""
 
-    name = "".join(["value_", "one"])  # noqa: FLY002 -- a literal would be interned
+    name = "".join(["value_", "one"])  # noqa: FLY002
 
     assert name is not "value_one"  # noqa: F632
     assert Renamed(**{name: 1}, value_two=2).value_one == 1
@@ -113,7 +113,7 @@ class TestMutableDefaults:
 
     def test_a_list_default_is_not_shared(self):
         class Holder(Struct, frozen=False):
-            xs: list = []  # noqa: RUF012 -- the copy is the feature under test
+            xs: list = []  # noqa: RUF012
 
         first, second = Holder(), Holder()
         first.xs.append(1)
@@ -127,7 +127,7 @@ class TestMutableDefaults:
         """
 
         class Holder(Struct):
-            xs: list = []  # noqa: RUF012 -- the copy is the feature under test
+            xs: list = []  # noqa: RUF012
 
         first, second = Holder(), Holder()
         first.xs.append(1)
@@ -180,7 +180,7 @@ class TestMutableDefaults:
         class Inner(Struct):
             a: int
 
-        uncached_text = "".join(["not ", "interned"])  # noqa: FLY002 -- see above
+        uncached_text = "".join(["not ", "interned"])  # noqa: FLY002
 
         class Holder(Struct):
             text: str = uncached_text
@@ -235,7 +235,7 @@ class TestMutableDefaults:
         """Only the default is the class's to hand out repeatedly."""
 
         class Holder(Struct):
-            xs: list = []  # noqa: RUF012 -- the copy is the feature under test
+            xs: list = []  # noqa: RUF012
 
         supplied = [1]
 
@@ -247,7 +247,7 @@ class TestMutableDefaults:
         """
 
         class Nested(Struct):
-            xs: list = [[1]]  # noqa: RUF012 -- the copy is the assertion
+            xs: list = [[1]]  # noqa: RUF012
 
         first, second = Nested(), Nested()
         first.xs[0].append(2)
@@ -684,7 +684,7 @@ class TestMutableDefaults:
 
     def test_an_inherited_default_is_copied_as_well(self):
         class Base(Struct, frozen=False):
-            xs: list = []  # noqa: RUF012 -- the copy is the feature under test
+            xs: list = []  # noqa: RUF012
 
         class Child(Base):
             y: int = 0

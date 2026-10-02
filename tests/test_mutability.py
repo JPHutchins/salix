@@ -239,9 +239,6 @@ def test_a_frozen_setattr_escape_beside_a_permissive_co_base_keeps_answering():
             with pytest.raises(AttributeError, match="does not support attribute"):
                 del instance.x
         else:
-            # The parent build refuses the escape the same way on 3.10-3.12:
-            # the mixed wrapper/function slot derivation lands on a slot the
-            # body's own half cannot answer. Parity, not a promise.
             with pytest.raises(TypeError):
                 Child(1).x = 9
 

@@ -376,7 +376,7 @@ class TestCaching:
         class Computed(Struct):
             x: int
 
-            @functools.cache  # noqa: B019 -- the lifetime cost is the point
+            @functools.cache  # noqa: B019
             def slow(self) -> int:
                 calls.append(1)
                 return self.x * 100
@@ -903,7 +903,7 @@ class TestDefaultsThatAreCallable:
         never match a field name however the class is spelled.
         """
 
-        identity = lambda value: value  # noqa: E731 -- the lambda is the subject
+        identity = lambda value: value  # noqa: E731
 
         class WithLambda(Struct):
             handler: object = identity
@@ -1099,7 +1099,7 @@ class TestTheFunctoolsSpellingsAreRefused:
             class Wrapped(Struct):
                 y: int
 
-                @functools.cache  # noqa: B019 -- the wrapper is the subject, not the caching
+                @functools.cache  # noqa: B019
                 def y(self) -> int:
                     return 99
 

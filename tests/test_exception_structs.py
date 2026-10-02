@@ -670,9 +670,6 @@ def test_a_replaced_from_mapping_built_family_struct_formats_and_pickles():
     assert repr(replaced) == repr(error)
     assert pickle.loads(pickle.dumps(replaced)).errno is None
 
-    # The family arm's payload is the family's shape, not the field
-    # values: pickle reconstructs from args, so a field change does not
-    # survive the round-trip -- the documented contract.
     assert pickle.loads(pickle.dumps(replaced)).code == 0
 
 

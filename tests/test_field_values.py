@@ -51,8 +51,6 @@ def test_a_value_may_be_a_default(value):
     assert stored == value
 
     if isinstance(value, COPIED_WHEN_EMPTY):
-        # Two copies, not one: the class keeps its own, severed from whatever
-        # the body named, and each instance keeps one severed from the class's.
         assert stored is not value
         assert Local().field is not stored
         assert Local().field is not Local().field
@@ -70,7 +68,7 @@ def test_repr_embeds_the_field_reprs(value):
 def test_a_struct_equals_itself_whatever_it_holds(value):
     pair = Pair(value, value)
 
-    assert pair == pair  # noqa: PLR0124 -- reflexivity is the assertion
+    assert pair == pair  # noqa: PLR0124
 
 
 @pytest.mark.parametrize("value", HASHABLE, ids=identify)
@@ -81,7 +79,7 @@ def test_a_hashable_field_makes_a_hashable_struct(value):
 def refuses_to_hash_with(value: object) -> type[BaseException]:
     try:
         hash(value)
-    except BaseException as error:  # noqa: BLE001 -- the type is what is being derived
+    except BaseException as error:  # noqa: BLE001
         return type(error)
 
     raise AssertionError(f"{value!r} is hashable, so it does not belong in UNHASHABLE")
