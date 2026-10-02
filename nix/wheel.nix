@@ -1,13 +1,3 @@
-# One wheel, cross-compiled with `zig cc`.
-#
-# zig is the cross compiler because it bundles the libc headers and stubs for
-# every target here, so a single Linux builder reaches Linux, macOS and Windows
-# without an SDK. The extension resolves Py* through the interpreter at load
-# time on ELF and Mach-O, so only Windows links an import library.
-#
-# Only the payload is ours: the metadata comes from a wheel setuptools built,
-# and the unpack/repack/retag is the `wheel` project's own. Nothing here writes
-# a RECORD or a WHEEL by hand.
 {
   lib,
   stdenvNoCC,
@@ -54,7 +44,6 @@ stdenvNoCC.mkDerivation {
   buildPhase = ''
     runHook preBuild
 
-    # zig writes to its cache unconditionally and $HOME is not writable here.
     export ZIG_GLOBAL_CACHE_DIR="$NIX_BUILD_TOP/zig-cache"
 
     mkdir -p "$NIX_BUILD_TOP/python"
@@ -74,9 +63,6 @@ stdenvNoCC.mkDerivation {
       ${lib.escapeShellArgs platform.extraFlags} \
       -o "$NIX_BUILD_TOP/${moduleName}"
 
-    # The base wheel carries the metadata and a payload built for this builder;
-    # swap in the one just cross-compiled, then let `wheel` restate the tags and
-    # recompute RECORD.
     wheel unpack --dest "$NIX_BUILD_TOP/unpacked" ${baseWheel}/*.whl
     unpacked=("$NIX_BUILD_TOP"/unpacked/*/)
 

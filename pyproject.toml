@@ -21,11 +21,6 @@ keywords = [
     "free-threading",
     "c-extension",
 ]
-# No "License :: OSI Approved :: MIT License": PyPI rejects a distribution that
-# carries it alongside License-Expression.
-#
-# PyPy and GraalPy satisfy requires-python, find no wheel, and have no tested
-# build of this source; the CPython classifier is the declared signal for that.
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -48,11 +43,6 @@ classifiers = [
 Repository = "https://github.com/JPHutchins/salix"
 Issues = "https://github.com/JPHutchins/salix/issues"
 
-# The C source is wired up in setup.py because setuptools does not yet support
-# declaring ext_modules in pyproject.toml.
-
-# salix/ holds no Python: the extension is built as its __init__, and the
-# directory exists so that py.typed and the stub have somewhere to live.
 [tool.setuptools]
 py-modules = []
 packages = ["salix"]
@@ -61,54 +51,21 @@ packages = ["salix"]
 salix = ["py.typed", "__init__.pyi"]
 
 [dependency-groups]
-# The task runner, which is the whole of what CI needs: every task either runs
-# in-process or shells out through `uv run --no-project --with ...`, which
-# brings its own tools.
-#
-# The mcp extra is for a local agent driving camas through its MCP server, and
-# nothing in CI talks to one. It is also uninstallable on one of the platforms
-# CI now covers -- mcp asks for pyjwt[crypto], which asks for cryptography,
-# which ships no win_arm64 wheel and so builds itself from a Rust crate against
-# OpenSSL.
-#
-# Both spell the version out. An earlier shape had dev take the pin from an
-# include-group and name the extra unpinned, which reads as one source of truth
-# and is not one: nothing in it says camas[mcp] may not resolve elsewhere. A
-# repeated pin that uv.lock keeps honest beats a clever one that can come loose.
 ci = ["camas==0.1.29"]
 dev = ["setuptools>=77", "camas[mcp]==0.1.29"]
 
 [tool.pyright]
-# The mirror of mypy's --warn-unused-ignores. tests/typing/rejected.py asserts a
-# diagnostic by suppressing it, so a suppression that stops being needed has to
-# be an error itself or the assertion is not one -- and the divergences between
-# the checkers mean some of those suppressions are pyright's alone.
 reportUnnecessaryTypeIgnoreComment = "error"
 
 [tool.uv]
-# uv must never install this project. It is a C extension, and an editable
-# install puts a finder on the path whose `salix` is a namespace package
-# over the repo directory -- which then shadows the wheel in the leg whose
-# whole job is to import an installed one. CI passes --no-install-workspace for
-# the same reason; this is that, for everyone who forgets. The extension comes
-# from the in-place build or from a wheel, never from here.
 package = false
 
 [tool.uv.workspace]
 members = ["bench", "tests", "tools"]
 
 [tool.ruff]
-# Lint only. There is no ruff format here and there should not be: CLAUDE.md
-# says follow the style already in the code base, not a common one.
-# PEP 695 syntax, collected only on 3.12+ while ruff parses at the 3.10 floor.
 extend-exclude = ["tests/test_generics_pep695.py", "bench/source-tiers/vendor"]
 [tool.ruff.lint]
-# Rules that find defects, not rules that have opinions about layout. E402 is
-# in because setup.py and compile_flags.py both put an import after a
-# sys.path.insert on purpose, and the suppression is worth having to write.
-# PLE/PLW are pylint's defect rules; PLC and PLR are its opinions about
-# layout and magic numbers, which fight ordinary test code. PLR0124 is the
-# one refactor rule that finds a real mistake.
 select = [
     "F",
     "E4",
@@ -129,13 +86,8 @@ select = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# The file exists to hold expressions a checker must reject, so of course they
-# are pointless comparisons and useless attribute accesses. That is the test.
 "tests/typing/rejected.py" = ["B015", "B018"]
 
 [tool.pytest.ini_options]
-# README.md is here because its examples are the only claims about the API
-# written in prose, so they are run rather than proof-read. testpaths is what
-# decides -- a --doctest-glob alone collects nothing outside it.
 testpaths = ["tests", "README.md"]
 addopts = "--doctest-glob=README.md"

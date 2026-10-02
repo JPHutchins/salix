@@ -11,12 +11,5 @@ Checks: >
   -misc-unused-parameters,
   -portability-avoid-pragma-once
 
-# easily-swappable-parameters, unused-parameters: a CPython slot signature is
-#   fixed by the API, and routinely ignores an argument.
-# macro-parentheses: owned.h declares variables, and a declarator name cannot
-#   be parenthesized. There is no expression macro here for the check to guard.
-# include-cleaner: Python.h is an umbrella header and the only one to include.
-# avoid-pragma-once: the house style.
-
 WarningsAsErrors: '*'
 HeaderFilterRegex: 'src/.*'

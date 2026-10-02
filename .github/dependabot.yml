@@ -1,5 +1,3 @@
-# #22 pins the actions by commit SHA, which is the one pin nobody updates by
-# hand. One group, because a pull request per action is noise at this size.
 version: 2
 updates:
   - package-ecosystem: github-actions

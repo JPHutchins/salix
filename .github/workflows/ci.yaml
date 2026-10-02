@@ -23,8 +23,6 @@ jobs:
       coverage: ${{ steps.emit.outputs.matrix }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      # Fail before any build: check_tag.py is stdlib-only, and a mistagged
-      # push should not pay for the matrix first.
       - env:
           TAG: ${{ github.ref_name }}
         if: startsWith(github.ref, 'refs/tags/')
@@ -68,7 +66,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
-          version: 0.11.32 # the flake's pkgs.uv; the wheel leg's measured precedence is this resolver's
+          version: 0.11.32
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: wheels
@@ -80,12 +78,6 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     needs: [wheels, coverage]
     runs-on: ubuntu-latest
-    # A constant group instead of the workflow's per-ref one: two tags are two
-    # refs, and both must not publish at once. cancel-in-progress: false — a
-    # half-finished PyPI upload is the state worth avoiding. The workflow-level
-    # group still cancels a same-ref re-push mid-upload, which is the accepted
-    # trade (upstream camas makes it too); a force-pushed tag that dies between
-    # file uploads leaves a release PyPI refuses to overwrite.
     concurrency:
       group: release-publish
       cancel-in-progress: false
@@ -100,8 +92,6 @@ jobs:
         with:
           name: release
           path: result-release
-      # dist/ because that is where the publish action looks, and a symlink
-      # into the nix store is not something it can read.
       - run: |
           mkdir -p dist
           cp -L result-release/*.whl result-release/*.tar.gz dist/
