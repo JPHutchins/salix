@@ -1007,21 +1007,55 @@ def test_a_grandchild_of_a_none_new_struct_refuses_every_entry_point() -> None:
         salix.from_mapping(PC, {"x": 5})
 
 
-def test_the_nearest_ancestor_defining_new_decides_the_marker() -> None:
-    class Refusing(Struct):
-        __new__ = None
-
-    class Overriding(Refusing):
-        def __new__(struct_type) -> object:
+def test_a_co_base_earlier_in_the_mro_decides_against_a_none_new_ancestor() -> None:
+    class Constructing:
+        def __new__(struct_type, *arguments: object, **keywords: object) -> object:
             return object.__new__(struct_type)
 
-        def __init__(self) -> None:
-            pass
+    class PlainRefusing:
+        __new__ = None
 
-    class Inheriting(Overriding):
+    class PlainInheriting(PlainRefusing):
         pass
 
-    assert isinstance(Inheriting(), Inheriting)
+    class PlainInterleaved(Constructing, PlainInheriting):
+        pass
+
+    class Refusing(Struct, frozen=False):
+        x: int = 0
+        __new__ = None
+
+    class Inheriting(Refusing):
+        pass
+
+    class Interleaved(Constructing, Inheriting):
+        pass
+
+    assert isinstance(PlainInterleaved(), PlainInterleaved)
+    assert Interleaved(1).x == 1
+
+
+def test_a_none_new_on_a_secondary_base_refuses() -> None:
+    class Refusing:
+        __new__ = None
+
+    class PlainBase:
+        pass
+
+    class PlainSecondary(PlainBase, Refusing):
+        pass
+
+    class Plain(Struct, frozen=False):
+        x: int = 0
+
+    class Secondary(Plain, Refusing):
+        pass
+
+    with pytest.raises(TypeError):
+        PlainSecondary()
+
+    with pytest.raises(TypeError, match="cannot create"):
+        Secondary(1)
 
 
 def test_a_frozen_zero_field_subclass_of_a_none_new_struct_defines_and_refuses():
