@@ -70,6 +70,15 @@ cannot import omegaconf in this environment.
 
 - Decorator-level `init=False` raises `NotImplementedError` (field-level
   `init=False` is shimmed).
+- A `ClassVar` annotated without a value is left out of the class and of
+  `__dataclass_fields__`: salix requires a class variable to carry its
+  value. Stock lists it as a pseudo-field with no default.
+- InitVar and ClassVar pseudo-fields come from stock's own
+  `dataclasses._get_field`, so they follow its rules. A salix-native struct
+  base contributes no pseudo-fields, as stock treats any base without
+  `__dataclass_fields__`.
+- The shim needs Python 3.12+: `_dataclass_params` builds 3.12's
+  `_DataclassParams`.
 - `inspect.signature` of the synthesized `__init__` shows the `_INIT_UNSET`
   sentinel as parameter defaults instead of the real values (stock shows
   real defaults; mutable/factory defaults have no real value to show).

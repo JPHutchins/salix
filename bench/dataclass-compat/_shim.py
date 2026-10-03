@@ -5,7 +5,7 @@ import re
 import sys
 import typing
 import weakref
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from types import FrameType
 from typing import Any, NamedTuple, NoReturn, TypeVar, cast
 
@@ -326,6 +326,37 @@ def _pseudo_field(cls: type[Any], name: str, annotation: Any, kw_only: bool) -> 
         dataclasses.Field[Any],
         dataclasses._get_field(cls, name, annotation, kw_only),  # type: ignore[attr-defined]
     )
+
+
+def _initvar_plan(pseudo_fields: dict[str, dataclasses.Field[Any]]) -> tuple[tuple[str, ...], bool]:
+    names = tuple(name for name, pseudo in pseudo_fields.items() if _is_initvar(pseudo.type))
+    return names, any(pseudo_fields[name].kw_only is True or not pseudo_fields[name].init for name in names)
+
+
+def _pseudo_init_param(pseudo: dataclasses.Field[Any]) -> tuple[str, Any, bool, bool]:
+    return (pseudo.name, pseudo.default, pseudo.kw_only is True, True)
+
+
+def _stash_pseudo_defaults(
+    namespace: dict[str, Any], pseudo_fields: dict[str, dataclasses.Field[Any]], names: Iterable[str]
+) -> None:
+    for name in names:
+        if name in pseudo_fields:
+            namespace.pop(name, None)
+            if pseudo_fields[name].default is not dataclasses.MISSING:
+                namespace[name] = pseudo_fields[name].default
+
+
+def _merged_dataclass_fields(
+    order: Iterable[str],
+    real_fields: dict[str, dataclasses.Field[Any]],
+    pseudo_fields: dict[str, dataclasses.Field[Any]],
+) -> dict[str, dataclasses.Field[Any]]:
+    return {
+        name: real_fields[name] if name in real_fields else pseudo_fields[name]
+        for name in order
+        if name in real_fields or name in pseudo_fields
+    }
 
 
 def fields(cls: Any) -> tuple[dataclasses.Field[Any], ...]:
@@ -766,16 +797,8 @@ def _rebuild_struct_subclass(
             own_annotations[name] if name in own_annotations else inherited_fields[name].type
         )
     }
-    for name in own_annotations:
-        if name not in pseudo_fields:
-            continue
-        namespace.pop(name, None)
-        if pseudo_fields[name].default is not dataclasses.MISSING:
-            namespace[name] = pseudo_fields[name].default
-    initvar_names = tuple(name for name, pseudo in pseudo_fields.items() if _is_initvar(pseudo.type))
-    initvar_options = any(
-        pseudo_fields[name].kw_only is True or not pseudo_fields[name].init for name in initvar_names
-    )
+    _stash_pseudo_defaults(namespace, pseudo_fields, own_annotations)
+    initvar_names, initvar_options = _initvar_plan(pseudo_fields)
     merged = {
         name: factory
         for name, factory in {**inherited_factories, **dict(factories)}.items()
@@ -812,12 +835,7 @@ def _rebuild_struct_subclass(
     ):
         namespace["__init__"] = _make_init(
             [
-                (
-                    name,
-                    pseudo_fields[name].default,
-                    pseudo_fields[name].kw_only is True,
-                    True,
-                )
+                _pseudo_init_param(pseudo_fields[name])
                 if name in pseudo_fields
                 else (
                     name,
@@ -879,10 +897,7 @@ def _rebuild_struct_subclass(
         kw_only_names,
         merged_flags,
     )
-    namespace["__dataclass_fields__"] = {
-        name: real_fields[name] if name in real_fields else pseudo_fields[name]
-        for name in field_order
-    }
+    namespace["__dataclass_fields__"] = _merged_dataclass_fields(field_order, real_fields, pseudo_fields)
     namespace["__dataclass_params__"] = _dataclass_params(init, repr, eq, order, unsafe_hash, frozen, match_args, kw_only)
     if not names and _called_from_init_subclass(cls):
         return cls
@@ -947,12 +962,17 @@ def dataclass(
         kw_only_names: set[str] = set()
         field_metadata: dict[str, Any] = {}
         field_flags_map: dict[str, tuple[bool, bool, bool | None]] = {}
-        pseudo_fields = {
+        declared_pseudo_fields = {
             name: _pseudo_field(cls, name, annotation, kw_only)
             for name, annotation in body_annotations.items()
             if _is_non_field_annotation(annotation)
         }
-        initvar_names = tuple(name for name, pseudo in pseudo_fields.items() if _is_initvar(pseudo.type))
+        pseudo_fields = {
+            name: pseudo
+            for name, pseudo in declared_pseudo_fields.items()
+            if _is_initvar(pseudo.type) or pseudo.default is not dataclasses.MISSING
+        }
+        initvar_names, initvar_options = _initvar_plan(pseudo_fields)
         for name, value in cls.__dict__.items():
             if name in _SALIX_MEMBERS:
                 continue
@@ -985,14 +1005,12 @@ def dataclass(
                 namespace[name] = value
                 if name in body_annotations:
                     field_flags_map[name] = (True, True, None)
-        namespace.update(
-            {
-                name: pseudo.default
-                for name, pseudo in pseudo_fields.items()
-                if pseudo.default is not dataclasses.MISSING
-            }
-        )
-        namespace["__annotations__"] = dict(body_annotations)
+        _stash_pseudo_defaults(namespace, pseudo_fields, pseudo_fields)
+        namespace["__annotations__"] = {
+            name: annotation
+            for name, annotation in body_annotations.items()
+            if name not in declared_pseudo_fields or name in pseudo_fields
+        }
         field_names = tuple(name for name in body_annotations if not _is_non_field_annotation(body_annotations[name]))
         required_kw_only = {
             name
@@ -1006,9 +1024,6 @@ def dataclass(
                 getattr(cls, "__post_init__", None),
                 tuple(name for name in body_annotations if name in initvar_names),
             )
-        initvar_options = any(
-            pseudo_fields[name].kw_only is True or not pseudo_fields[name].init for name in initvar_names
-        )
         if (
             no_init
             or kw_only_names
@@ -1018,12 +1033,7 @@ def dataclass(
         ) and "__init__" not in cls.__dict__:
             namespace["__init__"] = _make_init(
                 [
-                    (
-                        name,
-                        pseudo_fields[name].default,
-                        pseudo_fields[name].kw_only is True,
-                        True,
-                    )
+                    _pseudo_init_param(pseudo_fields[name])
                     if name in initvar_names
                     else (
                         name,
@@ -1074,12 +1084,7 @@ def dataclass(
             kw_only_names,
             field_flags_map,
         )
-        namespace["__dataclass_fields__"] = {
-            name: real_fields[name]
-            if name in real_fields
-            else pseudo_fields[name]
-            for name, annotation in body_annotations.items()
-        }
+        namespace["__dataclass_fields__"] = _merged_dataclass_fields(body_annotations, real_fields, pseudo_fields)
         namespace["__dataclass_params__"] = _dataclass_params(init, repr, eq, order, unsafe_hash, frozen, match_args, kw_only)
         built = _builder_for(type(cls))(
             cls.__name__,
