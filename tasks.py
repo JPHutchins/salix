@@ -49,7 +49,23 @@ BUILD = (
 
 STRICT_BUILD = {"SALIX_STRICT": "1"}
 
-NIX_INPUTS = ("src/", "nix/", "tools/", "tests/", "flake.nix", "flake.lock", "pyproject.toml")
+NIX_INPUTS = (
+    "src/",
+    "salix/",
+    "nix/",
+    "tools/",
+    "tests/",
+    "flake.nix",
+    "flake.lock",
+    "pyproject.toml",
+    "build_config.py",
+    "setup.py",
+    ".python-version",
+    "README.md",
+    "LICENSE",
+    "MANIFEST.in",
+    "CODE_OF_CONDUCT.md",
+)
 
 build = Sequential(make_env, Task(BUILD, mutates=True, env=STRICT_BUILD))
 FULL_SUITE_JUNIT = 1_000_000

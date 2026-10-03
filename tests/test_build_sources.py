@@ -1,14 +1,14 @@
 import importlib.util
 import runpy
 from collections import Counter
-from itertools import chain
-from operator import attrgetter
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 BUILD_CONFIG = ROOT / "build_config.py"
+TEST_SUPPORT_SOURCE = "src/testing.c"
 
 pytestmark = [
     pytest.mark.skipif(not BUILD_CONFIG.exists(), reason="build_config.py is not beside these tests"),
@@ -19,13 +19,18 @@ pytestmark = [
 ]
 
 
-def test_every_c_file_is_a_build_or_test_source() -> None:
-    assert Counter(
-        path.relative_to(ROOT).as_posix()
-        for directory in ("src", "tests/c")
-        for path in (ROOT / directory).rglob("*.c")
-    ) == Counter(
-        chain.from_iterable(
-            attrgetter("sources", "test_sources")(runpy.run_path(str(BUILD_CONFIG))["BUILD"])
-        )
-    )
+def c_files(directory: str) -> Counter[str]:
+    return Counter(path.relative_to(ROOT).as_posix() for path in (ROOT / directory).rglob("*.c"))
+
+
+@pytest.fixture(scope="module")
+def build() -> Any:
+    return runpy.run_path(str(BUILD_CONFIG))["BUILD"]
+
+
+def test_src_holds_the_build_sources_and_the_test_support_source(build: Any) -> None:
+    assert c_files("src") == Counter(build.sources) + Counter([TEST_SUPPORT_SOURCE])
+
+
+def test_every_c_file_under_tests_c_is_a_test_source(build: Any) -> None:
+    assert Counter(build.test_sources) == c_files("tests/c") + Counter([TEST_SUPPORT_SOURCE])
