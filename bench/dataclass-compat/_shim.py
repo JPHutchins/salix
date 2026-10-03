@@ -34,6 +34,7 @@ _PY_TPFLAGS_HEAPTYPE = 1 << 9
 _excluded_prefixes: list[str] = []
 _included_prefixes: list[str] = []
 _field_doc_required = "doc" in inspect.signature(dataclasses.Field.__init__).parameters
+_replace_refusal = TypeError if sys.version_info >= (3, 13) else ValueError
 
 
 def _caller_excluded() -> bool:
@@ -328,9 +329,8 @@ def _pseudo_default(name: str, value: Any) -> Any:
     return value.default
 
 
-def _pseudo_field(name: str, annotation: Any, default: Any, kw_only: bool) -> dataclasses.Field[Any]:
-    initvar = _is_initvar(annotation)
-    pseudo: dataclasses.Field[Any] = dataclasses.Field(
+def _plain_field(default: Any) -> dataclasses.Field[Any]:
+    return dataclasses.Field(
         **{
             "default": default,
             "default_factory": dataclasses.MISSING,
@@ -339,10 +339,18 @@ def _pseudo_field(name: str, annotation: Any, default: Any, kw_only: bool) -> da
             "hash": None,
             "compare": True,
             "metadata": None,
-            "kw_only": kw_only if initvar else dataclasses.MISSING,
+            "kw_only": dataclasses.MISSING,
             **({"doc": None} if _field_doc_required else {}),
         }
     )
+
+
+def _pseudo_field(name: str, annotation: Any, declared: Any, kw_only: bool) -> dataclasses.Field[Any]:
+    initvar = _is_initvar(annotation)
+    _pseudo_default(name, declared)
+    pseudo = copy.copy(declared) if isinstance(declared, dataclasses.Field) else _plain_field(declared)
+    if initvar and pseudo.kw_only is dataclasses.MISSING:
+        pseudo.kw_only = kw_only
     pseudo.name = name
     pseudo.type = annotation
     pseudo._field_type = (  # type: ignore[attr-defined]
@@ -436,9 +444,17 @@ def replace(obj: _T, /, **changes: Any) -> _T:
         init_false = {field.name for field in fields(struct) if not field.init}
         for name in changes:
             if name in init_false:
-                raise TypeError(
+                raise _replace_refusal(
                     f"field {name} is declared with init=False, it cannot be specified with replace()"
                 )
+        for pseudo in getattr(struct, "__dataclass_fields__", {}).values():
+            if (
+                getattr(pseudo, "_field_type", None) is dataclasses._FIELD_INITVAR  # type: ignore[attr-defined]
+                and pseudo.init
+                and pseudo.default is dataclasses.MISSING
+                and pseudo.name not in changes
+            ):
+                raise _replace_refusal(f"InitVar {pseudo.name!r} must be specified with replace()")
         return cast(
             _T,
             struct(
@@ -773,7 +789,7 @@ def _rebuild_struct_subclass(
         name: _pseudo_field(
             name,
             own_annotations[name],
-            _pseudo_default(name, cls.__dict__.get(name, dataclasses.MISSING)),
+            cls.__dict__.get(name, dataclasses.MISSING),
             kw_only,
         )
         if name in own_annotations
@@ -789,6 +805,9 @@ def _rebuild_struct_subclass(
         if pseudo_fields[name].default is not dataclasses.MISSING:
             namespace[name] = pseudo_fields[name].default
     initvar_names = tuple(name for name, pseudo in pseudo_fields.items() if _is_initvar(pseudo.type))
+    initvar_options = any(
+        pseudo_fields[name].kw_only is True or not pseudo_fields[name].init for name in initvar_names
+    )
     merged = {
         name: factory
         for name, factory in {**inherited_factories, **dict(factories)}.items()
@@ -818,7 +837,7 @@ def _rebuild_struct_subclass(
         if name in names or name in pseudo_fields
     )
     if (
-        no_init or kw_only_names or kw_only or kw_only_changed or redeclared or required_kw_only
+        no_init or kw_only_names or kw_only or kw_only_changed or redeclared or required_kw_only or initvar_options
     ) and (
         "__init__" not in cls.__dict__
         or getattr(cls.__dict__.get("__init__"), "_shim_synthesized", False)
@@ -848,7 +867,8 @@ def _rebuild_struct_subclass(
                     False,
                 )
                 for name in field_order
-                if name not in no_init and (name not in pseudo_fields or name in initvar_names)
+                if name not in no_init
+                and (name not in pseudo_fields or (name in initvar_names and pseudo_fields[name].init))
             ]
         )
     if kw_only:
@@ -971,6 +991,10 @@ def dataclass(
                     namespace[name] = default
                 if _is_initvar(body_annotations[name]):
                     initvars[name] = default
+                    if isinstance(value, dataclasses.Field) and value.kw_only is True:
+                        kw_only_names.add(name)
+                    if isinstance(value, dataclasses.Field) and not value.init:
+                        no_init.add(name)
                 continue
             if isinstance(value, dataclasses.Field):
                 if name not in body_annotations:
@@ -1009,7 +1033,6 @@ def dataclass(
             for name in field_names
             if (name in kw_only_names or kw_only)
             and name not in namespace
-            and name not in initvars
         }
         if factories:
             namespace["__post_init__"] = _make_post_init(
@@ -1077,7 +1100,7 @@ def dataclass(
         namespace["__dataclass_fields__"] = {
             name: real_fields[name]
             if name in real_fields
-            else _pseudo_field(name, annotation, namespace.get(name, dataclasses.MISSING), kw_only)
+            else _pseudo_field(name, annotation, cls.__dict__.get(name, dataclasses.MISSING), kw_only)
             for name, annotation in body_annotations.items()
         }
         namespace["__dataclass_params__"] = _dataclass_params(init, repr, eq, order, unsafe_hash, frozen, match_args, kw_only)

@@ -62,7 +62,6 @@ plugin imports them before the generated `conftest.py` installs the patch
 - 3264 passed, 219 skipped, 1 xfailed
 - 2 failed — the bash-completion scripts run a subprocess that cannot
   import omegaconf in this environment
-- 219 skipped, 1 xfailed
 
 ## Measured startup deltas, per library (real workloads, 2026-09-01)
 
