@@ -1,5 +1,5 @@
 import sys
-from dataclasses import InitVar
+from dataclasses import InitVar, dataclass, fields
 from typing import Annotated, ClassVar, Final
 
 import pytest
@@ -193,45 +193,52 @@ def test_a_name_that_merely_contains_the_form_is_a_field(text):
     assert Ordinary._struct_fields_ == ("v",)
 
 
-def test_re_annotating_an_inherited_field_stays_a_no_op():
-    """The guard runs after the inheritance check, so this is what it always
-    was -- no new slot, no swallowed argument, and now no new refusal either.
-    """
-
+def test_a_bare_class_var_over_an_inherited_field_is_refused():
     class Base(Struct):
         x: int
 
-    class Sub(Base):
-        x: ClassVar[int]
+    with pytest.raises(TypeError, match="without an assigned value"):
 
-    assert Sub._struct_fields_ == ("x",)
-    assert Sub(1).x == 1
+        class Sub(Base):
+            x: ClassVar[int]
 
 
-def test_re_annotating_an_inherited_field_with_a_value_replaces_the_default():
+def test_a_class_var_over_an_inherited_field_takes_the_field_away():
+    @dataclass
+    class StockBase:
+        x: int = 3
+        y: int = 4
+
+    @dataclass
+    class StockSub(StockBase):
+        x: ClassVar[int] = 5
+
     class Base(Struct):
         x: int = 3
+        y: int = 4
 
     class Sub(Base):
         x: ClassVar[int] = 5
 
-    assert Sub._struct_fields_ == ("x",)
-    assert Sub().x == 5
-    assert Sub(99).x == 99
+    assert Sub._struct_fields_ == tuple(field.name for field in fields(StockSub)) == ("y",)
+    assert Sub.x == Sub().x == StockSub.x == 5
+    assert Sub(9).y == StockSub(9).y == 9
+
+    with pytest.raises(TypeError):
+        Sub(9, 10)
 
 
-def test_re_annotating_an_inherited_field_with_a_mutable_is_deep_copied():
+def test_a_class_var_over_an_inherited_field_is_the_constant_it_was_written_as():
     class Base(Struct):
         x: int = 3
 
     body = ([1],)
 
     class Sub(Base):
-        x: ClassVar[list] = body
+        x: ClassVar[tuple[list[int]]] = body
 
-    assert Sub._struct_defaults_[0] == body
-    assert Sub._struct_defaults_[0] is not body
-    assert Sub().x is not body
+    assert Sub._struct_defaults_ == ()
+    assert Sub.x is body
 
 
 def test_re_annotating_an_inherited_class_var_without_a_value_is_refused():

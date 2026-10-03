@@ -287,19 +287,23 @@ class TestInheritance:
         assert (Child(1, 5).a, Child(1, 5).p, Child(1, 5).b) == (1, 5, 2)
         assert Child(1).p == 9
 
-    def test_a_class_var_over_an_inherited_init_var_keeps_the_init_var(self) -> None:
+    def test_a_class_var_over_an_inherited_init_var_takes_the_init_var_away(self) -> None:
         class Parent(Struct):
+            a: int = 0
             p: InitVar[int] = 1
 
         class Child(Parent):
             p: ClassVar[int] = 5
 
-        class Bare(Parent):
-            p: ClassVar[int]
+        assert Child._struct_fields_ == ("a",)
+        assert list(inspect.signature(Child).parameters) == ["a"]
+        assert Child.__match_args__ == ("a",)
+        assert Child.p == 5
 
-        assert Child._struct_fields_ == Bare._struct_fields_ == ()
-        assert list(inspect.signature(Child).parameters) == ["p"]
-        assert list(inspect.signature(Bare).parameters) == ["p"]
+        with pytest.raises(TypeError, match="without an assigned value"):
+
+            class Bare(Parent):
+                p: ClassVar[int]
 
     def test_a_struct_base_with_only_init_vars_is_the_one_inherited_from(self) -> None:
         class Mixin(Struct):

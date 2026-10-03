@@ -109,9 +109,7 @@ returns.
 A name annotated `ClassVar[...]` at the top level is a class variable:
 with an assigned value it is kept in the class dict and excluded from
 the field plan, the constructor, and every metadata table; without one
-it is refused, because a class variable is a constant. An inherited
-field name stays a field: the inheritance rule outranks the ClassVar
-annotation, so re-annotating one re-declares the field. A `ClassVar` or
+it is refused, because a class variable is a constant. A `ClassVar` or
 `InitVar` nested inside another annotation is refused.
 A protocol is satisfied structurally, never inherited: a struct may not
 list a Protocol among its bases, because the two metaclasses conflict.
