@@ -39,6 +39,71 @@ StructType * find_struct_base(PyObject * const bases) {
 	return widest;
 }
 
+static PyTypeObject * solid_base(PyTypeObject * type) {
+	while (
+		type->tp_base != NULL &&
+		type->tp_basicsize == type->tp_base->tp_basicsize &&
+		type->tp_itemsize == type->tp_base->tp_itemsize
+	) {
+		type = type->tp_base;
+	}
+
+	return type;
+}
+
+static bool fielded_struct(PyObject * const base) {
+	return is_struct_class(base) && ((StructType const *) base)->struct_field_count > 0;
+}
+
+static bool metatypes_agree(PyObject * const bases, PyTypeObject * const winner) {
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(bases); i += 1) {
+		if (!PyType_IsSubtype(winner, Py_TYPE(PyTuple_GET_ITEM(bases, i)))) {
+			return false;
+		}
+	}
+
+	return true;
+}
+
+enum result refuse_two_fielded_layouts(PyObject * const bases, PyTypeObject * const winner) {
+	if (!metatypes_agree(bases, winner)) {
+		return RESULT_OK;
+	}
+
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(bases); i += 1) {
+		PyObject * const first = PyTuple_GET_ITEM(bases, i);
+
+		for (Py_ssize_t j = i + 1; fielded_struct(first) && j < PyTuple_GET_SIZE(bases); j += 1) {
+			PyObject * const second = PyTuple_GET_ITEM(bases, j);
+
+			if (
+				fielded_struct(second) &&
+				!PyType_IsSubtype(
+					solid_base((PyTypeObject *) first),
+					solid_base((PyTypeObject *) second)
+				) &&
+				!PyType_IsSubtype(
+					solid_base((PyTypeObject *) second),
+					solid_base((PyTypeObject *) first)
+				)
+			) {
+				PyErr_Format(
+					PyExc_TypeError,
+					"multiple bases have instance lay-out conflict: %.200s and %.200s "
+					"each add fields, and a struct keeps its fields in slots, so like "
+					"dataclass(slots=True) a class can extend only one base that adds slots",
+					((PyTypeObject *) first)->tp_name,
+					((PyTypeObject *) second)->tp_name
+				);
+
+				return RESULT_ERROR;
+			}
+		}
+	}
+
+	return RESULT_OK;
+}
+
 enum result refuse_unreachable_init_vars(
 	PyObject * const bases,
 	StructType const * const base,

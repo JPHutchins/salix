@@ -175,6 +175,10 @@ PyObject * build_struct_class(
 		return NULL;
 	}
 
+	if (refuse_two_fielded_layouts(bases, handoff) != RESULT_OK) {
+		return NULL;
+	}
+
 	struct field_plan plan = field_plan_build(base, original_namespace);
 
 	if (field_plan_failed(&plan)) {

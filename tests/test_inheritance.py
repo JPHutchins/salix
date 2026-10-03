@@ -1,3 +1,5 @@
+from dataclasses import dataclass
+
 import pytest
 
 from salix import Struct
@@ -121,6 +123,44 @@ def test_two_field_bearing_bases_are_rejected():
 
         class Both(Base, Other):
             pass
+
+
+def test_the_layout_refusal_names_both_fielded_bases_and_the_slots_parity() -> None:
+    @dataclass(slots=True)
+    class StockLeft:
+        a: int
+
+    @dataclass(slots=True)
+    class StockRight:
+        b: int
+
+    class Left(Struct):
+        a: int
+
+    class Right(Struct):
+        b: int
+
+    with pytest.raises(TypeError, match="lay-out conflict"):
+
+        class StockBoth(StockLeft, StockRight):
+            pass
+
+    with pytest.raises(
+        TypeError, match=r"Left and Right each add fields.*dataclass\(slots=True\)"
+    ):
+
+        class Both(Left, Right):
+            pass
+
+
+def test_a_fielded_subclass_beside_its_fielded_base_is_one_layout() -> None:
+    class Child(Base):
+        extra: int = 0
+
+    class Combined(Child, Base):
+        pass
+
+    assert Combined._struct_fields_ == Child._struct_fields_
 
 
 def test_a_fieldless_second_base_is_allowed():
