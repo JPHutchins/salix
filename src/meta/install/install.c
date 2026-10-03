@@ -24,6 +24,50 @@ static Py_ssize_t * resolve_member_offsets(
 	Py_ssize_t * member_count
 );
 
+static enum parameter_kind * parameter_kinds_of(PyObject * const init_var_flags) {
+	Py_ssize_t const parameter_count = PyTuple_GET_SIZE(init_var_flags);
+	enum parameter_kind * const kinds = PyMem_New(enum parameter_kind, parameter_count);
+
+	if (kinds == NULL) {
+		PyErr_NoMemory();
+
+		return NULL;
+	}
+
+	for (Py_ssize_t i = 0; i < parameter_count; i += 1) {
+		kinds[i] = (
+			PyTuple_GET_ITEM(init_var_flags, i) == Py_True ? PARAMETER_INIT_VAR :
+			PARAMETER_FIELD
+		);
+	}
+
+	return kinds;
+}
+
+enum result install_init_vars(
+	StructType * const struct_class,
+	struct field_plan const * const plan
+) {
+	Py_ssize_t const init_var_count = PyTuple_GET_SIZE(plan->init_var_names);
+	enum parameter_kind * const kinds = (
+		init_var_count > 0 ? parameter_kinds_of(plan->init_var_flags) :
+		NULL
+	);
+
+	if (init_var_count > 0 && kinds == NULL) {
+		return RESULT_ERROR;
+	}
+
+	PyMem_Free(struct_class->struct_parameter_kinds);
+	struct_class->struct_parameter_kinds = kinds;
+	Py_XSETREF(struct_class->struct_init_var_names, Py_NewRef(plan->init_var_names));
+	Py_XSETREF(struct_class->struct_init_var_defaults, Py_NewRef(plan->init_var_defaults));
+	Py_XSETREF(struct_class->struct_init_var_annotations, Py_NewRef(plan->init_var_annotations));
+	struct_class->struct_init_var_count = init_var_count;
+
+	return RESULT_OK;
+}
+
 enum result install_fields(
 	StructType * const struct_class,
 	StructType const * const base,
@@ -50,6 +94,13 @@ enum result install_fields(
 		resolve_member_offsets(struct_class, offsets, field_count, &member_count);
 
 	if (member_offsets == NULL) {
+		PyMem_Free(offsets);
+
+		return RESULT_ERROR;
+	}
+
+	if (install_init_vars(struct_class, plan) != RESULT_OK) {
+		PyMem_Free(member_offsets);
 		PyMem_Free(offsets);
 
 		return RESULT_ERROR;
@@ -212,6 +263,7 @@ enum result ensure_singleton(
 		struct_class->struct_options.frozen &&
 		!struct_class->struct_options.weakref &&
 		struct_class->struct_field_count == 0 &&
+		struct_class->struct_init_var_count == 0 &&
 		!struct_class->struct_own_init &&
 		!struct_class->struct_cannot_create &&
 		(

@@ -11,6 +11,7 @@ struct field_lookup {
 };
 
 struct field_lookup find_field(StructType const * type, PyObject * name);
+struct field_lookup find_init_var(StructType const * type, PyObject * name);
 enum result write_slot(
 	StructType const * type,
 	PyObject * self,
@@ -36,6 +37,24 @@ enum result bind_named(StructType const * type, PyObject * self, PyObject * name
 struct field_lookup named_field(StructType const * type, PyObject * name);
 enum result fill_defaults(StructType const * type, PyObject * self, bool require_all);
 enum result run_post_init(StructType const * type, PyObject * self);
+PyObject * post_init_arguments_for(StructType const * type, PyObject * self);
+enum result run_post_init_with(StructType const * type, PyObject * post_init_arguments);
+enum result bind_parameter_named(
+	StructType const * type,
+	PyObject * self,
+	PyObject * post_init_arguments,
+	PyObject * name,
+	PyObject * value
+);
+enum result bind_parameters(
+	StructType const * type,
+	PyObject * self,
+	PyObject * post_init_arguments,
+	PyObject * const * arguments,
+	Py_ssize_t positional_count,
+	PyObject * keyword_names
+);
+enum result fill_init_var_defaults(StructType const * type, PyObject * post_init_arguments);
 
 int change_names_touch(
 	StructType * type,

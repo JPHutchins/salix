@@ -53,19 +53,12 @@ def test_a_bare_class_var_is_refused():
             marker: ClassVar
 
 
-def test_an_init_var_is_refused():
-    with pytest.raises(TypeError, match="annotated InitVar"):
-
-        class Seeded(Struct):
-            seed: InitVar[int]
-
-
 def test_each_says_what_to_do_instead():
     with pytest.raises(TypeError, match="without an assigned value"):
         type(Struct)("A", (Struct,), {"__annotations__": {"v": ClassVar[int]}})
 
-    with pytest.raises(TypeError, match="set_field"):
-        type(Struct)("B", (Struct,), {"__annotations__": {"v": InitVar[int]}})
+    with pytest.raises(TypeError, match=r"write InitVar\[\.\.\.\] as the whole annotation"):
+        type(Struct)("B", (Struct,), {"__annotations__": {"v": list[InitVar[int]]}})
 
 
 def test_an_ordinary_annotation_of_the_same_shape_is_untouched():
@@ -87,15 +80,6 @@ def test_a_field_named_after_the_form_is_still_a_field():
 
     assert Named._struct_fields_ == ("ClassVar", "InitVar")
     assert Named().ClassVar == 1
-
-
-def test_a_bare_init_var_is_refused_like_a_bare_class_var():
-    """`InitVar` unsubscripted is the class itself, not an instance of it."""
-
-    with pytest.raises(TypeError, match="annotated InitVar"):
-
-        class Seeded(Struct):
-            seed: InitVar
 
 
 def test_an_annotated_class_var_does_not_hide_the_form():
@@ -126,7 +110,6 @@ def test_an_annotated_init_var_does_not_hide_the_form_either():
         ("ClassVar", "ClassVar"),
         ("typing.ClassVar[int]", "ClassVar"),
         ("t.ClassVar[int]", "ClassVar"),
-        ("InitVar[int]", "InitVar"),
         ("Annotated[ClassVar[int], 'meta']", "ClassVar"),
         ("Annotated[InitVar[int], 'meta']", "InitVar"),
         ("ClassVar ", "ClassVar"),
@@ -305,13 +288,6 @@ def test_an_escaped_quote_inside_the_string_does_not_end_it():
         type(Struct)("Wrapped", (Struct,), {"__annotations__": {"v": "'a\\'b ClassVar[int]'"}, "v": 5})
 
 
-def test_an_init_var_with_a_shared_mutable_keeps_the_init_var_refusal():
-    with pytest.raises(TypeError, match="annotated InitVar"):
-
-        class Seeded(Struct):
-            seed: InitVar[int] = ([1],)
-
-
 def test_a_non_string_annotation_key_still_gets_the_key_error():
     with pytest.raises(TypeError, match="annotation keys must be strings"):
         type(Struct)("Probe", (Struct,), {"__annotations__": {1: int}})
@@ -442,12 +418,19 @@ def test_a_real_future_annotations_module_takes_the_text_path_for_init_var(tmp_p
         "from salix import Struct\n"
         "\n"
         "class Seeded(Struct):\n"
-        "    seed: InitVar[int] = 0\n"
         "    name: str\n"
+        "    seed: InitVar[int] = 0\n"
+        "\n"
+        "    def __post_init__(self, seed):\n"
+        "        seen.append(seed)\n"
     )
+    namespace = {"__name__": "future_init_var", "seen": []}
+    exec(compile(module.read_text(), str(module), "exec"), namespace)
 
-    with pytest.raises(TypeError, match="annotated InitVar"):
-        exec(compile(module.read_text(), str(module), "exec"), {"__name__": "future_init_var"})
+    namespace["Seeded"]("n", 4)
+
+    assert namespace["Seeded"]._struct_fields_ == ("name",)
+    assert namespace["seen"] == [4]
 
 
 def test_a_real_future_annotations_module_still_builds_ordinary_fields():

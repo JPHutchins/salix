@@ -31,12 +31,55 @@ StructType * find_struct_base(PyObject * const bases) {
 
 		StructType * const candidate = (StructType *) base;
 
-		if (widest == NULL || candidate->struct_field_count > widest->struct_field_count) {
+		if (widest == NULL || struct_parameter_count(candidate) > struct_parameter_count(widest)) {
 			widest = candidate;
 		}
 	}
 
 	return widest;
+}
+
+enum result refuse_unreachable_init_vars(
+	PyObject * const bases,
+	StructType const * const base,
+	PyObject * const init_var_names
+) {
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(bases); i += 1) {
+		PyObject * const candidate = PyTuple_GET_ITEM(bases, i);
+
+		if (
+			PyTuple_GET_SIZE(init_var_names) > 0 &&
+			PyType_FastSubclass((PyTypeObject *) candidate, Py_TPFLAGS_BASE_EXC_SUBCLASS)
+		) {
+			PyErr_Format(
+				PyExc_TypeError,
+				"an exception struct cannot take InitVar '%U': its args are built from its fields",
+				PyTuple_GET_ITEM(init_var_names, 0)
+			);
+
+			return RESULT_ERROR;
+		}
+
+		if (
+			base != NULL &&
+			is_struct_class(candidate) &&
+			(StructType const *) candidate != base &&
+			((StructType const *) candidate)->struct_init_var_count > 0 &&
+			!PyType_IsSubtype((PyTypeObject *) base, (PyTypeObject *) candidate)
+		) {
+			PyErr_Format(
+				PyExc_TypeError,
+				"the InitVars of %.200s would be dropped: a struct inherits its fields "
+				"and InitVars from one struct base, here %.200s",
+				((PyTypeObject *) candidate)->tp_name,
+				struct_type_name(base)
+			);
+
+			return RESULT_ERROR;
+		}
+	}
+
+	return RESULT_OK;
 }
 
 static struct options base_options(StructType const * const base) {

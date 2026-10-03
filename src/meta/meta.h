@@ -107,6 +107,7 @@ extern char const * const rebind_hash[];
 PyObject * build_class_namespace(
 	PyObject * original_namespace,
 	PyObject * all_names,
+	PyObject * parameter_names,
 	PyObject * new_names,
 	struct options options,
 	StructType const * base,
@@ -132,6 +133,11 @@ enum result refuse_colliding_methods(
 enum result refuse_mixin_method_fields(PyObject * all_names);
 enum result refuse_slot_name_fields(PyObject * all_names);
 enum result refuse_reserved_metadata_names(PyObject * original_namespace, PyObject * new_names);
+enum result refuse_unreachable_init_vars(
+	PyObject * bases,
+	StructType const * base,
+	PyObject * init_var_names
+);
 
 PyObject * build_struct_class(
 	PyTypeObject * metatype,
@@ -149,6 +155,7 @@ enum result install_fields(
 	struct options options,
 	bool resolves_body_eq
 );
+enum result install_init_vars(StructType * struct_class, struct field_plan const * plan);
 enum result install_post_init(StructType * struct_class);
 enum result ensure_singleton(
 	StructType * struct_class,

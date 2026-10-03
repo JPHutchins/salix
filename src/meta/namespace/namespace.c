@@ -11,7 +11,7 @@
 #include "../../types.h"
 #include "namespace.h"
 
-static enum result set_match_args(PyObject * namespace, PyObject * all_names, bool wanted);
+static enum result set_match_args(PyObject * namespace, PyObject * parameter_names, bool wanted);
 static enum result apply_options(
 	PyObject * namespace,
 	struct options options,
@@ -43,6 +43,7 @@ static PyObject * unmangled(PyObject * class_name, PyObject * field_name);
 PyObject * build_class_namespace(
 	PyObject * const original_namespace,
 	PyObject * const all_names,
+	PyObject * const parameter_names,
 	PyObject * const new_names,
 	struct options const options,
 	StructType const * const base,
@@ -63,7 +64,7 @@ PyObject * build_class_namespace(
 		drop_class_variables(namespace, all_names) == RESULT_OK &&
 		drop_none_signature(namespace) == RESULT_OK &&
 		PyDict_SetItemString(namespace, "__slots__", slots) == 0 &&
-		set_match_args(namespace, all_names, options.match_args) == RESULT_OK &&
+		set_match_args(namespace, parameter_names, options.match_args) == RESULT_OK &&
 		(
 			apply_options(
 				namespace,
@@ -256,14 +257,14 @@ enum result refuse_reserved_metadata_names(
 
 static enum result set_match_args(
 	PyObject * const namespace,
-	PyObject * const all_names,
+	PyObject * const parameter_names,
 	bool const wanted
 ) {
 	if (!wanted) {
 		return RESULT_OK;
 	}
 
-	PY_OWNED(match_args, PyList_AsTuple(all_names));
+	PY_OWNED(match_args, PyList_AsTuple(parameter_names));
 
 	return (
 		match_args != NULL && PyDict_SetItemString(

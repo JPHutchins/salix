@@ -5,6 +5,104 @@
 #include "../result.h"
 #include "../types.h"
 
+static PyObject * missing_init_var_error(void) {
+#if PY_VERSION_HEX >= 0x030D0000
+	return PyExc_TypeError;
+#else
+	return PyExc_ValueError;
+#endif
+}
+
+static enum result require_init_vars(
+	StructType const * const type,
+	PyObject * const keyword_names
+) {
+	for (Py_ssize_t i = 0; i < struct_required_init_var_count(type); i += 1) {
+		PyObject * const init_var_name = PyTuple_GET_ITEM(type->struct_init_var_names, i);
+		int const given = (
+			keyword_names != NULL ? PySequence_Contains(keyword_names, init_var_name) :
+			0
+		);
+
+		if (given < 0) {
+			return RESULT_ERROR;
+		}
+
+		if (given == 0) {
+			PyErr_Format(
+				missing_init_var_error(),
+				"InitVar '%U' must be specified with replace()",
+				init_var_name
+			);
+
+			return RESULT_ERROR;
+		}
+	}
+
+	return RESULT_OK;
+}
+
+static enum result accept_change_name(StructType const * const type, PyObject * const name) {
+	struct field_lookup const field = find_field(type, name);
+
+	switch (field.tag) {
+		case FIELD_LOOKUP_ERROR:
+			return RESULT_ERROR;
+		case FIELD_LOOKUP_FOUND:
+			return RESULT_OK;
+		case FIELD_LOOKUP_MISSING:
+			break;
+	}
+
+	struct field_lookup const init_var = find_init_var(type, name);
+
+	switch (init_var.tag) {
+		case FIELD_LOOKUP_ERROR:
+			return RESULT_ERROR;
+		case FIELD_LOOKUP_FOUND:
+			return RESULT_OK;
+		case FIELD_LOOKUP_MISSING:
+			break;
+	}
+
+	return named_field(type, name).tag == FIELD_LOOKUP_FOUND ? RESULT_OK : RESULT_ERROR;
+}
+
+static PyObject * replace_with_init_vars(
+	StructType * const type,
+	PyObject * const self,
+	PyObject * const * const arguments,
+	PyObject * const keyword_names
+) {
+	PyTypeObject * const cls = &type->heap_type.ht_type;
+	PY_MOVABLE(copy, cls->tp_alloc(cls, 0));
+
+	if (copy == NULL) {
+		return NULL;
+	}
+
+	PY_OWNED(post_init_arguments, post_init_arguments_for(type, copy));
+
+	if (
+		post_init_arguments == NULL ||
+		bind_parameters(type, copy, post_init_arguments, arguments, 0, keyword_names) != RESULT_OK
+	) {
+		return NULL;
+	}
+
+	PY_MOVABLE(source_dict, NULL);
+	struct_slots_copy_into(type, self, copy, &source_dict);
+
+	return (
+		(
+			fill_init_var_defaults(type, post_init_arguments) == RESULT_OK &&
+			run_post_init_with(type, post_init_arguments) == RESULT_OK &&
+			(source_dict == NULL || struct_dict_copy_merged(source_dict, copy) >= 0)
+		) ? py_move(&copy) :
+		NULL
+	);
+}
+
 PyObject * Struct_replace(
 	PyObject * const self,
 	PyObject * const * const arguments,
@@ -37,6 +135,10 @@ PyObject * Struct_replace(
 		return NULL;
 	}
 
+	if (type->struct_init_var_count > 0 && require_init_vars(type, keyword_names) != RESULT_OK) {
+		return NULL;
+	}
+
 	if (change_count == 0 && type->struct_options.frozen) {
 		return Py_NewRef(self);
 	}
@@ -45,7 +147,7 @@ PyObject * Struct_replace(
 
 	if (type->struct_own_init) {
 		for (Py_ssize_t i = 0; i < change_count; ++i) {
-			if (named_field(type, PyTuple_GET_ITEM(keyword_names, i)).tag != FIELD_LOOKUP_FOUND) {
+			if (accept_change_name(type, PyTuple_GET_ITEM(keyword_names, i)) != RESULT_OK) {
 				return NULL;
 			}
 		}
@@ -283,6 +385,10 @@ PyObject * Struct_replace(
 		}
 
 		return py_move(&replaced);
+	}
+
+	if (type->struct_init_var_count > 0) {
+		return replace_with_init_vars(type, self, arguments, keyword_names);
 	}
 
 	PY_MOVABLE(copy, cls->tp_alloc(cls, 0));
