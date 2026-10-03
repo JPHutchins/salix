@@ -467,3 +467,32 @@ def test_a_co_base_slot_behind_a_plain_class_attribute_restores():
     shadowed.extra = 9
 
     assert round_trip(shadowed).extra == 9
+
+
+@pytest.mark.parametrize("make", [lambda: Mutable(1), WithDict, CoBase], ids=["plain", "instance dict", "co-base slot"])
+def test_python_level_storage_stays_on_the_struct_s_own_copy(make, monkeypatch):
+    reductions = []
+    instance = make()
+    monkeypatch.setattr(type(instance), "__reduce_ex__", lambda self, protocol: reductions.append(protocol), raising=False)
+
+    copy.copy(instance)
+    copy.deepcopy(instance)
+
+    assert reductions == []
+
+
+def test_a_c_defined_co_base_refuses_duplication_like_a_stock_subclass():
+    element_tree = pytest.importorskip("_elementtree")
+
+    class BuilderCoBase(element_tree.TreeBuilder, Struct, frozen=False):
+        a: int = 0
+
+    class StockBuilder(element_tree.TreeBuilder):
+        pass
+
+    for duplicate in (copy.copy, copy.deepcopy, round_trip):
+        with pytest.raises(TypeError, match="cannot pickle 'StockBuilder' object"):
+            duplicate(StockBuilder())
+
+        with pytest.raises(TypeError, match="cannot pickle 'BuilderCoBase' object"):
+            duplicate(BuilderCoBase())

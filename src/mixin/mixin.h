@@ -10,7 +10,7 @@ PyObject * Struct_copy(PyObject * self, PyObject * noargs);
 PyObject * Struct_reduce_ex(PyObject * self, PyObject * protocol);
 PyObject * Struct_setstate(PyObject * self, PyObject * state);
 PyObject * co_base_override(PyObject * self, PyObject * name);
-int copies_through_reduce(PyTypeObject * cls);
+int copies_through_reduce(StructType * type);
 enum result pickle_cache_fill(struct salix_state * state);
 PyObject * Struct_deepcopy(PyObject * self, PyObject * memo);
 PyObject * copy_reduction(PyObject * self, PyObject * copier);

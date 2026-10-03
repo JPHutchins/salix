@@ -178,7 +178,7 @@ enum result install_constructor(
 
 	struct_class->struct_cannot_create = cannot_create;
 
-	int const through_reduce = copies_through_reduce(&struct_class->heap_type.ht_type);
+	int const through_reduce = copies_through_reduce(struct_class);
 
 	if (through_reduce < 0) {
 		return RESULT_ERROR;

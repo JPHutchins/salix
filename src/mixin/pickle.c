@@ -97,24 +97,24 @@ static int defined_by_user_code(PyTypeObject * const cls, char const * const nam
 	return (found.owner->tp_flags & Py_TPFLAGS_HEAPTYPE) != 0;
 }
 
-static bool foreign_storage_in_mro(PyTypeObject * const cls) {
-	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(cls->tp_mro); i += 1) {
-		PyTypeObject * const entry = (PyTypeObject *) PyTuple_GET_ITEM(cls->tp_mro, i);
+static bool foreign_storage(StructType * const type) {
+	PyTypeObject * const cls = &type->heap_type.ht_type;
+	Py_ssize_t const pointer = (Py_ssize_t) sizeof(PyObject *);
+	Py_ssize_t const replicated = (
+		PyBaseObject_Type.tp_basicsize +
+		pointer * (type->struct_field_count + type->struct_member_count) +
+		(cls->tp_dictoffset > 0 ? pointer : 0) +
+		(cls->tp_weaklistoffset > 0 ? pointer : 0)
+	);
 
-		if (
-			entry != &PyBaseObject_Type &&
-			entry != &StructMixin_Type &&
-			(entry->tp_flags & Py_TPFLAGS_HEAPTYPE) == 0 &&
-			!PyType_FastSubclass(entry, Py_TPFLAGS_BASE_EXC_SUBCLASS)
-		) {
-			return true;
-		}
-	}
-
-	return false;
+	return (
+		!PyType_FastSubclass(cls, Py_TPFLAGS_BASE_EXC_SUBCLASS) &&
+		(cls->tp_basicsize > replicated || cls->tp_itemsize > 0)
+	);
 }
 
-int copies_through_reduce(PyTypeObject * const cls) {
+int copies_through_reduce(StructType * const type) {
+	PyTypeObject * const cls = &type->heap_type.ht_type;
 	static char const * const hooks[] = {
 		"__reduce_ex__",
 		"__reduce__",
@@ -122,7 +122,7 @@ int copies_through_reduce(PyTypeObject * const cls) {
 		"__setstate__",
 	};
 
-	if (foreign_storage_in_mro(cls)) {
+	if (foreign_storage(type)) {
 		return 1;
 	}
 
@@ -172,7 +172,7 @@ static PyObject * reduce_fallback(PyObject * const self) {
 		return NULL;
 	}
 
-	if (overridden == 0 && !foreign_storage_in_mro(Py_TYPE(self))) {
+	if (overridden == 0 && !foreign_storage(struct_type_of(self))) {
 		return NULL;
 	}
 
