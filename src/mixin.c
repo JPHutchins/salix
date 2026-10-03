@@ -42,6 +42,8 @@ PyTypeObject StructMixin_Type = {
 static PyMethodDef Struct_methods[] = {
 	{"__copy__", Struct_copy, METH_NOARGS, NULL},
 	{"__deepcopy__", Struct_deepcopy, METH_O, NULL},
+	{"__reduce_ex__", Struct_reduce_ex, METH_O, NULL},
+	{"__setstate__", Struct_setstate, METH_O, NULL},
 	{
 		"__replace__",
 		(PyCFunction)(void (*)(void)) Struct_replace,
