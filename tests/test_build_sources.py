@@ -23,13 +23,13 @@ def c_files(directory: str) -> Counter[str]:
     return Counter(path.relative_to(ROOT).as_posix() for path in (ROOT / directory).rglob("*.c"))
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def build() -> Any:
     return runpy.run_path(str(BUILD_CONFIG))["BUILD"]
 
 
-def test_every_c_file_under_src_is_a_build_source(build: Any) -> None:
-    assert Counter(build.sources) == c_files("src") - Counter([TEST_SUPPORT_SOURCE])
+def test_src_holds_the_build_sources_and_the_test_support_source(build: Any) -> None:
+    assert c_files("src") == Counter(build.sources) + Counter([TEST_SUPPORT_SOURCE])
 
 
 def test_every_c_file_under_tests_c_is_a_test_source(build: Any) -> None:
