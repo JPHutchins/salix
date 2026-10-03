@@ -496,3 +496,35 @@ def test_a_c_defined_co_base_refuses_duplication_like_a_stock_subclass():
 
         with pytest.raises(TypeError, match="cannot pickle 'BuilderCoBase' object"):
             duplicate(BuilderCoBase())
+
+
+class FloatCoBase(float, Struct, frozen=False):
+    a: int = 0
+
+
+class FrozenSetCoBase(set, Struct):
+    a: int = 0
+
+
+class FrozenOrderedCoBase(OrderedDict, Struct):
+    a: int = 0
+
+
+@pytest.mark.parametrize("duplicate", [copy.copy, copy.deepcopy, round_trip], ids=["copy", "deepcopy", "pickle"])
+def test_a_value_co_base_duplicates_what_construction_built(duplicate):
+    original = FloatCoBase(2.5)
+    duplicated = duplicate(original)
+
+    assert (float(duplicated), duplicated.a) == (float(original), original.a)
+
+
+@pytest.mark.xfail(
+    sys.version_info >= (3, 11),
+    strict=True,
+    raises=TypeError,
+    reason="a frozen struct refuses state once its co-base's reduce has called the class",
+)
+@pytest.mark.parametrize("make", [FrozenSetCoBase, FrozenOrderedCoBase], ids=["set", "OrderedDict"])
+@pytest.mark.parametrize("duplicate", [copy.copy, copy.deepcopy, round_trip], ids=["copy", "deepcopy", "pickle"])
+def test_a_frozen_struct_over_a_class_calling_co_base_duplicates(make, duplicate):
+    assert duplicate(make()) == make()
