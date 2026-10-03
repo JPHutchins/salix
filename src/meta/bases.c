@@ -104,46 +104,78 @@ enum result refuse_two_fielded_layouts(PyObject * const bases, PyTypeObject * co
 	return RESULT_OK;
 }
 
-static int same_tables(PyObject * const first, PyObject * const second) {
-	return (
-		first == second ? 1 :
-		first == NULL || second == NULL ? 0 :
-		PyObject_RichCompareBool(first, second, Py_EQ)
-	);
-}
-
-static int parameters_reachable(StructType const * const base, StructType const * const candidate) {
-	PyTypeObject * ancestor = (PyTypeObject *) candidate;
-
-	while (
-		ancestor != NULL &&
-		is_struct_class((PyObject *) ancestor) &&
-		!PyType_IsSubtype((PyTypeObject *) base, ancestor)
-	) {
-		ancestor = ancestor->tp_base;
-	}
-
-	if (ancestor == NULL || !is_struct_class((PyObject *) ancestor)) {
-		return 0;
-	}
-
-	StructType const * const covered = (StructType const *) ancestor;
-	PyObject * const pairs[][2] = {
-		{candidate->struct_field_names, covered->struct_field_names},
-		{candidate->struct_defaults, covered->struct_defaults},
-		{candidate->struct_init_var_names, covered->struct_init_var_names},
-		{candidate->struct_init_var_defaults, covered->struct_init_var_defaults},
-	};
-
-	for (size_t i = 0; i < sizeof pairs / sizeof pairs[0]; i += 1) {
-		int const same = same_tables(pairs[i][0], pairs[i][1]);
-
-		if (same != 1) {
-			return same;
+static bool names_contain(PyObject * const names, PyObject * const name) {
+	for (Py_ssize_t i = 0; names != NULL && i < PyTuple_GET_SIZE(names); i += 1) {
+		if (PyUnicode_Compare(PyTuple_GET_ITEM(names, i), name) == 0) {
+			return true;
 		}
 	}
 
-	return 1;
+	return false;
+}
+
+static bool declares_a_parameter_of(
+	StructType const * const declaring,
+	StructType const * const carrier
+) {
+	PyObject * const declared = declaring->struct_declared_names;
+
+	for (Py_ssize_t i = 0; declared != NULL && i < PyTuple_GET_SIZE(declared); i += 1) {
+		PyObject * const name = PyTuple_GET_ITEM(declared, i);
+
+		if (
+			names_contain(carrier->struct_field_names, name) ||
+			names_contain(carrier->struct_init_var_names, name)
+		) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+static bool declares_anything(PyObject * const entry) {
+	PyObject * const declared = ((StructType const *) entry)->struct_declared_names;
+
+	return declared != NULL && PyTuple_GET_SIZE(declared) > 0;
+}
+
+static bool parameters_reachable(
+	StructType const * const base,
+	StructType const * const candidate
+) {
+	PyTypeObject * const base_type = (PyTypeObject *) base;
+	PyTypeObject * const candidate_type = (PyTypeObject *) candidate;
+
+	if (PyType_IsSubtype(base_type, candidate_type)) {
+		return true;
+	}
+
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(candidate_type->tp_mro); i += 1) {
+		PyObject * const entry = PyTuple_GET_ITEM(candidate_type->tp_mro, i);
+
+		if (
+			is_struct_class(entry) &&
+			!PyType_IsSubtype(base_type, (PyTypeObject *) entry) &&
+			declares_anything(entry)
+		) {
+			return false;
+		}
+	}
+
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(base_type->tp_mro); i += 1) {
+		PyObject * const entry = PyTuple_GET_ITEM(base_type->tp_mro, i);
+
+		if (
+			is_struct_class(entry) &&
+			!PyType_IsSubtype(candidate_type, (PyTypeObject *) entry) &&
+			declares_a_parameter_of((StructType const *) entry, candidate)
+		) {
+			return false;
+		}
+	}
+
+	return true;
 }
 
 enum result refuse_unreachable_init_vars(
@@ -177,13 +209,7 @@ enum result refuse_unreachable_init_vars(
 				base->struct_init_var_count > 0
 			)
 		) {
-			int const reachable = parameters_reachable(base, (StructType const *) candidate);
-
-			if (reachable < 0) {
-				return RESULT_ERROR;
-			}
-
-			if (reachable == 1) {
+			if (parameters_reachable(base, (StructType const *) candidate)) {
 				continue;
 			}
 
