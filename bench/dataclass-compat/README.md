@@ -18,12 +18,13 @@ wheel, so a run is reproducible from this repo's build alone.
 ./run_omegaconf.sh --salix-wheel <path-to-built-salix-wheel>
 ```
 
-### Measured result (salix 0.1.0, omegaconf a8bcf1f, 2026-09-01)
+### Measured result (salix e93d04f, omegaconf a8bcf1f, 2026-10-03)
 
-- 8473 passed
-- 40 failed, all in three documented gaps (see `known_gaps.md`):
-  - 37 pickle (salix refuses pickle)
+- 8508 passed, 362 skipped
+- 5 failed, in two documented gaps (see `known_gaps.md`):
   - 3 arbitrary instance attributes (structs have no `__dict__`)
+  - 2 pickles written by omegaconf 2.0.6 and 2.1.0rc1, whose metadata
+    classes were dataclasses then
 - 1 module excluded at collection: two unrelated Struct bases (layout conflict)
 
 ### Mechanics
@@ -41,24 +42,26 @@ with them.
 `install(exclude_prefixes=("tyro",))` — tyro's own internal dataclasses stay
 stock, every user-facing dataclass in the tests is shimmed.
 
-### Measured result (tyro d0c9877f, 2026-09-01)
+### Measured result (salix e93d04f, tyro d0c9877f, 2026-10-03)
 
-- 5062 passed
-- 30 failed, in four documented families: pickle (16), InitVar (8),
-  empty-struct field equality (2), functools.partial resolution (4)
+- 5077 passed, 288 skipped
+- 15 failed: attributes a `__post_init__` sets outside the fields (8),
+  empty-struct field equality (2), functools.partial resolution (4), and
+  `test_runtime_checkable_edge_case[argparse]`, which passes alone (1)
   — see `known_gaps.md`
 
 ## Patch tier: hydra, zero source changes
 
 `run_hydra.sh` runs hydra's suite (pinned `d1e07c8f`) with the patch installed
-unconditionally — hydra's own internals are shimmed too, no exclusions.
+unconditionally. Hydra's own internals stay stock all the same: its pytest11
+plugin imports them before the generated `conftest.py` installs the patch
+(measured: `InputDefault` is a struct only under `-p no:hydra_pytest`).
 
-### Measured result (hydra d1e07c8f, 2026-09-01)
+### Measured result (salix e93d04f, hydra d1e07c8f, 2026-10-03)
 
-- 3264 passed
-- 2 failed — both fail identically on a stock checkout (bash completion
-  scripts in this environment), so the patch is at full stock parity
-- 219 skipped, 1 xfailed
+- 3264 passed, 219 skipped, 1 xfailed
+- 2 failed — the bash-completion scripts run a subprocess that cannot
+  import omegaconf in this environment
 
 ## Measured startup deltas, per library (real workloads, 2026-09-01)
 
@@ -88,6 +91,6 @@ Fork [JPHutchins/omegaconf-salix](https://github.com/JPHutchins/omegaconf-salix)
 reconstruction, struct input is recognized in `_utils`, and pickle works
 through `__getstate__`/`__setstate__` resolving the class by module+qualname.
 
-Measured (2026-09-01): 8553 passed / 2 failed — the 2 are legacy-pickle
-artifact tests. `benchmarks/salix_vs_stock.py` A/B: deepcopy −22%,
-pickle +47%, the rest parity.
+Measured (salix e93d04f, 2026-10-03): 8512 passed / 1 failed — the 1 loads
+a pickle omegaconf 2.0.6 wrote. `benchmarks/salix_vs_stock.py` A/B
+(2026-09-01): deepcopy −22%, pickle +47%, the rest parity.
