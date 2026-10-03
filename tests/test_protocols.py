@@ -1,3 +1,4 @@
+import sys
 from typing import ClassVar, Protocol
 
 import pytest
@@ -141,3 +142,66 @@ def test_a_classvar_protocol_member_is_a_class_variable_at_runtime():
 def test_a_struct_class_cannot_inherit_a_protocol():
     with pytest.raises(TypeError):
         type(Struct)("Inheriting", (Struct, Command), {"__annotations__": {"payload": int}})
+
+
+class Builder(Protocol):
+    def build(self) -> object: ...
+
+
+class BuilderStructMeta(type(Struct), type(Builder)):
+    pass
+
+
+class Built(Struct, Builder, metaclass=BuilderStructMeta):
+    bar: str = "foo"
+
+    def build(self) -> object:
+        return self.bar
+
+
+class BuiltSubclass(Built):
+    extra: int = 0
+
+
+class ConcreteBuilder(Builder):
+    pass
+
+
+class BuiltOverConcrete(Struct, ConcreteBuilder, metaclass=BuilderStructMeta):
+    bar: str = "foo"
+
+
+class AuthoredBuilder(Protocol):
+    def __init__(self, bar: str) -> None:
+        self.authored = bar
+
+
+class AuthoredStructMeta(type(Struct), type(AuthoredBuilder)):
+    pass
+
+
+def test_a_protocol_base_keeps_the_generated_constructor():
+    assert Built(bar="baz").bar == "baz"
+    assert Built("baz").build() == "baz"
+    assert Built().bar == "foo"
+
+
+def test_a_subclass_of_a_protocol_struct_keeps_the_generated_constructor():
+    assert BuiltSubclass(bar="baz", extra=1) == BuiltSubclass("baz", 1)
+    assert (BuiltSubclass(bar="baz", extra=1).bar, BuiltSubclass(bar="baz", extra=1).extra) == ("baz", 1)
+
+
+def test_a_concrete_subclass_of_a_protocol_in_the_bases_keeps_the_generated_constructor():
+    assert BuiltOverConcrete(bar="baz").bar == "baz"
+
+
+@pytest.mark.skipif(
+    sys.version_info < (3, 11), reason="typing replaces every protocol __init__ with its placeholder before 3.11"
+)
+def test_an_authored_protocol_init_still_owns_the_construction():
+    class AuthoredBuilt(Struct, AuthoredBuilder, frozen=False, metaclass=AuthoredStructMeta):
+        bar: str = "foo"
+        authored: str = "unset"
+
+    assert AuthoredBuilt("baz").authored == "baz"
+    assert AuthoredBuilt("baz").bar == "foo"
