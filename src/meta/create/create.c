@@ -179,7 +179,7 @@ PyObject * build_struct_class(
 		return NULL;
 	}
 
-	struct field_plan plan = field_plan_build(base, original_namespace);
+	struct field_plan plan = field_plan_build(base, bases, original_namespace);
 
 	if (field_plan_failed(&plan)) {
 		return NULL;
@@ -271,6 +271,12 @@ PyObject * build_struct_class(
 	if (struct_class != NULL) {
 		struct_class->struct_state = base != NULL ? base->struct_state : NULL;
 		enum result const settled = (
+			(
+				field_plan_resolve_mro_defaults(
+					&plan,
+					&struct_class->heap_type.ht_type
+				) != RESULT_OK
+			) ? RESULT_ERROR :
 			struct_class->struct_field_names == NULL ? install_fields(
 				struct_class,
 				base,
