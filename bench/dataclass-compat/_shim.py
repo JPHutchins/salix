@@ -321,34 +321,15 @@ def _build_fields(
     return result
 
 
-def _pseudo_default(name: str, value: Any) -> Any:
-    if not isinstance(value, dataclasses.Field):
-        return value
-    if value.default_factory is not dataclasses.MISSING:
-        raise TypeError(f"field {name} cannot have a default factory")
-    return value.default
-
-
-def _plain_field(default: Any) -> dataclasses.Field[Any]:
-    return dataclasses.Field(
-        **{
-            "default": default,
-            "default_factory": dataclasses.MISSING,
-            "init": True,
-            "repr": True,
-            "hash": None,
-            "compare": True,
-            "metadata": None,
-            "kw_only": dataclasses.MISSING,
-            **({"doc": None} if _field_doc_required else {}),
-        }
-    )
-
-
 def _pseudo_field(name: str, annotation: Any, declared: Any, kw_only: bool) -> dataclasses.Field[Any]:
     initvar = _is_initvar(annotation)
-    _pseudo_default(name, declared)
-    pseudo = copy.copy(declared) if isinstance(declared, dataclasses.Field) else _plain_field(declared)
+    pseudo = (
+        copy.copy(declared)
+        if isinstance(declared, dataclasses.Field)
+        else cast(dataclasses.Field[Any], dataclasses.field(default=declared))
+    )
+    if pseudo.default_factory is not dataclasses.MISSING:
+        raise TypeError(f"field {name} cannot have a default factory")
     if initvar and pseudo.kw_only is dataclasses.MISSING:
         pseudo.kw_only = kw_only
     pseudo.name = name
@@ -441,19 +422,21 @@ def asdict(obj: object) -> dict[str, Any]:
 def replace(obj: _T, /, **changes: Any) -> _T:
     if is_struct(obj):
         struct = cast(type[Struct], type(obj))
-        init_false = {field.name for field in fields(struct) if not field.init}
+        initvars = [
+            pseudo
+            for pseudo in getattr(struct, "__dataclass_fields__", {}).values()
+            if getattr(pseudo, "_field_type", None) is dataclasses._FIELD_INITVAR  # type: ignore[attr-defined]
+        ]
+        init_false = {field.name for field in fields(struct) if not field.init} | {
+            pseudo.name for pseudo in initvars if not pseudo.init
+        }
         for name in changes:
             if name in init_false:
                 raise _replace_refusal(
                     f"field {name} is declared with init=False, it cannot be specified with replace()"
                 )
-        for pseudo in getattr(struct, "__dataclass_fields__", {}).values():
-            if (
-                getattr(pseudo, "_field_type", None) is dataclasses._FIELD_INITVAR  # type: ignore[attr-defined]
-                and pseudo.init
-                and pseudo.default is dataclasses.MISSING
-                and pseudo.name not in changes
-            ):
+        for pseudo in initvars:
+            if pseudo.init and pseudo.default is dataclasses.MISSING and pseudo.name not in changes:
                 raise _replace_refusal(f"InitVar {pseudo.name!r} must be specified with replace()")
         return cast(
             _T,
@@ -789,7 +772,7 @@ def _rebuild_struct_subclass(
         name: _pseudo_field(
             name,
             own_annotations[name],
-            cls.__dict__.get(name, dataclasses.MISSING),
+            getattr(cls, name, dataclasses.MISSING),
             kw_only,
         )
         if name in own_annotations
@@ -965,11 +948,10 @@ def dataclass(
             return _rebuild_struct_subclass(cls, init, repr, eq, order, unsafe_hash, frozen, match_args, kw_only)
         if _caller_excluded():
             return _to_stock(cls, init, repr, eq, order, unsafe_hash, frozen, match_args, kw_only, slots, weakref_slot)
+        body_annotations = inspect.get_annotations(cls)
         if (
             _needs_stock_fallback(cls.__bases__)
-            or _has_descriptor_field_collision(
-                cls, tuple(inspect.get_annotations(cls))
-            )
+            or _has_descriptor_field_collision(cls, tuple(body_annotations))
         ):
             return _to_stock(cls, init, repr, eq, order, unsafe_hash, frozen, match_args, kw_only, slots, weakref_slot)
         if not init:
@@ -980,21 +962,18 @@ def dataclass(
         kw_only_names: set[str] = set()
         field_metadata: dict[str, Any] = {}
         field_flags_map: dict[str, tuple[bool, bool, bool | None]] = {}
-        body_annotations = inspect.get_annotations(cls)
-        initvars: dict[str, Any] = {}
+        pseudo_fields = {
+            name: _pseudo_field(name, annotation, cls.__dict__.get(name, dataclasses.MISSING), kw_only)
+            for name, annotation in body_annotations.items()
+            if _is_non_field_annotation(annotation)
+        }
+        initvars = {name: pseudo.default for name, pseudo in pseudo_fields.items() if _is_initvar(pseudo.type)}
         for name, value in cls.__dict__.items():
             if name in _SALIX_MEMBERS:
                 continue
-            if name in body_annotations and _is_non_field_annotation(body_annotations[name]):
-                default = _pseudo_default(name, value)
-                if default is not dataclasses.MISSING:
-                    namespace[name] = default
-                if _is_initvar(body_annotations[name]):
-                    initvars[name] = default
-                    if isinstance(value, dataclasses.Field) and value.kw_only is True:
-                        kw_only_names.add(name)
-                    if isinstance(value, dataclasses.Field) and not value.init:
-                        no_init.add(name)
+            if name in pseudo_fields:
+                if pseudo_fields[name].default is not dataclasses.MISSING:
+                    namespace[name] = pseudo_fields[name].default
                 continue
             if isinstance(value, dataclasses.Field):
                 if name not in body_annotations:
@@ -1023,9 +1002,6 @@ def dataclass(
                 namespace[name] = value
                 if name in body_annotations:
                     field_flags_map[name] = (True, True, None)
-        for name, annotation in body_annotations.items():
-            if _is_initvar(annotation) and name not in initvars:
-                initvars[name] = dataclasses.MISSING
         namespace["__annotations__"] = dict(body_annotations)
         field_names = tuple(name for name in body_annotations if not _is_non_field_annotation(body_annotations[name]))
         required_kw_only = {
@@ -1040,26 +1016,37 @@ def dataclass(
                 getattr(cls, "__post_init__", None),
                 tuple(name for name in body_annotations if name in initvars),
             )
+        initvar_options = any(
+            pseudo_fields[name].kw_only is True or not pseudo_fields[name].init for name in initvars
+        )
         if (
             no_init
             or kw_only_names
             or kw_only
+            or initvar_options
             or cls.__doc__ is not None
         ) and "__init__" not in cls.__dict__:
             namespace["__init__"] = _make_init(
                 [
                     (
                         name,
+                        pseudo_fields[name].default,
+                        pseudo_fields[name].kw_only is True,
+                        True,
+                    )
+                    if name in initvars
+                    else (
+                        name,
                         dataclasses.MISSING
                         if name in required_kw_only
-                        else initvars[name]
-                        if name in initvars
                         else namespace.get(name, dataclasses.MISSING),
                         name in kw_only_names or kw_only,
-                        name in initvars,
+                        False,
                     )
                     for name in body_annotations
-                    if name not in no_init and not _is_classvar(body_annotations[name])
+                    if name not in no_init
+                    and not _is_classvar(body_annotations[name])
+                    and (name not in initvars or pseudo_fields[name].init)
                 ]
             )
         if kw_only:
@@ -1100,7 +1087,7 @@ def dataclass(
         namespace["__dataclass_fields__"] = {
             name: real_fields[name]
             if name in real_fields
-            else _pseudo_field(name, annotation, cls.__dict__.get(name, dataclasses.MISSING), kw_only)
+            else pseudo_fields[name]
             for name, annotation in body_annotations.items()
         }
         namespace["__dataclass_params__"] = _dataclass_params(init, repr, eq, order, unsafe_hash, frozen, match_args, kw_only)
