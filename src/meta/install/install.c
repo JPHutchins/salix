@@ -64,6 +64,7 @@ enum result install_init_vars(
 	Py_XSETREF(struct_class->struct_init_var_defaults, Py_NewRef(plan->init_var_defaults));
 	Py_XSETREF(struct_class->struct_init_var_annotations, Py_NewRef(plan->init_var_annotations));
 	Py_XSETREF(struct_class->struct_declared_names, Py_NewRef(plan->declared_names));
+	Py_XSETREF(struct_class->struct_class_var_positions, Py_XNewRef(plan->class_var_positions));
 	struct_class->struct_init_var_count = init_var_count;
 
 	return RESULT_OK;

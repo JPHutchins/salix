@@ -203,6 +203,7 @@ void field_plan_clear(struct field_plan * const plan) {
 	Py_CLEAR(plan->init_var_defaults);
 	Py_CLEAR(plan->init_var_annotations);
 	Py_CLEAR(plan->declared_names);
+	Py_CLEAR(plan->class_var_positions);
 }
 
 static PyObject * kind_filtered(
@@ -278,6 +279,33 @@ static enum result refuse_misordered_parameters(
 	}
 
 	return RESULT_OK;
+}
+
+static PyObject * class_var_positions_of(struct parameter_lists const * const parameters) {
+	PY_OWNED(positions, PyList_New(0));
+
+	if (positions == NULL) {
+		return NULL;
+	}
+
+	for (Py_ssize_t i = 0; i < PyList_GET_SIZE(parameters->init_var_flags); i += 1) {
+		if (PyList_GET_ITEM(parameters->init_var_flags, i) != Py_None) {
+			continue;
+		}
+
+		PY_OWNED(position, PyLong_FromSsize_t(i));
+		PY_OWNED(
+			entry,
+			position != NULL ? PyTuple_Pack(2, position, PyList_GET_ITEM(parameters->names, i)) :
+			NULL
+		);
+
+		if (entry == NULL || PyList_Append(positions, entry) < 0) {
+			return NULL;
+		}
+	}
+
+	return PyList_AsTuple(positions);
 }
 
 static PyObject * without_removed(PyObject * const values, PyObject * const init_var_flags) {
@@ -409,7 +437,7 @@ static struct field_plan plan_from_parameters(
 			return (struct field_plan){0};
 		}
 
-		return plan_from_kept_parameters(
+		struct field_plan plan = plan_from_kept_parameters(
 			&(struct parameter_lists){
 				.names = kept_names,
 				.init_var_flags = kept_flags,
@@ -419,6 +447,18 @@ static struct field_plan plan_from_parameters(
 			new_names,
 			default_by_name
 		);
+
+		if (field_plan_failed(&plan)) {
+			return plan;
+		}
+
+		plan.class_var_positions = class_var_positions_of(parameters);
+
+		if (plan.class_var_positions == NULL) {
+			field_plan_clear(&plan);
+		}
+
+		return plan;
 	}
 
 	return plan_from_kept_parameters(parameters, new_names, default_by_name);
@@ -449,6 +489,22 @@ static enum result append_parameter(
 			PyList_Append(parameters->init_var_flags, init_var ? Py_True : Py_False) >= 0 &&
 			PyList_Append(parameters->annotations, annotation) >= 0 &&
 			PyList_Append(parameters->metadata, metadata) >= 0
+		) ? RESULT_OK :
+		RESULT_ERROR
+	);
+}
+
+static enum result append_placeholder(
+	struct parameter_lists const * const parameters,
+	PyObject * const class_var_name,
+	PyObject * const empty_extras
+) {
+	return (
+		(
+			PyList_Append(parameters->names, class_var_name) >= 0 &&
+			PyList_Append(parameters->init_var_flags, Py_None) >= 0 &&
+			PyList_Append(parameters->annotations, Py_None) >= 0 &&
+			PyList_Append(parameters->metadata, empty_extras) >= 0
 		) ? RESULT_OK :
 		RESULT_ERROR
 	);
@@ -500,11 +556,46 @@ static enum result append_inherited(
 		return RESULT_ERROR;
 	}
 
+	Py_ssize_t const placeholder_count = (
+		base->struct_class_var_positions != NULL ? PyTuple_GET_SIZE(
+			base->struct_class_var_positions
+		) :
+		0
+	);
+	Py_ssize_t placeholder_index = 0;
 	Py_ssize_t field_index = 0;
 	Py_ssize_t init_var_index = 0;
 
-	for (Py_ssize_t position = 0; position < struct_parameter_count(base); position += 1) {
-		switch (struct_parameter_kind(base, position)) {
+	for (
+		Py_ssize_t entry = 0;
+		entry < struct_parameter_count(base) + placeholder_count;
+		entry += 1
+	) {
+		PyObject * const placeholder = (
+			placeholder_index < placeholder_count ? PyTuple_GET_ITEM(
+				base->struct_class_var_positions,
+				placeholder_index
+			) :
+			NULL
+		);
+
+		if (placeholder != NULL && PyLong_AsSsize_t(PyTuple_GET_ITEM(placeholder, 0)) == entry) {
+			if (
+				append_placeholder(
+					parameters,
+					PyTuple_GET_ITEM(placeholder, 1),
+					empty_extras
+				) != RESULT_OK
+			) {
+				return RESULT_ERROR;
+			}
+
+			placeholder_index += 1;
+
+			continue;
+		}
+
+		switch (struct_parameter_kind(base, entry - placeholder_index)) {
 			case PARAMETER_FIELD: {
 				PyObject * const field_name = PyTuple_GET_ITEM(
 					base->struct_field_names,
@@ -911,7 +1002,13 @@ static enum result append_declared(
 				return RESULT_ERROR;
 			}
 
-			if (redeclared && remove_parameter(parameters, inherited.position) != RESULT_OK) {
+			if (
+				(
+					redeclared ? remove_parameter(parameters, inherited.position) :
+					append_placeholder(parameters, field_name, empty_extras)
+				) !=
+				RESULT_OK
+			) {
 				return RESULT_ERROR;
 			}
 

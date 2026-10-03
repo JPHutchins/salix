@@ -305,6 +305,33 @@ class TestInheritance:
             class Bare(Parent):
                 p: ClassVar[int]
 
+    def test_an_init_var_re_added_after_a_class_var_removed_it_keeps_its_position(self) -> None:
+        @dataclass
+        class StockA:
+            x: int = 1
+            y: int = 2
+
+        @dataclass
+        class StockB(StockA):
+            x: ClassVar[int] = 5
+
+        @dataclass
+        class StockD(StockB):
+            x: InitVar[int] = 9
+
+        class A(Struct):
+            x: int = 1
+            y: int = 2
+
+        class B(A):
+            x: ClassVar[int] = 5
+
+        class D(B):
+            x: InitVar[int] = 9
+
+        assert parameters_of(D) == parameters_of(StockD)
+        assert D._struct_fields_ == ("y",)
+
     def test_a_struct_base_with_only_init_vars_is_the_one_inherited_from(self) -> None:
         class Mixin(Struct):
             pass
