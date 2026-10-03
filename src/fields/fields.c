@@ -177,7 +177,7 @@ struct field_plan field_plan_build(StructType const * const base, PyObject * con
 
 	struct field_plan plan_built = plan_from_parameters(&parameters, new_names, default_by_name);
 
-	if (field_plan_failed(&plan_built)) {
+	if (plan_built.all_names == NULL) {
 		return plan_built;
 	}
 
@@ -462,7 +462,7 @@ static struct field_plan plan_from_parameters(
 			default_by_name
 		);
 
-		if (field_plan_failed(&plan)) {
+		if (plan.all_names == NULL) {
 			return plan;
 		}
 

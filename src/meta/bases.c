@@ -3,6 +3,7 @@
 #include <stddef.h>
 
 #include "meta.h"
+#include "../construct/construct.h"
 #include "../mixin.h"
 #include "../options.h"
 #include "../owned.h"
@@ -104,78 +105,99 @@ enum result refuse_two_fielded_layouts(PyObject * const bases, PyTypeObject * co
 	return RESULT_OK;
 }
 
-static bool names_contain(PyObject * const names, PyObject * const name) {
-	for (Py_ssize_t i = 0; names != NULL && i < PyTuple_GET_SIZE(names); i += 1) {
-		if (PyUnicode_Compare(PyTuple_GET_ITEM(names, i), name) == 0) {
-			return true;
-		}
+static int carries_parameter(StructType const * const carrier, PyObject * const name) {
+	struct field_lookup const field = find_field(carrier, name);
+	struct field_lookup const found = (
+		field.tag == FIELD_LOOKUP_MISSING ? find_init_var(carrier, name) :
+		field
+	);
+
+	switch (found.tag) {
+		case FIELD_LOOKUP_ERROR:
+			return -1;
+		case FIELD_LOOKUP_MISSING:
+			return 0;
+		case FIELD_LOOKUP_FOUND:
+			break;
 	}
 
-	return false;
+	return 1;
 }
 
-static bool declares_a_parameter_of(
+static int declares_a_parameter_of(
 	StructType const * const declaring,
 	StructType const * const carrier
 ) {
 	PyObject * const declared = declaring->struct_declared_names;
 
 	for (Py_ssize_t i = 0; declared != NULL && i < PyTuple_GET_SIZE(declared); i += 1) {
-		PyObject * const name = PyTuple_GET_ITEM(declared, i);
+		int const carried = carries_parameter(carrier, PyTuple_GET_ITEM(declared, i));
 
-		if (
-			names_contain(carrier->struct_field_names, name) ||
-			names_contain(carrier->struct_init_var_names, name)
-		) {
-			return true;
+		if (carried != 0) {
+			return carried;
 		}
 	}
 
-	return false;
+	return 0;
 }
 
-static bool declares_anything(PyObject * const entry) {
-	PyObject * const declared = ((StructType const *) entry)->struct_declared_names;
-
-	return declared != NULL && PyTuple_GET_SIZE(declared) > 0;
-}
-
-static bool parameters_reachable(
-	StructType const * const base,
-	StructType const * const candidate
+static int declares_its_own_or_a_parameter_of(
+	StructType const * const declaring,
+	StructType const * const carrier
 ) {
+	int const own = declares_a_parameter_of(declaring, declaring);
+
+	return own != 0 ? own : declares_a_parameter_of(declaring, carrier);
+}
+
+static int an_unshared_struct_declares(
+	PyTypeObject * const owner,
+	PyTypeObject * const sharer,
+	StructType const * const carrier,
+	int ( * const declares)(StructType const * declaring, StructType const * carrier)
+) {
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(owner->tp_mro); i += 1) {
+		PyObject * const entry = PyTuple_GET_ITEM(owner->tp_mro, i);
+
+		if (is_struct_class(entry) && !PyType_IsSubtype(sharer, (PyTypeObject *) entry)) {
+			int const declared = declares((StructType const *) entry, carrier);
+
+			if (declared != 0) {
+				return declared;
+			}
+		}
+	}
+
+	return 0;
+}
+
+static int parameters_reachable(StructType const * const base, StructType const * const candidate) {
 	PyTypeObject * const base_type = (PyTypeObject *) base;
 	PyTypeObject * const candidate_type = (PyTypeObject *) candidate;
 
 	if (PyType_IsSubtype(base_type, candidate_type)) {
-		return true;
+		return 1;
 	}
 
-	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(candidate_type->tp_mro); i += 1) {
-		PyObject * const entry = PyTuple_GET_ITEM(candidate_type->tp_mro, i);
+	int const candidate_side = an_unshared_struct_declares(
+		candidate_type,
+		base_type,
+		base,
+		declares_its_own_or_a_parameter_of
+	);
 
-		if (
-			is_struct_class(entry) &&
-			!PyType_IsSubtype(base_type, (PyTypeObject *) entry) &&
-			declares_anything(entry)
-		) {
-			return false;
-		}
+	if (candidate_side != 0) {
+		return candidate_side < 0 ? -1 : 0;
 	}
 
-	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(base_type->tp_mro); i += 1) {
-		PyObject * const entry = PyTuple_GET_ITEM(base_type->tp_mro, i);
+	int const base_side = an_unshared_struct_declares(
+		base_type,
+		candidate_type,
+		candidate,
+		declares_a_parameter_of
+	);
 
-		if (
-			is_struct_class(entry) &&
-			!PyType_IsSubtype(candidate_type, (PyTypeObject *) entry) &&
-			declares_a_parameter_of((StructType const *) entry, candidate)
-		) {
-			return false;
-		}
-	}
-
-	return true;
+	return base_side < 0 ? -1 : base_side == 0;
 }
 
 enum result refuse_unreachable_init_vars(
@@ -209,15 +231,22 @@ enum result refuse_unreachable_init_vars(
 				base->struct_init_var_count > 0
 			)
 		) {
-			if (parameters_reachable(base, (StructType const *) candidate)) {
+			int const reachable = parameters_reachable(base, (StructType const *) candidate);
+
+			if (reachable < 0) {
+				return RESULT_ERROR;
+			}
+
+			if (reachable == 1) {
 				continue;
 			}
 
 			PyErr_Format(
 				PyExc_TypeError,
-				"the fields and InitVars of %.200s would be dropped: a struct inherits "
+				"%.200s and %.200s declare parameters on separate paths: a struct inherits "
 				"its fields and InitVars from one struct base, here %.200s",
 				((PyTypeObject *) candidate)->tp_name,
+				struct_type_name(base),
 				struct_type_name(base)
 			);
 
