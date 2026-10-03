@@ -104,6 +104,80 @@ enum result refuse_two_fielded_layouts(PyObject * const bases, PyTypeObject * co
 	return RESULT_OK;
 }
 
+static bool names_contain(PyObject * const names, PyObject * const name) {
+	for (Py_ssize_t i = 0; names != NULL && i < PyTuple_GET_SIZE(names); i += 1) {
+		if (PyUnicode_Compare(PyTuple_GET_ITEM(names, i), name) == 0) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+static bool declares_a_parameter_of(
+	StructType const * const declaring,
+	StructType const * const carrier
+) {
+	PyObject * const declared = declaring->struct_declared_names;
+
+	for (Py_ssize_t i = 0; declared != NULL && i < PyTuple_GET_SIZE(declared); i += 1) {
+		PyObject * const name = PyTuple_GET_ITEM(declared, i);
+
+		if (
+			names_contain(carrier->struct_field_names, name) ||
+			names_contain(carrier->struct_init_var_names, name)
+		) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+static bool declares_anything(PyObject * const entry) {
+	PyObject * const declared = ((StructType const *) entry)->struct_declared_names;
+
+	return declared != NULL && PyTuple_GET_SIZE(declared) > 0;
+}
+
+static bool parameters_reachable(
+	StructType const * const base,
+	StructType const * const candidate
+) {
+	PyTypeObject * const base_type = (PyTypeObject *) base;
+	PyTypeObject * const candidate_type = (PyTypeObject *) candidate;
+
+	if (PyType_IsSubtype(base_type, candidate_type)) {
+		return true;
+	}
+
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(candidate_type->tp_mro); i += 1) {
+		PyObject * const entry = PyTuple_GET_ITEM(candidate_type->tp_mro, i);
+
+		if (
+			is_struct_class(entry) &&
+			!PyType_IsSubtype(base_type, (PyTypeObject *) entry) &&
+			declares_anything(entry)
+		) {
+			return false;
+		}
+	}
+
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(base_type->tp_mro); i += 1) {
+		PyObject * const entry = PyTuple_GET_ITEM(base_type->tp_mro, i);
+
+		if (
+			is_struct_class(entry) &&
+			!PyType_IsSubtype(candidate_type, (PyTypeObject *) entry) &&
+			declares_a_parameter_of((StructType const *) entry, candidate)
+		) {
+			return false;
+		}
+	}
+
+	return true;
+}
+
 enum result refuse_unreachable_init_vars(
 	PyObject * const bases,
 	StructType const * const base,
@@ -133,9 +207,12 @@ enum result refuse_unreachable_init_vars(
 			(
 				((StructType const *) candidate)->struct_init_var_count > 0 ||
 				base->struct_init_var_count > 0
-			) &&
-			!PyType_IsSubtype((PyTypeObject *) base, (PyTypeObject *) candidate)
+			)
 		) {
+			if (parameters_reachable(base, (StructType const *) candidate)) {
+				continue;
+			}
+
 			PyErr_Format(
 				PyExc_TypeError,
 				"the fields and InitVars of %.200s would be dropped: a struct inherits "

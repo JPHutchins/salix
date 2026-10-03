@@ -346,6 +346,106 @@ class TestInheritance:
             class FieldedFirst(Fielded, Seeds):
                 pass
 
+    def test_a_diamond_whose_second_base_adds_nothing_builds(self) -> None:
+        @dataclass
+        class StockCommon:
+            a: int = 0
+
+        @dataclass
+        class StockSeeded(StockCommon):
+            seed: InitVar[int] = 1
+
+        @dataclass
+        class StockPlain(StockCommon):
+            pass
+
+        @dataclass
+        class StockCombined(StockSeeded, StockPlain):
+            pass
+
+        seen: list[int] = []
+
+        class Common(Struct):
+            a: int = 0
+
+        class Seeded(Common):
+            seed: InitVar[int] = 1
+
+            def __post_init__(self, seed: int) -> None:
+                seen.append(seed)
+
+        class Plain(Common):
+            pass
+
+        class Combined(Seeded, Plain):
+            pass
+
+        assert parameters_of(Combined) == parameters_of(StockCombined)
+        assert Combined._struct_fields_ == ("a",)
+        assert Combined(4, 5).a == 4
+        assert seen == [5]
+
+    def test_a_diamond_over_a_mutable_default_builds(self) -> None:
+        class Common(Struct):
+            items: list[int] = [1]  # noqa: RUF012
+
+        class Seeded(Common):
+            seed: InitVar[int] = 1
+
+        class Plain(Common):
+            pass
+
+        class Combined(Seeded, Plain):
+            pass
+
+        assert Combined().items == [1]
+
+    def test_a_diamond_whose_chosen_base_takes_a_parameter_away_is_refused(self) -> None:
+        class Common(Struct):
+            a: int = 0
+
+        class Seeded(Common):
+            a: ClassVar[int] = 5
+            seed: InitVar[int] = 1
+
+        class Plain(Common):
+            pass
+
+        with pytest.raises(TypeError, match=r"InitVars of .*Plain would be dropped"):
+
+            class Combined(Seeded, Plain):
+                pass
+
+    def test_a_diamond_whose_second_base_reannotates_a_field_is_refused(self) -> None:
+        class Common(Struct):
+            a: int = 0
+
+        class Seeded(Common):
+            seed: InitVar[int] = 1
+
+        class Reannotating(Common):
+            a: float = 0
+
+        with pytest.raises(TypeError, match=r"InitVars of .*Reannotating would be dropped"):
+
+            class Combined(Seeded, Reannotating):
+                pass
+
+    def test_a_diamond_whose_second_base_redefaults_a_field_is_refused(self) -> None:
+        class Common(Struct):
+            a: int = 0
+
+        class Seeded(Common):
+            seed: InitVar[int] = 1
+
+        class Redefaulting(Common):
+            a: int = 5
+
+        with pytest.raises(TypeError, match=r"InitVars of .*Redefaulting would be dropped"):
+
+            class Combined(Seeded, Redefaulting):
+                pass
+
     def test_a_delegate_that_drops_a_field_beside_an_init_var_is_refused(self) -> None:
         class FieldDropping(META):
             def __new__(

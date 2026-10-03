@@ -36,6 +36,7 @@ typedef struct StructType {
 	PyObject * struct_init_var_names;
 	PyObject * struct_init_var_defaults;
 	PyObject * struct_init_var_annotations;
+	PyObject * struct_declared_names;
 	enum parameter_kind * struct_parameter_kinds;
 
 	Py_ssize_t struct_field_count;

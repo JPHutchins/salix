@@ -255,6 +255,7 @@ static int StructMeta_traverse(PyObject * const self, visitproc const visit, voi
 	Py_VISIT(struct_class->struct_init_var_names);
 	Py_VISIT(struct_class->struct_init_var_defaults);
 	Py_VISIT(struct_class->struct_init_var_annotations);
+	Py_VISIT(struct_class->struct_declared_names);
 
 	return PyType_Type.tp_traverse(self, visit, arg);
 }
@@ -277,6 +278,7 @@ static int StructMeta_clear(PyObject * const self) {
 	Py_CLEAR(struct_class->struct_init_var_names);
 	Py_CLEAR(struct_class->struct_init_var_defaults);
 	Py_CLEAR(struct_class->struct_init_var_annotations);
+	Py_CLEAR(struct_class->struct_declared_names);
 	PyMem_Free(struct_class->struct_parameter_kinds);
 	struct_class->struct_parameter_kinds = NULL;
 	struct_class->struct_init_var_count = 0;

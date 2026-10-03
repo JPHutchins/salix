@@ -175,7 +175,20 @@ struct field_plan field_plan_build(StructType const * const base, PyObject * con
 		return plan;
 	}
 
-	return plan_from_parameters(&parameters, new_names, default_by_name);
+	struct field_plan plan_built = plan_from_parameters(&parameters, new_names, default_by_name);
+
+	if (field_plan_failed(&plan_built)) {
+		return plan_built;
+	}
+
+	PY_OWNED(declared_list, PyDict_Keys(annotations));
+	plan_built.declared_names = declared_list != NULL ? PyList_AsTuple(declared_list) : NULL;
+
+	if (plan_built.declared_names == NULL) {
+		field_plan_clear(&plan_built);
+	}
+
+	return plan_built;
 }
 
 void field_plan_clear(struct field_plan * const plan) {
@@ -189,6 +202,7 @@ void field_plan_clear(struct field_plan * const plan) {
 	Py_CLEAR(plan->init_var_names);
 	Py_CLEAR(plan->init_var_defaults);
 	Py_CLEAR(plan->init_var_annotations);
+	Py_CLEAR(plan->declared_names);
 }
 
 static PyObject * kind_filtered(
