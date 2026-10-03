@@ -104,6 +104,48 @@ enum result refuse_two_fielded_layouts(PyObject * const bases, PyTypeObject * co
 	return RESULT_OK;
 }
 
+static int same_tables(PyObject * const first, PyObject * const second) {
+	return (
+		first == second ? 1 :
+		first == NULL || second == NULL ? 0 :
+		PyObject_RichCompareBool(first, second, Py_EQ)
+	);
+}
+
+static int parameters_reachable(StructType const * const base, StructType const * const candidate) {
+	PyTypeObject * ancestor = (PyTypeObject *) candidate;
+
+	while (
+		ancestor != NULL &&
+		is_struct_class((PyObject *) ancestor) &&
+		!PyType_IsSubtype((PyTypeObject *) base, ancestor)
+	) {
+		ancestor = ancestor->tp_base;
+	}
+
+	if (ancestor == NULL || !is_struct_class((PyObject *) ancestor)) {
+		return 0;
+	}
+
+	StructType const * const covered = (StructType const *) ancestor;
+	PyObject * const pairs[][2] = {
+		{candidate->struct_field_names, covered->struct_field_names},
+		{candidate->struct_defaults, covered->struct_defaults},
+		{candidate->struct_init_var_names, covered->struct_init_var_names},
+		{candidate->struct_init_var_defaults, covered->struct_init_var_defaults},
+	};
+
+	for (size_t i = 0; i < sizeof pairs / sizeof pairs[0]; i += 1) {
+		int const same = same_tables(pairs[i][0], pairs[i][1]);
+
+		if (same != 1) {
+			return same;
+		}
+	}
+
+	return 1;
+}
+
 enum result refuse_unreachable_init_vars(
 	PyObject * const bases,
 	StructType const * const base,
@@ -133,9 +175,18 @@ enum result refuse_unreachable_init_vars(
 			(
 				((StructType const *) candidate)->struct_init_var_count > 0 ||
 				base->struct_init_var_count > 0
-			) &&
-			!PyType_IsSubtype((PyTypeObject *) base, (PyTypeObject *) candidate)
+			)
 		) {
+			int const reachable = parameters_reachable(base, (StructType const *) candidate);
+
+			if (reachable < 0) {
+				return RESULT_ERROR;
+			}
+
+			if (reachable == 1) {
+				continue;
+			}
+
 			PyErr_Format(
 				PyExc_TypeError,
 				"the fields and InitVars of %.200s would be dropped: a struct inherits "
