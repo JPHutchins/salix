@@ -91,6 +91,26 @@ static bool author_new_in_chain(PyTypeObject * const cls) {
 	return false;
 }
 
+static bool resolves_new_to_none(PyTypeObject * const cls) {
+	PyObject * const mro = cls->tp_mro;
+
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); i += 1) {
+		PY_OWNED(entry_dict, struct_type_dict((PyTypeObject *) PyTuple_GET_ITEM(mro, i)));
+		PyObject * const entry = (
+			entry_dict != NULL ? dict_get_string(entry_dict, "__new__") :
+			NULL
+		);
+
+		if (entry != NULL) {
+			return entry == Py_None;
+		}
+
+		PyErr_Clear();
+	}
+
+	return false;
+}
+
 enum result install_constructor(
 	StructType * const struct_class,
 	PyObject * const namespace,
@@ -99,38 +119,7 @@ enum result install_constructor(
 	bool const own_init = defines_own_init(struct_class, namespace);
 	struct_class->struct_own_init = own_init;
 
-	PyObject * const new_entry = dict_get_string(
-		struct_class->heap_type.ht_type.tp_dict,
-		"__new__"
-	);
-
-	if (new_entry == NULL && PyErr_Occurred()) {
-		PyErr_Clear();
-	}
-
-	bool cannot_create = new_entry == Py_None;
-
-	if (new_entry == NULL) {
-		for (
-			PyTypeObject * chain = struct_class->heap_type.ht_type.tp_base;
-			chain != NULL && is_struct_class((PyObject *) chain);
-			chain = chain->tp_base
-		) {
-			PyObject * const entry = dict_get_string(chain->tp_dict, "__new__");
-
-			if (entry == NULL && PyErr_Occurred()) {
-				PyErr_Clear();
-
-				continue;
-			}
-
-			if (entry == Py_None) {
-				cannot_create = true;
-			}
-
-			break;
-		}
-	}
+	bool const cannot_create = resolves_new_to_none(&struct_class->heap_type.ht_type);
 
 	struct_class->struct_cannot_create = cannot_create;
 
