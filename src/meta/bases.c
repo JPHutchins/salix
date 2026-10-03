@@ -150,7 +150,12 @@ static int declares_its_own_or_a_parameter_of(
 	return own != 0 ? own : declares_a_parameter_of(declaring, carrier);
 }
 
-static int an_unshared_struct_declares(
+struct declarer {
+	enum { DECLARER_NONE, DECLARER_FOUND, DECLARER_ERROR } tag;
+	StructType const * entry;
+};
+
+static struct declarer an_unshared_declarer(
 	PyTypeObject * const owner,
 	PyTypeObject * const sharer,
 	StructType const * const carrier,
@@ -162,46 +167,49 @@ static int an_unshared_struct_declares(
 		if (is_struct_class(entry) && !PyType_IsSubtype(sharer, (PyTypeObject *) entry)) {
 			int const declared = declares((StructType const *) entry, carrier);
 
-			if (declared != 0) {
-				return declared;
+			if (declared < 0) {
+				return (struct declarer){.tag = DECLARER_ERROR};
+			}
+
+			if (declared == 1) {
+				return (struct declarer){
+					.tag = DECLARER_FOUND,
+					.entry = (StructType const *) entry,
+				};
 			}
 		}
 	}
 
-	return 0;
+	return (struct declarer){.tag = DECLARER_NONE};
 }
 
-static int parameters_reachable(StructType const * const base, StructType const * const candidate) {
+static struct declarer unreachable_declarer(
+	StructType const * const base,
+	StructType const * const candidate
+) {
 	PyTypeObject * const base_type = (PyTypeObject *) base;
 	PyTypeObject * const candidate_type = (PyTypeObject *) candidate;
 
 	if (PyType_IsSubtype(base_type, candidate_type)) {
-		return 1;
+		return (struct declarer){.tag = DECLARER_NONE};
 	}
 
-	int const candidate_side = an_unshared_struct_declares(
+	struct declarer const candidate_side = an_unshared_declarer(
 		candidate_type,
 		base_type,
 		base,
 		declares_its_own_or_a_parameter_of
 	);
 
-	if (candidate_side != 0) {
-		return candidate_side < 0 ? -1 : 0;
-	}
-
-	int const base_side = an_unshared_struct_declares(
-		base_type,
-		candidate_type,
-		candidate,
-		declares_a_parameter_of
+	return (
+		candidate_side.tag != DECLARER_NONE ? candidate_side :
+		an_unshared_declarer(base_type, candidate_type, candidate, declares_a_parameter_of)
 	);
-
-	return base_side < 0 ? -1 : base_side == 0;
 }
 
-enum result refuse_unreachable_init_vars(
+enum result refuse_unreachable_parameters(
 	PyObject * const bases,
+	PyTypeObject * const winner,
 	StructType const * const base,
 	PyObject * const init_var_names
 ) {
@@ -222,36 +230,40 @@ enum result refuse_unreachable_init_vars(
 		}
 
 		if (
-			base != NULL &&
-			is_struct_class(candidate) &&
-			(StructType const *) candidate != base &&
-			struct_parameter_count((StructType const *) candidate) > 0 &&
-			(
-				((StructType const *) candidate)->struct_init_var_count > 0 ||
-				base->struct_init_var_count > 0
-			)
+			base == NULL ||
+			!is_struct_class(candidate) ||
+			(StructType const *) candidate == base ||
+			!metatypes_agree(bases, winner)
 		) {
-			int const reachable = parameters_reachable(base, (StructType const *) candidate);
-
-			if (reachable < 0) {
-				return RESULT_ERROR;
-			}
-
-			if (reachable == 1) {
-				continue;
-			}
-
-			PyErr_Format(
-				PyExc_TypeError,
-				"%.200s and %.200s declare parameters on separate paths: a struct inherits "
-				"its fields and InitVars from one struct base, here %.200s",
-				((PyTypeObject *) candidate)->tp_name,
-				struct_type_name(base),
-				struct_type_name(base)
-			);
-
-			return RESULT_ERROR;
+			continue;
 		}
+
+		struct declarer const declarer = unreachable_declarer(base, (StructType const *) candidate);
+
+		switch (declarer.tag) {
+			case DECLARER_ERROR:
+				return RESULT_ERROR;
+			case DECLARER_NONE:
+				continue;
+			case DECLARER_FOUND:
+				break;
+		}
+
+		StructType const * const separate = (
+			PyType_IsSubtype((PyTypeObject *) candidate, (PyTypeObject *) declarer.entry) ? base :
+			(StructType const *) candidate
+		);
+
+		PyErr_Format(
+			PyExc_TypeError,
+			"%.200s declares parameters on a path %.200s does not inherit: a struct inherits "
+			"its fields and InitVars from one struct base, here %.200s",
+			struct_type_name(declarer.entry),
+			struct_type_name(separate),
+			struct_type_name(base)
+		);
+
+		return RESULT_ERROR;
 	}
 
 	return RESULT_OK;

@@ -371,7 +371,7 @@ class TestInheritance:
         class Second(Struct):
             second: InitVar[int]
 
-        with pytest.raises(TypeError, match=r"Second and .*First declare parameters on separate paths"):
+        with pytest.raises(TypeError, match=r"Second declares parameters on a path First does not inherit"):
 
             class Combined(First, Second):
                 pass
@@ -383,12 +383,12 @@ class TestInheritance:
         class Fielded(Struct):
             field: int = 5
 
-        with pytest.raises(TypeError, match=r"Fielded and .*Seeds declare parameters on separate paths"):
+        with pytest.raises(TypeError, match=r"Fielded declares parameters on a path Seeds does not inherit"):
 
             class SeedsFirst(Seeds, Fielded):
                 pass
 
-        with pytest.raises(TypeError, match=r"Seeds and .*Fielded declare parameters on separate paths"):
+        with pytest.raises(TypeError, match=r"Seeds declares parameters on a path Fielded does not inherit"):
 
             class FieldedFirst(Fielded, Seeds):
                 pass
@@ -530,7 +530,7 @@ class TestInheritance:
         class Removing(Common):
             a: ClassVar[int] = 5
 
-        with pytest.raises(TypeError, match=r"Removing and .*Seeded declare parameters on separate paths"):
+        with pytest.raises(TypeError, match=r"Removing declares parameters on a path Seeded does not inherit"):
 
             class Combined(Removing, Seeded):
                 pass
@@ -545,9 +545,109 @@ class TestInheritance:
         class Redeclaring(Common):
             a: int = 0
 
-        with pytest.raises(TypeError, match=r"Redeclaring and .*Seeded declare parameters on separate paths"):
+        with pytest.raises(TypeError, match=r"Redeclaring declares parameters on a path Seeded does not inherit"):
 
             class Combined(Seeded, Redeclaring):
+                pass
+
+    def test_the_refusal_names_the_ancestor_that_declares(self) -> None:
+        class Other(Struct):
+            y: InitVar[int] = 1
+
+        class Sub(Other):
+            pass
+
+        class Carrier(Struct):
+            x: int = 0
+
+        with pytest.raises(TypeError, match=r"Other declares parameters on a path Carrier does not inherit"):
+
+            class Combined(Carrier, Sub):
+                pass
+
+    @pytest.mark.parametrize("removing_first", [True, False], ids=["removing first", "removing second"])
+    def test_a_diamond_without_init_vars_whose_base_removes_a_field_is_refused(
+        self, removing_first: bool
+    ) -> None:
+        class Common(Struct):
+            a: int = 0
+            w: int = 0
+
+        class Removing(Common):
+            a: ClassVar[int] = 5
+
+        class Carrying(Common):
+            p: int = 1
+
+        bases = (Removing, Carrying) if removing_first else (Carrying, Removing)
+
+        with pytest.raises(TypeError, match=r"Removing declares parameters on a path Carrying does not inherit"):
+            META("Combined", bases, {})
+
+    def test_a_diamond_without_init_vars_whose_first_base_redefaults_a_field_is_refused(self) -> None:
+        @dataclass
+        class StockCommon:
+            a: int = 0
+
+        @dataclass
+        class StockRedefaulting(StockCommon):
+            a: int = 5
+
+        @dataclass
+        class StockCarrying(StockCommon):
+            p: int = 1
+
+        @dataclass
+        class StockCombined(StockRedefaulting, StockCarrying):
+            pass
+
+        assert StockCombined().a == 5
+
+        class Common(Struct):
+            a: int = 0
+
+        class Redefaulting(Common):
+            a: int = 5
+
+        class Carrying(Common):
+            p: int = 1
+
+        with pytest.raises(TypeError, match=r"Redefaulting declares parameters on a path Carrying does not inherit"):
+
+            class Combined(Redefaulting, Carrying):
+                pass
+
+    def test_a_diamond_whose_other_base_has_no_parameters_left_is_refused(self) -> None:
+        @dataclass
+        class StockCommon:
+            a: int = 0
+
+        @dataclass
+        class StockRemoving(StockCommon):
+            a: ClassVar[int] = 1
+
+        @dataclass
+        class StockSeeded(StockCommon):
+            seed: InitVar[int] = 0
+
+        @dataclass
+        class StockCombined(StockRemoving, StockSeeded):
+            pass
+
+        assert list(inspect.signature(StockCombined).parameters) == ["seed"]
+
+        class Common(Struct):
+            a: int = 0
+
+        class Removing(Common):
+            a: ClassVar[int] = 1
+
+        class Seeded(Common):
+            seed: InitVar[int] = 0
+
+        with pytest.raises(TypeError, match=r"Removing declares parameters on a path Seeded does not inherit"):
+
+            class Combined(Removing, Seeded):
                 pass
 
     def test_a_diamond_whose_chosen_base_redeclares_a_field_the_other_base_carries_is_refused(
@@ -582,7 +682,7 @@ class TestInheritance:
         class Plain(Common):
             pass
 
-        with pytest.raises(TypeError, match=r"Plain and .*Seeded declare parameters on separate paths"):
+        with pytest.raises(TypeError, match=r"Seeded declares parameters on a path Plain does not inherit"):
 
             class Combined(Plain, Seeded):
                 pass
@@ -598,7 +698,7 @@ class TestInheritance:
         class Plain(Common):
             pass
 
-        with pytest.raises(TypeError, match=r"Plain and .*Seeded declare parameters on separate paths"):
+        with pytest.raises(TypeError, match=r"Seeded declares parameters on a path Plain does not inherit"):
 
             class Combined(Seeded, Plain):
                 pass
@@ -613,7 +713,7 @@ class TestInheritance:
         class Reannotating(Common):
             a: float = 0
 
-        with pytest.raises(TypeError, match=r"Reannotating and .*Seeded declare parameters on separate paths"):
+        with pytest.raises(TypeError, match=r"Reannotating declares parameters on a path Seeded does not inherit"):
 
             class Combined(Seeded, Reannotating):
                 pass
@@ -628,7 +728,7 @@ class TestInheritance:
         class Redefaulting(Common):
             a: int = 5
 
-        with pytest.raises(TypeError, match=r"Redefaulting and .*Seeded declare parameters on separate paths"):
+        with pytest.raises(TypeError, match=r"Redefaulting declares parameters on a path Seeded does not inherit"):
 
             class Combined(Seeded, Redefaulting):
                 pass

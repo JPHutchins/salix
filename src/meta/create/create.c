@@ -188,7 +188,7 @@ PyObject * build_struct_class(
 	if (
 		verify_settle_names_readable(original_namespace) != RESULT_OK ||
 		refuse_reserved_metadata_names(original_namespace, plan.new_names) != RESULT_OK ||
-		refuse_unreachable_init_vars(bases, base, plan.init_var_names) != RESULT_OK ||
+		refuse_unreachable_parameters(bases, handoff, base, plan.init_var_names) != RESULT_OK ||
 		refuse_colliding_methods(original_namespace, plan.parameter_names, name) != RESULT_OK ||
 		refuse_mixin_method_fields(plan.all_names) != RESULT_OK ||
 		refuse_slot_name_fields(plan.new_names) != RESULT_OK ||
