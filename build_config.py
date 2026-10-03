@@ -46,6 +46,7 @@ BUILD: Final = BuildConfig(
         "src/mixin.c",
         "src/mixin/copy.c",
         "src/mixin/deepcopy.c",
+        "src/mixin/pickle.c",
         "src/options.c",
         "src/repr.c",
     ),

@@ -6,7 +6,7 @@
 #include "../result.h"
 #include "../types.h"
 
-static PyObject * deferred_co_base_copy(PyObject * const self, PyObject * const name) {
+PyObject * co_base_override(PyObject * const self, PyObject * const name) {
 	PyTypeObject * const cls = Py_TYPE(self);
 	PyObject * const mro = cls->tp_mro;
 	Py_ssize_t mixin = 0;
@@ -24,6 +24,10 @@ static PyObject * deferred_co_base_copy(PyObject * const self, PyObject * const 
 
 	for (Py_ssize_t i = mixin + 1; i < PyTuple_GET_SIZE(mro); i += 1) {
 		PyObject * const entry = PyTuple_GET_ITEM(mro, i);
+
+		if (entry == (PyObject *) &PyBaseObject_Type) {
+			continue;
+		}
 
 		PY_OWNED(entry_dict, struct_type_dict((PyTypeObject *) entry));
 
@@ -128,7 +132,7 @@ PyObject * copy_dispatch_prologue(
 		return NULL;
 	}
 
-	PY_OWNED(deferred, deferred_co_base_copy(self, copy_name));
+	PY_OWNED(deferred, co_base_override(self, copy_name));
 
 	if (deferred == NULL && PyErr_Occurred()) {
 		return NULL;
@@ -331,8 +335,12 @@ PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 		return NULL;
 	}
 
-	if (copier != NULL) {
-		PY_MOVABLE(reduced, PyObject_CallOneArg(copier, self));
+	if (copier != NULL || type->struct_reduce_hooked) {
+		PY_MOVABLE(
+			reduced,
+			copier != NULL ? PyObject_CallOneArg(copier, self) :
+			PyObject_CallMethod(self, "__reduce_ex__", "i", 4)
+		);
 
 		return reduced != NULL ? copy_reconstruct(self, reduced, copy_module, Py_None) : NULL;
 	}
