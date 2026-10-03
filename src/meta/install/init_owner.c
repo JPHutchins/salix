@@ -2,6 +2,7 @@
 #include <stdbool.h>
 
 #include "install.h"
+#include "../../fields/fields.h"
 #include "../../owned.h"
 
 enum init_owner { INIT_OWNER_NONE, INIT_OWNER_AUTHOR, INIT_OWNER_FIELD_CONSTRUCTOR };
@@ -23,6 +24,16 @@ static enum init_owner static_exception_owner(PyTypeObject * const base) {
 		;
 
 	return (args_only_init || group_new) ? INIT_OWNER_FIELD_CONSTRUCTOR : INIT_OWNER_AUTHOR;
+}
+
+static bool typing_init_placeholder(PyObject * const init_value) {
+	PY_OWNED(placeholder, module_attribute("typing", "_no_init_or_replace_init"));
+
+	if (placeholder == NULL) {
+		PyErr_Clear();
+	}
+
+	return placeholder == init_value;
 }
 
 static enum init_owner base_init_owner(PyTypeObject * const base) {
@@ -53,10 +64,18 @@ static enum init_owner base_init_owner(PyTypeObject * const base) {
 			return INIT_OWNER_AUTHOR;
 		}
 
+		if ((base->tp_flags & Py_TPFLAGS_HEAPTYPE) != 0) {
+			return INIT_OWNER_NONE;
+		}
+
 		return (
 			PyType_FastSubclass(base, Py_TPFLAGS_BASE_EXC_SUBCLASS) ? INIT_OWNER_NONE :
 			INIT_OWNER_AUTHOR
 		);
+	}
+
+	if (typing_init_placeholder(init_value)) {
+		return INIT_OWNER_NONE;
 	}
 
 	if (PyType_FastSubclass(base, Py_TPFLAGS_BASE_EXC_SUBCLASS)) {
@@ -166,6 +185,23 @@ static void test_a_body_init_owns_the_construction(void) {
 	Py_DECREF(owners);
 }
 
+static void test_a_protocol_init_placeholder_owns_nothing(void) {
+	PyObject * const owners = testing_evaluate(owners_source);
+
+	TEST_ASSERT_FALSE(
+		defines_own_init((StructType *) testing_entry(owners, "protocol_placeholder"), NULL)
+	);
+	TEST_ASSERT_FALSE(
+		defines_own_init((StructType *) testing_entry(owners, "protocol_subclass"), NULL)
+	);
+	TEST_ASSERT_FALSE(
+		((StructType *) testing_entry(owners, "protocol_placeholder"))->struct_own_init
+	);
+	TEST_ASSERT_FALSE(((StructType *) testing_entry(owners, "protocol_subclass"))->struct_own_init);
+
+	Py_DECREF(owners);
+}
+
 static void test_the_class_body_answers_while_the_type_is_built(void) {
 	PyObject * const owners = testing_evaluate(owners_source);
 
@@ -215,6 +251,7 @@ void init_owner_tests(void) {
 	Unity.TestFile = __FILE__;
 
 	RUN_TEST(test_a_body_init_owns_the_construction);
+	RUN_TEST(test_a_protocol_init_placeholder_owns_nothing);
 	RUN_TEST(test_the_class_body_answers_while_the_type_is_built);
 	RUN_TEST(test_an_exception_family_with_its_own_init_owns_the_construction);
 #	if PY_VERSION_HEX >= 0x030B0000

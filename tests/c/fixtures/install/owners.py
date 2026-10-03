@@ -1,3 +1,5 @@
+from typing import Protocol
+
 from salix import Struct, set_field
 
 
@@ -20,6 +22,22 @@ class SystemFailure(OSError, Struct, frozen=True):
     message: str
 
 
+class Builder(Protocol):
+    def build(self) -> object: ...
+
+
+class BuilderStructMeta(type(Struct), type(Builder)):
+    pass
+
+
+class Built(Struct, Builder, metaclass=BuilderStructMeta):
+    bar: str = "foo"
+
+
+class BuiltSubclass(Built):
+    extra: int = 0
+
+
 def init(self: object) -> None:
     pass
 
@@ -29,6 +47,8 @@ result = {
     "authored": Authored,
     "raised": Raised,
     "system_failure": SystemFailure,
+    "protocol_placeholder": Built,
+    "protocol_subclass": BuiltSubclass,
     "authored_namespace": {"__init__": init},
     "empty_namespace": {},
 }
