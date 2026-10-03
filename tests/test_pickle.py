@@ -246,3 +246,113 @@ def test_a_struct_without_hooks_copies_shallow_and_deep() -> None:
 
     assert copy.copy(original).x is original.x
     assert copy.deepcopy(original).x is not original.x
+
+
+class ReducingCoBase:
+    def __reduce_ex__(self, protocol: int) -> tuple[type, tuple[str]]:
+        return (str, ("co-base reduce",))
+
+
+class WithReducingCoBase(Struct, ReducingCoBase, frozen=False):
+    x: int = 1
+
+
+class ClassReducingCoBase:
+    @classmethod
+    def __reduce_ex__(cls, protocol: int) -> tuple[type, tuple[str]]:
+        return (str, (f"{cls.__name__} at {protocol}",))
+
+
+class WithClassReducingCoBase(Struct, ClassReducingCoBase, frozen=False):
+    x: int = 1
+
+
+class RestoringCoBase:
+    def __setstate__(self, state: object) -> None:
+        set_field(self, "x", 42)
+
+
+class WithRestoringCoBase(Struct, RestoringCoBase, frozen=False):
+    x: int = 1
+
+
+class ClassRestoringCoBase:
+    restored: object = None
+
+    @classmethod
+    def __setstate__(cls, state: object) -> None:
+        cls.restored = state
+
+
+class WithClassRestoringCoBase(Struct, ClassRestoringCoBase, frozen=False):
+    x: int = 1
+
+
+class NoReduceEx(Struct, frozen=False):
+    x: object
+    __reduce_ex__ = None
+
+
+class GetStateOnly(Struct, frozen=False):
+    x: int
+
+    def __getstate__(self) -> dict[str, int]:
+        return {"x": self.x}
+
+
+class Late(Struct, frozen=False):
+    x: int
+
+
+def test_a_co_base_reduce_ex_steers_pickle_copy_and_deepcopy():
+    assert round_trip(WithReducingCoBase()) == "co-base reduce"
+    assert copy.copy(WithReducingCoBase()) == "co-base reduce"
+    assert copy.deepcopy(WithReducingCoBase()) == "co-base reduce"
+
+
+def test_a_classmethod_co_base_reduce_ex_receives_only_the_protocol():
+    assert round_trip(WithClassReducingCoBase(), 3) == "WithClassReducingCoBase at 3"
+    assert copy.copy(WithClassReducingCoBase()) == "WithClassReducingCoBase at 4"
+
+
+def test_a_co_base_setstate_restores_through_pickle_and_copy():
+    assert round_trip(WithRestoringCoBase()).x == 42
+    assert copy.copy(WithRestoringCoBase()).x == 42
+    assert copy.deepcopy(WithRestoringCoBase()).x == 42
+
+
+def test_a_classmethod_co_base_setstate_receives_only_the_state():
+    round_trip(WithClassRestoringCoBase(5))
+
+    assert WithClassRestoringCoBase.restored == (None, {"x": 5})
+
+
+def test_a_none_reduce_ex_leaves_copy_on_the_struct_s_own_path():
+    original = NoReduceEx([1])
+
+    assert copy.copy(original).x is original.x
+    assert copy.deepcopy(original).x == [1]
+    assert copy.deepcopy(original).x is not original.x
+
+
+def test_dict_state_on_a_struct_without_an_instance_dict_names_the_struct():
+    message = "struct 'GetStateOnly' has no instance __dict__ to restore dict state into"
+
+    with pytest.raises(AttributeError, match=message):
+        round_trip(GetStateOnly(5))
+
+    with pytest.raises(AttributeError, match=message):
+        copy.copy(GetStateOnly(5))
+
+
+def test_dict_state_on_a_live_frozen_struct_is_refused_as_live():
+    with pytest.raises(TypeError, match="cannot restore state into a live frozen 'Frozen'"):
+        Frozen(1).__setstate__({"x": 2})
+
+
+@pytest.mark.xfail(strict=True, reason="copy reads a class's reduce hooks when the class is created")
+def test_copy_honors_a_hook_assigned_after_the_class_statement():
+    Late.__getstate__ = lambda self: (None, {"x": self.x + 100})
+
+    assert round_trip(Late(5)).x == 105
+    assert copy.copy(Late(5)).x == 105

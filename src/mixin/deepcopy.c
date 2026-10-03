@@ -84,17 +84,16 @@ PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) {
 		return NULL;
 	}
 
-	if (copier != NULL || type->struct_reduce_hooked) {
-		PY_MOVABLE(
-			reduced,
-			copier != NULL ? PyObject_CallOneArg(copier, self) :
-			PyObject_CallMethod(self, "__reduce_ex__", "i", 4)
-		);
+	PY_MOVABLE(
+		reduced,
+		copier != NULL || type->struct_reduce_hooked ? copy_reduction(self, copier) : NULL
+	);
 
-		if (reduced == NULL) {
-			return NULL;
-		}
+	if (reduced == NULL && PyErr_Occurred()) {
+		return NULL;
+	}
 
+	if (reduced != NULL) {
 		PY_MOVABLE(reconstructed, copy_reconstruct(self, reduced, copy_module, memo));
 
 		if (

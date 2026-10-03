@@ -10,6 +10,7 @@ PyObject * Struct_setstate(PyObject * self, PyObject * state);
 PyObject * co_base_override(PyObject * self, PyObject * name);
 int defines_reduce_hooks(PyTypeObject * cls);
 PyObject * Struct_deepcopy(PyObject * self, PyObject * memo);
+PyObject * copy_reduction(PyObject * self, PyObject * copier);
 PyObject * copy_dispatch_prologue(
 	PyObject * self,
 	char const * name,

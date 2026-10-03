@@ -21,6 +21,11 @@ static struct definition nearest_definition(PyTypeObject * const cls, char const
 
 	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(cls->tp_mro); i += 1) {
 		PyTypeObject * const entry = (PyTypeObject *) PyTuple_GET_ITEM(cls->tp_mro, i);
+
+		if (entry == &StructMixin_Type) {
+			continue;
+		}
+
 		PY_OWNED(entry_dict, struct_type_dict(entry));
 
 		if (entry_dict == NULL) {
@@ -116,7 +121,7 @@ PyObject * Struct_reduce_ex(PyObject * const self, PyObject * const protocol) {
 	}
 
 	if (deferred != NULL) {
-		return PyObject_CallFunctionObjArgs(deferred, self, protocol, NULL);
+		return PyObject_CallOneArg(deferred, protocol);
 	}
 
 	int const overridden = overrides_reduce(Py_TYPE(self));
@@ -341,7 +346,7 @@ PyObject * Struct_setstate(PyObject * const self, PyObject * const state) {
 	}
 
 	if (deferred != NULL) {
-		return PyObject_CallFunctionObjArgs(deferred, self, state, NULL);
+		return PyObject_CallOneArg(deferred, state);
 	}
 
 	struct state_parts parts = {0};
@@ -360,17 +365,6 @@ PyObject * Struct_setstate(PyObject * const self, PyObject * const state) {
 		return NULL;
 	}
 
-	PY_OWNED(
-		instance_dict,
-		parts.instance_dict != NULL && PyDict_GET_SIZE(parts.instance_dict) > 0 ?
-			PyObject_GenericGetDict(self, NULL) :
-			NULL
-	);
-
-	if (instance_dict == NULL && PyErr_Occurred()) {
-		return NULL;
-	}
-
 	if (type->struct_options.frozen && any_field_set(type, self)) {
 		PyErr_Format(
 			PyExc_TypeError,
@@ -378,6 +372,27 @@ PyObject * Struct_setstate(PyObject * const self, PyObject * const state) {
 			struct_type_name(type)
 		);
 
+		return NULL;
+	}
+
+	bool const restores_dict = (
+		parts.instance_dict != NULL &&
+		PyDict_GET_SIZE(parts.instance_dict) > 0
+	);
+
+	if (restores_dict && Py_TYPE(self)->tp_dictoffset == 0) {
+		PyErr_Format(
+			PyExc_AttributeError,
+			"struct '%.200s' has no instance __dict__ to restore dict state into",
+			struct_type_name(type)
+		);
+
+		return NULL;
+	}
+
+	PY_OWNED(instance_dict, restores_dict ? PyObject_GenericGetDict(self, NULL) : NULL);
+
+	if (instance_dict == NULL && PyErr_Occurred()) {
 		return NULL;
 	}
 

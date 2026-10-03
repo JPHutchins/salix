@@ -53,7 +53,7 @@ PyObject * co_base_override(PyObject * const self, PyObject * const name) {
 
 		PyObject * resolved;
 
-		if (PyUnicode_CompareWithASCIIString(name, "__deepcopy__") == 0) {
+		if (PyUnicode_CompareWithASCIIString(name, "__copy__") != 0) {
 			PyTypeObject * const raw_type = Py_TYPE(raw);
 
 			if (raw_type->tp_descr_get == NULL) {
@@ -116,6 +116,22 @@ PyObject * co_base_override(PyObject * const self, PyObject * const name) {
 	}
 
 	return NULL;
+}
+
+PyObject * copy_reduction(PyObject * const self, PyObject * const copier) {
+	if (copier != NULL) {
+		return PyObject_CallOneArg(copier, self);
+	}
+
+	PY_OWNED(reductor, PyObject_GetAttrString(self, "__reduce_ex__"));
+
+	if (reductor == NULL || reductor == Py_None) {
+		return NULL;
+	}
+
+	PY_OWNED(protocol, PyLong_FromLong(4));
+
+	return protocol != NULL ? PyObject_CallOneArg(reductor, protocol) : NULL;
 }
 
 PyObject * copy_dispatch_prologue(
@@ -335,14 +351,17 @@ PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 		return NULL;
 	}
 
-	if (copier != NULL || type->struct_reduce_hooked) {
-		PY_MOVABLE(
-			reduced,
-			copier != NULL ? PyObject_CallOneArg(copier, self) :
-			PyObject_CallMethod(self, "__reduce_ex__", "i", 4)
-		);
+	PY_MOVABLE(
+		reduced,
+		copier != NULL || type->struct_reduce_hooked ? copy_reduction(self, copier) : NULL
+	);
 
-		return reduced != NULL ? copy_reconstruct(self, reduced, copy_module, Py_None) : NULL;
+	if (reduced == NULL && PyErr_Occurred()) {
+		return NULL;
+	}
+
+	if (reduced != NULL) {
+		return copy_reconstruct(self, reduced, copy_module, Py_None);
 	}
 
 	PY_MOVABLE(short_circuit, interned_copy(type));
