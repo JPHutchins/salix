@@ -23,7 +23,7 @@ struct special_form const CLASS_VAR_FORM = {
 struct special_form const INIT_VAR_FORM = {
 	.kind = SPECIAL_FORM_INIT_VAR,
 	.name = "InitVar",
-	.instead = "take the value in a custom __init__ and write the fields with set_field",
+	.instead = "write InitVar[...] as the whole annotation",
 };
 
 enum : int {
@@ -101,6 +101,20 @@ bool class_var_top_level(PyObject * const annotation, struct form_probes const *
 	}
 
 	return class_var_object_top_level(annotation, probes);
+}
+
+bool init_var_top_level(PyObject * const annotation, struct form_probes const * const probes) {
+	if (PyUnicode_Check(annotation)) {
+		return (
+			probes->init_var_name != NULL &&
+			names_form_at_top(annotation, probes->init_var_name)
+		);
+	}
+
+	return (
+		probes->init_var != NULL &&
+		(annotation == probes->init_var || (PyObject *) Py_TYPE(annotation) == probes->init_var)
+	);
 }
 
 struct special_form special_form_of(
@@ -441,6 +455,33 @@ static void test_the_top_level_walk_names_only_depth_zero_shapes(void) {
 	form_probes_free((PyObject *) probes);
 }
 
+static void test_the_init_var_top_level_test_takes_only_the_whole_annotation(void) {
+	struct form_probes * const probes = (struct form_probes *) form_probes_for();
+
+	PyObject * const subscripted = PyObject_GetItem(probes->init_var, (PyObject *) &PyLong_Type);
+
+	TEST_ASSERT_NOT_NULL(subscripted);
+
+	PyObject * const nested = Py_GenericAlias((PyObject *) &PyList_Type, subscripted);
+	PyObject * const top_text = PyUnicode_FromString("InitVar[int]");
+	PyObject * const nested_text = PyUnicode_FromString("list[InitVar[int]]");
+
+	TEST_ASSERT_NOT_NULL(nested);
+	TEST_ASSERT_NOT_NULL(top_text);
+	TEST_ASSERT_NOT_NULL(nested_text);
+	TEST_ASSERT_TRUE(init_var_top_level(probes->init_var, probes));
+	TEST_ASSERT_TRUE(init_var_top_level(subscripted, probes));
+	TEST_ASSERT_FALSE(init_var_top_level(nested, probes));
+	TEST_ASSERT_TRUE(init_var_top_level(top_text, probes));
+	TEST_ASSERT_FALSE(init_var_top_level(nested_text, probes));
+
+	Py_DECREF(nested_text);
+	Py_DECREF(top_text);
+	Py_DECREF(nested);
+	Py_DECREF(subscripted);
+	form_probes_free((PyObject *) probes);
+}
+
 static void test_an_identifier_continues_only_on_identifier_bytes(void) {
 	TEST_ASSERT_TRUE(continues_identifier('x'));
 	TEST_ASSERT_TRUE(continues_identifier('_'));
@@ -454,6 +495,7 @@ void forms_tests(void) {
 
 	RUN_TEST(test_special_form_of_names_each_shape);
 	RUN_TEST(test_the_top_level_walk_names_only_depth_zero_shapes);
+	RUN_TEST(test_the_init_var_top_level_test_takes_only_the_whole_annotation);
 	RUN_TEST(test_an_identifier_continues_only_on_identifier_bytes);
 }
 

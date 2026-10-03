@@ -11,6 +11,100 @@ static PyObject * interned_value(StructType const * const type, bool const no_ar
 	return (singleton != NULL && no_arguments) ? Py_NewRef(singleton) : NULL;
 }
 
+static PyObject * construct_with_init_vars(
+	StructType * const type,
+	PyObject * const * const arguments,
+	Py_ssize_t const positional_count,
+	PyObject * const keyword_names
+) {
+	PyTypeObject * const python_class = &type->heap_type.ht_type;
+	PY_MOVABLE(self, python_class->tp_alloc(python_class, 0));
+
+	if (self == NULL) {
+		return NULL;
+	}
+
+	PY_OWNED(post_init_arguments, post_init_arguments_for(type, self));
+
+	return (
+		(
+			post_init_arguments != NULL &&
+			(
+				bind_parameters(
+					type,
+					self,
+					post_init_arguments,
+					arguments,
+					positional_count,
+					keyword_names
+				) == RESULT_OK
+			) &&
+			refuse_missing_parameters(type, self, post_init_arguments) == RESULT_OK &&
+			fill_defaults(type, self, true) == RESULT_OK &&
+			fill_init_var_defaults(type, post_init_arguments) == RESULT_OK &&
+			run_post_init_with(type, post_init_arguments) == RESULT_OK
+		) ? py_move(&self) :
+		NULL
+	);
+}
+
+static PyObject * from_mapping_with_init_vars(
+	StructType * const type,
+	PyObject * const dict_values,
+	PyObject * const items
+) {
+	PyTypeObject * const cls = &type->heap_type.ht_type;
+	PY_MOVABLE(built, cls->tp_alloc(cls, 0));
+
+	if (built == NULL) {
+		return NULL;
+	}
+
+	PY_OWNED(post_init_arguments, post_init_arguments_for(type, built));
+
+	if (post_init_arguments == NULL) {
+		return NULL;
+	}
+
+	if (dict_values != NULL) {
+		Py_ssize_t position = 0;
+		PyObject * key;
+		PyObject * value;
+
+		while (PyDict_Next(dict_values, &position, &key, &value)) {
+			if (bind_parameter_named(type, built, post_init_arguments, key, value) != RESULT_OK) {
+				return NULL;
+			}
+		}
+	} else {
+		for (Py_ssize_t i = 0; i < PySequence_Fast_GET_SIZE(items); i += 1) {
+			PyObject * const pair = PySequence_Fast_GET_ITEM(items, i);
+
+			if (
+				bind_parameter_named(
+					type,
+					built,
+					post_init_arguments,
+					PyTuple_GET_ITEM(pair, 0),
+					PyTuple_GET_ITEM(pair, 1)
+				) != RESULT_OK
+			) {
+				return NULL;
+			}
+		}
+	}
+
+	return (
+		(
+			refuse_missing_parameters(type, built, post_init_arguments) == RESULT_OK &&
+			fill_defaults(type, built, true) == RESULT_OK &&
+			fill_init_var_defaults(type, post_init_arguments) == RESULT_OK &&
+			run_post_init_with(type, post_init_arguments) == RESULT_OK
+		) ? py_move(&built) :
+		NULL
+	);
+}
+
 PyObject * Struct_vectorcall(
 	PyObject * const struct_class,
 	PyObject * const * const arguments,
@@ -20,12 +114,12 @@ PyObject * Struct_vectorcall(
 	StructType * const type = (StructType *) struct_class;
 	Py_ssize_t const positional_count = PyVectorcall_NARGS(argument_count_and_flags);
 
-	if (positional_count > type->struct_field_count) {
+	if (positional_count > struct_parameter_count(type)) {
 		PyErr_Format(
 			PyExc_TypeError,
 			"%.200s() takes at most %zd positional arguments but %zd were given",
 			struct_type_name(type),
-			type->struct_field_count,
+			struct_parameter_count(type),
 			positional_count
 		);
 
@@ -55,6 +149,10 @@ PyObject * Struct_vectorcall(
 		PyErr_Format(PyExc_TypeError, "cannot create '%.100s' instances", python_class->tp_name);
 
 		return NULL;
+	}
+
+	if (type->struct_init_var_count > 0) {
+		return construct_with_init_vars(type, arguments, positional_count, keyword_names);
 	}
 
 	PY_MOVABLE(self, NULL);
@@ -386,6 +484,10 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 				return NULL;
 			}
 		}
+	}
+
+	if (type->struct_init_var_count > 0) {
+		return from_mapping_with_init_vars(type, dict_values, items);
 	}
 
 	PY_MOVABLE(built, cls->tp_alloc(cls, 0));

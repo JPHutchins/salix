@@ -2,6 +2,7 @@
 #include <stdbool.h>
 
 #include "../../construct.h"
+#include "../../construct/construct.h"
 #include "../../fields.h"
 #include "../meta.h"
 #include "../../options.h"
@@ -13,8 +14,8 @@
 static Py_ssize_t * resolve_slot_offsets(
 	StructType * struct_class,
 	StructType const * base,
-	PyObject * new_names,
-	Py_ssize_t field_count
+	PyObject * field_names,
+	PyObject * new_names
 );
 static Py_ssize_t * resolve_member_offsets(
 	StructType * struct_class,
@@ -22,6 +23,50 @@ static Py_ssize_t * resolve_member_offsets(
 	Py_ssize_t field_count,
 	Py_ssize_t * member_count
 );
+
+static enum parameter_kind * parameter_kinds_of(PyObject * const init_var_flags) {
+	Py_ssize_t const parameter_count = PyTuple_GET_SIZE(init_var_flags);
+	enum parameter_kind * const kinds = PyMem_New(enum parameter_kind, parameter_count);
+
+	if (kinds == NULL) {
+		PyErr_NoMemory();
+
+		return NULL;
+	}
+
+	for (Py_ssize_t i = 0; i < parameter_count; i += 1) {
+		kinds[i] = (
+			PyTuple_GET_ITEM(init_var_flags, i) == Py_True ? PARAMETER_INIT_VAR :
+			PARAMETER_FIELD
+		);
+	}
+
+	return kinds;
+}
+
+enum result install_init_vars(
+	StructType * const struct_class,
+	struct field_plan const * const plan
+) {
+	Py_ssize_t const init_var_count = PyTuple_GET_SIZE(plan->init_var_names);
+	enum parameter_kind * const kinds = (
+		init_var_count > 0 ? parameter_kinds_of(plan->init_var_flags) :
+		NULL
+	);
+
+	if (init_var_count > 0 && kinds == NULL) {
+		return RESULT_ERROR;
+	}
+
+	PyMem_Free(struct_class->struct_parameter_kinds);
+	struct_class->struct_parameter_kinds = kinds;
+	Py_XSETREF(struct_class->struct_init_var_names, Py_NewRef(plan->init_var_names));
+	Py_XSETREF(struct_class->struct_init_var_defaults, Py_NewRef(plan->init_var_defaults));
+	Py_XSETREF(struct_class->struct_init_var_annotations, Py_NewRef(plan->init_var_annotations));
+	struct_class->struct_init_var_count = init_var_count;
+
+	return RESULT_OK;
+}
 
 enum result install_fields(
 	StructType * const struct_class,
@@ -38,7 +83,7 @@ enum result install_fields(
 
 	Py_ssize_t const field_count = PyTuple_GET_SIZE(field_names);
 	Py_ssize_t * const offsets =
-		resolve_slot_offsets(struct_class, base, plan->new_names, field_count);
+		resolve_slot_offsets(struct_class, base, field_names, plan->new_names);
 
 	if (offsets == NULL) {
 		return RESULT_ERROR;
@@ -49,6 +94,13 @@ enum result install_fields(
 		resolve_member_offsets(struct_class, offsets, field_count, &member_count);
 
 	if (member_offsets == NULL) {
+		PyMem_Free(offsets);
+
+		return RESULT_ERROR;
+	}
+
+	if (install_init_vars(struct_class, plan) != RESULT_OK) {
+		PyMem_Free(member_offsets);
 		PyMem_Free(offsets);
 
 		return RESULT_ERROR;
@@ -211,6 +263,7 @@ enum result ensure_singleton(
 		struct_class->struct_options.frozen &&
 		!struct_class->struct_options.weakref &&
 		struct_class->struct_field_count == 0 &&
+		struct_class->struct_init_var_count == 0 &&
 		!struct_class->struct_own_init &&
 		!struct_class->struct_cannot_create &&
 		(
@@ -265,12 +318,37 @@ enum result install_post_init(StructType * const struct_class) {
 	return RESULT_OK;
 }
 
+static struct member_lookup inherited_member(
+	StructType const * const base,
+	PyObject * const field_name
+) {
+	struct field_lookup const found = (
+		base != NULL ? find_field(base, field_name) :
+		(struct field_lookup){.tag = FIELD_LOOKUP_MISSING}
+	);
+
+	switch (found.tag) {
+		case FIELD_LOOKUP_ERROR:
+			return (struct member_lookup){.tag = MEMBER_LOOKUP_ERROR};
+		case FIELD_LOOKUP_MISSING:
+			return (struct member_lookup){.tag = MEMBER_LOOKUP_MISSING};
+		case FIELD_LOOKUP_FOUND:
+			break;
+	}
+
+	return (struct member_lookup){
+		.tag = MEMBER_LOOKUP_FOUND,
+		.slot_offset = base->struct_slot_offsets[found.index],
+	};
+}
+
 static Py_ssize_t * resolve_slot_offsets(
 	StructType * const struct_class,
 	StructType const * const base,
-	PyObject * const new_names,
-	Py_ssize_t const field_count
+	PyObject * const field_names,
+	PyObject * const new_names
 ) {
+	Py_ssize_t const field_count = PyTuple_GET_SIZE(field_names);
 	Py_ssize_t * const offsets = PyMem_New(Py_ssize_t, field_count > 0 ? field_count : 1);
 
 	if (offsets == NULL) {
@@ -279,18 +357,23 @@ static Py_ssize_t * resolve_slot_offsets(
 		return NULL;
 	}
 
-	Py_ssize_t const inherited_count = base != NULL ? base->struct_field_count : 0;
-
-	for (Py_ssize_t i = 0; i < inherited_count; ++i) {
-		offsets[i] = base->struct_slot_offsets[i];
-	}
-
 	PyMemberDef const * const members = struct_heap_type_members(struct_class);
 	Py_ssize_t const member_count = Py_SIZE(struct_class);
 
-	for (Py_ssize_t i = 0; i < PyList_GET_SIZE(new_names); ++i) {
-		PyObject * const field_name = PyList_GET_ITEM(new_names, i);
-		struct member_lookup const found = find_member(members, member_count, field_name);
+	for (Py_ssize_t i = 0; i < field_count; i += 1) {
+		PyObject * const field_name = PyTuple_GET_ITEM(field_names, i);
+		int const declared_here = PySequence_Contains(new_names, field_name);
+
+		if (declared_here < 0) {
+			PyMem_Free(offsets);
+
+			return NULL;
+		}
+
+		struct member_lookup const found = (
+			declared_here == 1 ? find_member(members, member_count, field_name) :
+			inherited_member(base, field_name)
+		);
 
 		switch (found.tag) {
 			case MEMBER_LOOKUP_ERROR:
@@ -302,7 +385,7 @@ static Py_ssize_t * resolve_slot_offsets(
 
 				return NULL;
 			case MEMBER_LOOKUP_FOUND:
-				offsets[inherited_count + i] = found.slot_offset;
+				offsets[i] = found.slot_offset;
 		}
 	}
 

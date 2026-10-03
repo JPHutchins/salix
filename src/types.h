@@ -15,6 +15,11 @@ enum { SLOT_MEMBER_TYPE = T_OBJECT_EX };
 enum { SLOT_MEMBER_TYPE = Py_T_OBJECT_EX };
 #endif
 
+enum parameter_kind : unsigned char {
+	PARAMETER_FIELD,
+	PARAMETER_INIT_VAR,
+};
+
 typedef struct StructType {
 	PyHeapTypeObject heap_type;
 	struct salix_state * struct_state;
@@ -28,10 +33,15 @@ typedef struct StructType {
 	PyObject * struct_post_init;
 	PyObject * struct_singleton;
 	PyObject * struct_signature;
+	PyObject * struct_init_var_names;
+	PyObject * struct_init_var_defaults;
+	PyObject * struct_init_var_annotations;
+	enum parameter_kind * struct_parameter_kinds;
 
 	Py_ssize_t struct_field_count;
 	Py_ssize_t struct_default_count;
 	Py_ssize_t struct_member_count;
+	Py_ssize_t struct_init_var_count;
 	struct options struct_options;
 
 	bool struct_resolves_body_eq;
@@ -270,6 +280,24 @@ static inline int struct_dict_copy_merged(
 
 static inline Py_ssize_t struct_required_count(StructType const * const type) {
 	return type->struct_field_count - type->struct_default_count;
+}
+
+static inline Py_ssize_t struct_required_init_var_count(StructType const * const type) {
+	return type->struct_init_var_count - PyTuple_GET_SIZE(type->struct_init_var_defaults);
+}
+
+static inline Py_ssize_t struct_parameter_count(StructType const * const type) {
+	return type->struct_field_count + type->struct_init_var_count;
+}
+
+static inline enum parameter_kind struct_parameter_kind(
+	StructType const * const type,
+	Py_ssize_t const position
+) {
+	return (
+		type->struct_parameter_kinds != NULL ? type->struct_parameter_kinds[position] :
+		PARAMETER_FIELD
+	);
 }
 
 static inline PyObject * struct_tuple_or_empty(PyObject * const tuple) {

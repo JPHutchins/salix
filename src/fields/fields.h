@@ -27,5 +27,7 @@ struct special_form special_form_of(PyObject * annotation, struct form_probes co
 
 bool class_var_top_level(PyObject * annotation, struct form_probes const * probes);
 
+bool init_var_top_level(PyObject * annotation, struct form_probes const * probes);
+
 extern struct special_form const CLASS_VAR_FORM;
 extern struct special_form const INIT_VAR_FORM;

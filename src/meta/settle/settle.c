@@ -162,6 +162,42 @@ enum result settle_cache_fill(struct salix_state * const state) {
 	return RESULT_OK;
 }
 
+static int same_parameters(
+	StructType const * const struct_class,
+	struct field_plan const * const plan
+) {
+	int const same_init_vars = (
+		struct_class->struct_init_var_names != NULL ? PyObject_RichCompareBool(
+			struct_class->struct_init_var_names,
+			plan->init_var_names,
+			Py_EQ
+		) :
+		0
+	);
+
+	if (same_init_vars != 1) {
+		return same_init_vars;
+	}
+
+	if (
+		PyTuple_GET_SIZE(plan->init_var_flags) > 0 &&
+		PyTuple_GET_SIZE(plan->init_var_flags) != struct_parameter_count(struct_class)
+	) {
+		return 0;
+	}
+
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(plan->init_var_flags); i += 1) {
+		if (
+			(PyTuple_GET_ITEM(plan->init_var_flags, i) == Py_True) !=
+			(struct_parameter_kind(struct_class, i) == PARAMETER_INIT_VAR)
+		) {
+			return 0;
+		}
+	}
+
+	return 1;
+}
+
 enum result settle_planned(
 	StructType * const struct_class,
 	StructType const * const base,
@@ -177,8 +213,9 @@ enum result settle_planned(
 	bool const derive_not_equal
 ) {
 	PY_OWNED(planned, PyList_AsTuple(plan->all_names));
+	PY_OWNED(planned_parameters, PyList_AsTuple(plan->parameter_names));
 
-	if (planned == NULL) {
+	if (planned == NULL || planned_parameters == NULL) {
 		return RESULT_ERROR;
 	}
 
@@ -186,6 +223,12 @@ enum result settle_planned(
 		PyObject_RichCompareBool(struct_class->struct_field_names, planned, Py_EQ);
 
 	if (same_fields < 0) {
+		return RESULT_ERROR;
+	}
+
+	int const same_init_vars = same_parameters(struct_class, plan);
+
+	if (same_init_vars < 0) {
 		return RESULT_ERROR;
 	}
 
@@ -217,6 +260,7 @@ enum result settle_planned(
 
 	if (
 		same_fields == 0 ||
+		same_init_vars == 0 ||
 		same_name == 0 ||
 		same_bases == 0 ||
 		find_struct_base(((PyTypeObject *) struct_class)->tp_bases) != base
@@ -375,7 +419,7 @@ enum result settle_planned(
 	}
 
 	if (bindings.match_args_wanted) {
-		if (PyDict_SetItemString(class_dict, "__match_args__", planned) < 0) {
+		if (PyDict_SetItemString(class_dict, "__match_args__", planned_parameters) < 0) {
 			return RESULT_ERROR;
 		}
 	} else {
@@ -400,6 +444,11 @@ enum result settle_planned(
 	Py_SETREF(struct_class->struct_annotations, Py_NewRef(plan->annotations));
 	Py_SETREF(struct_class->struct_metadata, Py_NewRef(plan->metadata));
 	struct_class->struct_default_count = PyTuple_GET_SIZE(plan->defaults);
+
+	if (install_init_vars(struct_class, plan) != RESULT_OK) {
+		return RESULT_ERROR;
+	}
+
 	struct_class->struct_options = options;
 	struct_class->struct_resolves_body_eq = body_defines_eq || inherits_body_eq;
 

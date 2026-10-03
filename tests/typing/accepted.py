@@ -1,3 +1,4 @@
+from dataclasses import InitVar
 from typing import Any, ClassVar, Generic, Literal, Protocol, TypeVar
 
 from typing_extensions import assert_type
@@ -22,6 +23,14 @@ class Constants(Struct):
 
 class Mutable(Struct, frozen=False):
     value: int
+
+
+class Seeded(Struct):
+    a: int
+    seed: InitVar[int]
+
+    def __post_init__(self, seed: int) -> None:
+        pass
 
 
 T = TypeVar("T")
@@ -58,6 +67,11 @@ def a_class_var_is_a_class_attribute_and_not_a_constructor_argument() -> None:
     assert_type(Constants.limit, int)
     assert_type(Constants("x").limit, int)
     assert_type(Constants("x").name, str)
+
+
+def an_init_var_is_a_constructor_argument_and_not_a_field() -> None:
+    assert_type(Seeded(1, 2).a, int)
+    assert_type(Seeded(a=1, seed=2), Seeded)
 
 
 def a_mutable_struct_accepts_a_write() -> None:

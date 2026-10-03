@@ -281,7 +281,7 @@ PyObject * Struct_get_signature(PyObject * const self, void * const closure) {
 
 	PY_OWNED(parameter_type, PyObject_GetAttrString(inspect_module, "Parameter"));
 	PY_OWNED(signature_type, PyObject_GetAttrString(inspect_module, "Signature"));
-	PY_OWNED(parameters, PyList_New(type->struct_field_count));
+	PY_OWNED(parameters, PyList_New(struct_parameter_count(type)));
 
 	if (parameter_type == NULL || signature_type == NULL || parameters == NULL) {
 		return NULL;
@@ -295,25 +295,48 @@ PyObject * Struct_get_signature(PyObject * const self, void * const closure) {
 	}
 
 	Py_ssize_t const required_count = struct_required_count(type);
+	Py_ssize_t const required_init_var_count = struct_required_init_var_count(type);
+	Py_ssize_t field_index = 0;
+	Py_ssize_t init_var_index = 0;
 
-	for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
-		PyObject * const field_name = PyTuple_GET_ITEM(type->struct_field_names, i);
-		PyObject * const default_value = (
-			i < required_count ? empty :
-			PyTuple_GET_ITEM(type->struct_defaults, i - required_count)
+	for (Py_ssize_t position = 0; position < struct_parameter_count(type); position += 1) {
+		bool const init_var = struct_parameter_kind(type, position) == PARAMETER_INIT_VAR;
+		Py_ssize_t const index = init_var ? init_var_index : field_index;
+		Py_ssize_t const required = init_var ? required_init_var_count : required_count;
+		PY_OWNED(
+			arguments,
+			PyTuple_Pack(
+				2,
+				PyTuple_GET_ITEM(
+					init_var ? type->struct_init_var_names : type->struct_field_names,
+					index
+				),
+				kind
+			)
 		);
-		PY_OWNED(arguments, PyTuple_Pack(2, field_name, kind));
 		PY_OWNED(keywords, PyDict_New());
 
 		if (
 			arguments == NULL ||
 			keywords == NULL ||
-			PyDict_SetItemString(keywords, "default", default_value) < 0 ||
+			(
+				PyDict_SetItemString(
+					keywords,
+					"default",
+					index < required ? empty : PyTuple_GET_ITEM(
+						init_var ? type->struct_init_var_defaults : type->struct_defaults,
+						index - required
+					)
+				) < 0
+			) ||
 			(
 				PyDict_SetItemString(
 					keywords,
 					"annotation",
-					PyTuple_GET_ITEM(type->struct_annotations, i)
+					PyTuple_GET_ITEM(
+						init_var ? type->struct_init_var_annotations : type->struct_annotations,
+						index
+					)
 				) < 0
 			)
 		) {
@@ -326,7 +349,9 @@ PyObject * Struct_get_signature(PyObject * const self, void * const closure) {
 			return NULL;
 		}
 
-		PyList_SET_ITEM(parameters, i, py_move(&parameter));
+		PyList_SET_ITEM(parameters, position, py_move(&parameter));
+		init_var_index += init_var ? 1 : 0;
+		field_index += init_var ? 0 : 1;
 	}
 
 	PY_MOVABLE(signature, PyObject_CallOneArg(signature_type, parameters));

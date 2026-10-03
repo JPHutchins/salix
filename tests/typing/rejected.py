@@ -1,3 +1,5 @@
+from dataclasses import InitVar
+
 from salix import Struct, set_field
 
 
@@ -8,6 +10,11 @@ class Point(Struct):
 
 class Mutable(Struct, frozen=False):
     value: int
+
+
+class Seeded(Struct):
+    a: int
+    seed: InitVar[int]
 
 
 class Ordered(Struct, order=True):
@@ -38,6 +45,14 @@ def a_missing_argument_is_rejected() -> None:
 
 def an_extra_argument_is_rejected() -> None:
     Point(1, "two", 3)  # type: ignore[call-arg]
+
+
+def a_missing_init_var_is_rejected() -> None:
+    Seeded(1)  # type: ignore[call-arg]
+
+
+def an_init_var_of_the_wrong_type_is_rejected() -> None:
+    Seeded(1, "two")  # type: ignore[arg-type]
 
 
 def an_unknown_keyword_is_rejected() -> None:
