@@ -963,6 +963,8 @@ def dataclass(
         body_annotations = inspect.get_annotations(cls)
         initvars: dict[str, Any] = {}
         for name, value in cls.__dict__.items():
+            if name in _SALIX_MEMBERS:
+                continue
             if name in body_annotations and _is_non_field_annotation(body_annotations[name]):
                 default = _pseudo_default(name, value)
                 if default is not dataclasses.MISSING:
