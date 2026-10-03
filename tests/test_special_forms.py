@@ -256,6 +256,33 @@ def test_a_name_re_added_after_a_class_var_removed_it_keeps_its_position():
     assert (C(9).x, C(9).y) == (StockC(9).x, StockC(9).y) == (9, 2)
 
 
+def test_a_redeclaration_without_a_value_takes_the_class_var_value_as_its_default():
+    @dataclass
+    class StockA:
+        x: int = 1
+        y: int = 2
+
+    @dataclass
+    class StockB(StockA):
+        x: ClassVar[int] = 5
+
+    @dataclass
+    class StockC(StockB):
+        x: int
+
+    class A(Struct):
+        x: int = 1
+        y: int = 2
+
+    class B(A):
+        x: ClassVar[int] = 5
+
+    class C(B):
+        x: int
+
+    assert (C().x, C().y) == (StockC().x, StockC().y) == (5, 2)
+
+
 def test_a_field_over_an_inherited_class_var_takes_the_class_var_position():
     @dataclass
     class StockBase:

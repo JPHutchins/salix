@@ -281,7 +281,10 @@ static enum result refuse_misordered_parameters(
 	return RESULT_OK;
 }
 
-static PyObject * class_var_positions_of(struct parameter_lists const * const parameters) {
+static PyObject * class_var_positions_of(
+	struct parameter_lists const * const parameters,
+	PyObject * const default_by_name
+) {
 	PY_OWNED(positions, PyList_New(0));
 
 	if (positions == NULL) {
@@ -293,10 +296,21 @@ static PyObject * class_var_positions_of(struct parameter_lists const * const pa
 			continue;
 		}
 
+		PyObject * const class_var_name = PyList_GET_ITEM(parameters->names, i);
 		PY_OWNED(position, PyLong_FromSsize_t(i));
+		PY_OWNED(value, dict_value_ref(default_by_name, class_var_name));
+
+		if (value == NULL && !PyErr_Occurred()) {
+			PyErr_Format(
+				PyExc_SystemError,
+				"salix internal error: ClassVar '%U' has no recorded value",
+				class_var_name
+			);
+		}
+
 		PY_OWNED(
 			entry,
-			position != NULL ? PyTuple_Pack(2, position, PyList_GET_ITEM(parameters->names, i)) :
+			position != NULL && value != NULL ? PyTuple_Pack(3, position, class_var_name, value) :
 			NULL
 		);
 
@@ -452,7 +466,7 @@ static struct field_plan plan_from_parameters(
 			return plan;
 		}
 
-		plan.class_var_positions = class_var_positions_of(parameters);
+		plan.class_var_positions = class_var_positions_of(parameters, default_by_name);
 
 		if (plan.class_var_positions == NULL) {
 			field_plan_clear(&plan);
@@ -479,32 +493,16 @@ static PyObject * checked_annotations(PyObject * const namespace) {
 static enum result append_parameter(
 	struct parameter_lists const * const parameters,
 	PyObject * const parameter_name,
-	bool const init_var,
+	PyObject * const kind_flag,
 	PyObject * const annotation,
 	PyObject * const metadata
 ) {
 	return (
 		(
 			PyList_Append(parameters->names, parameter_name) >= 0 &&
-			PyList_Append(parameters->init_var_flags, init_var ? Py_True : Py_False) >= 0 &&
+			PyList_Append(parameters->init_var_flags, kind_flag) >= 0 &&
 			PyList_Append(parameters->annotations, annotation) >= 0 &&
 			PyList_Append(parameters->metadata, metadata) >= 0
-		) ? RESULT_OK :
-		RESULT_ERROR
-	);
-}
-
-static enum result append_placeholder(
-	struct parameter_lists const * const parameters,
-	PyObject * const class_var_name,
-	PyObject * const empty_extras
-) {
-	return (
-		(
-			PyList_Append(parameters->names, class_var_name) >= 0 &&
-			PyList_Append(parameters->init_var_flags, Py_None) >= 0 &&
-			PyList_Append(parameters->annotations, Py_None) >= 0 &&
-			PyList_Append(parameters->metadata, empty_extras) >= 0
 		) ? RESULT_OK :
 		RESULT_ERROR
 	);
@@ -579,13 +577,33 @@ static enum result append_inherited(
 			NULL
 		);
 
-		if (placeholder != NULL && PyLong_AsSsize_t(PyTuple_GET_ITEM(placeholder, 0)) == entry) {
+		Py_ssize_t const placeholder_position = (
+			placeholder != NULL ? PyLong_AsSsize_t(PyTuple_GET_ITEM(placeholder, 0)) :
+			-1
+		);
+
+		if (placeholder_position == -1 && PyErr_Occurred()) {
+			return RESULT_ERROR;
+		}
+
+		if (placeholder_position == entry) {
 			if (
-				append_placeholder(
-					parameters,
-					PyTuple_GET_ITEM(placeholder, 1),
-					empty_extras
-				) != RESULT_OK
+				(
+					append_parameter(
+						parameters,
+						PyTuple_GET_ITEM(placeholder, 1),
+						Py_None,
+						Py_None,
+						empty_extras
+					) != RESULT_OK
+				) ||
+				(
+					PyDict_SetItem(
+						default_by_name,
+						PyTuple_GET_ITEM(placeholder, 1),
+						PyTuple_GET_ITEM(placeholder, 2)
+					) < 0
+				)
 			) {
 				return RESULT_ERROR;
 			}
@@ -607,7 +625,7 @@ static enum result append_inherited(
 						append_parameter(
 							parameters,
 							field_name,
-							false,
+							Py_False,
 							PyTuple_GET_ITEM(base->struct_annotations, field_index),
 							PyTuple_GET_ITEM(base->struct_metadata, field_index)
 						) != RESULT_OK
@@ -638,7 +656,7 @@ static enum result append_inherited(
 						append_parameter(
 							parameters,
 							init_var_name,
-							true,
+							Py_True,
 							PyTuple_GET_ITEM(base->struct_init_var_annotations, init_var_index),
 							empty_extras
 						) != RESULT_OK
@@ -948,7 +966,7 @@ static enum result append_declared(
 						append_parameter(
 							parameters,
 							field_name,
-							true,
+							Py_True,
 							annotation,
 							empty_extras
 						) != RESULT_OK
@@ -1005,7 +1023,7 @@ static enum result append_declared(
 			if (
 				(
 					redeclared ? remove_parameter(parameters, inherited.position) :
-					append_placeholder(parameters, field_name, empty_extras)
+					append_parameter(parameters, field_name, Py_None, Py_None, empty_extras)
 				) !=
 				RESULT_OK
 			) {

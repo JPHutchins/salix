@@ -332,6 +332,26 @@ class TestInheritance:
         assert parameters_of(D) == parameters_of(StockD)
         assert D._struct_fields_ == ("y",)
 
+    def test_an_init_var_redeclared_without_a_value_takes_the_class_var_value(self) -> None:
+        seen: list[int] = []
+
+        class A(Struct):
+            x: int = 1
+            y: int = 2
+
+        class B(A):
+            x: ClassVar[int] = 5
+
+        class D(B):
+            x: InitVar[int]
+
+            def __post_init__(self, x: int) -> None:
+                seen.append(x)
+
+        D()
+
+        assert seen == [5]
+
     def test_a_struct_base_with_only_init_vars_is_the_one_inherited_from(self) -> None:
         class Mixin(Struct):
             pass
