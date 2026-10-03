@@ -17,6 +17,7 @@ struct field_plan {
 	PyObject * init_var_defaults;
 	PyObject * init_var_annotations;
 	PyObject * declared_names;
+	PyObject * class_var_positions;
 };
 
 struct field_plan field_plan_build(StructType const * base, PyObject * namespace);

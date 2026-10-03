@@ -203,6 +203,7 @@ void field_plan_clear(struct field_plan * const plan) {
 	Py_CLEAR(plan->init_var_defaults);
 	Py_CLEAR(plan->init_var_annotations);
 	Py_CLEAR(plan->declared_names);
+	Py_CLEAR(plan->class_var_positions);
 }
 
 static PyObject * kind_filtered(
@@ -278,6 +279,47 @@ static enum result refuse_misordered_parameters(
 	}
 
 	return RESULT_OK;
+}
+
+static PyObject * class_var_positions_of(
+	struct parameter_lists const * const parameters,
+	PyObject * const default_by_name
+) {
+	PY_OWNED(positions, PyList_New(0));
+
+	if (positions == NULL) {
+		return NULL;
+	}
+
+	for (Py_ssize_t i = 0; i < PyList_GET_SIZE(parameters->init_var_flags); i += 1) {
+		if (PyList_GET_ITEM(parameters->init_var_flags, i) != Py_None) {
+			continue;
+		}
+
+		PyObject * const class_var_name = PyList_GET_ITEM(parameters->names, i);
+		PY_OWNED(position, PyLong_FromSsize_t(i));
+		PY_OWNED(value, dict_value_ref(default_by_name, class_var_name));
+
+		if (value == NULL && !PyErr_Occurred()) {
+			PyErr_Format(
+				PyExc_SystemError,
+				"salix internal error: ClassVar '%U' has no recorded value",
+				class_var_name
+			);
+		}
+
+		PY_OWNED(
+			entry,
+			position != NULL && value != NULL ? PyTuple_Pack(3, position, class_var_name, value) :
+			NULL
+		);
+
+		if (entry == NULL || PyList_Append(positions, entry) < 0) {
+			return NULL;
+		}
+	}
+
+	return PyList_AsTuple(positions);
 }
 
 static PyObject * without_removed(PyObject * const values, PyObject * const init_var_flags) {
@@ -409,7 +451,7 @@ static struct field_plan plan_from_parameters(
 			return (struct field_plan){0};
 		}
 
-		return plan_from_kept_parameters(
+		struct field_plan plan = plan_from_kept_parameters(
 			&(struct parameter_lists){
 				.names = kept_names,
 				.init_var_flags = kept_flags,
@@ -419,6 +461,18 @@ static struct field_plan plan_from_parameters(
 			new_names,
 			default_by_name
 		);
+
+		if (field_plan_failed(&plan)) {
+			return plan;
+		}
+
+		plan.class_var_positions = class_var_positions_of(parameters, default_by_name);
+
+		if (plan.class_var_positions == NULL) {
+			field_plan_clear(&plan);
+		}
+
+		return plan;
 	}
 
 	return plan_from_kept_parameters(parameters, new_names, default_by_name);
@@ -439,14 +493,14 @@ static PyObject * checked_annotations(PyObject * const namespace) {
 static enum result append_parameter(
 	struct parameter_lists const * const parameters,
 	PyObject * const parameter_name,
-	bool const init_var,
+	PyObject * const kind_flag,
 	PyObject * const annotation,
 	PyObject * const metadata
 ) {
 	return (
 		(
 			PyList_Append(parameters->names, parameter_name) >= 0 &&
-			PyList_Append(parameters->init_var_flags, init_var ? Py_True : Py_False) >= 0 &&
+			PyList_Append(parameters->init_var_flags, kind_flag) >= 0 &&
 			PyList_Append(parameters->annotations, annotation) >= 0 &&
 			PyList_Append(parameters->metadata, metadata) >= 0
 		) ? RESULT_OK :
@@ -500,11 +554,66 @@ static enum result append_inherited(
 		return RESULT_ERROR;
 	}
 
+	Py_ssize_t const placeholder_count = (
+		base->struct_class_var_positions != NULL ? PyTuple_GET_SIZE(
+			base->struct_class_var_positions
+		) :
+		0
+	);
+	Py_ssize_t placeholder_index = 0;
 	Py_ssize_t field_index = 0;
 	Py_ssize_t init_var_index = 0;
 
-	for (Py_ssize_t position = 0; position < struct_parameter_count(base); position += 1) {
-		switch (struct_parameter_kind(base, position)) {
+	for (
+		Py_ssize_t entry = 0;
+		entry < struct_parameter_count(base) + placeholder_count;
+		entry += 1
+	) {
+		PyObject * const placeholder = (
+			placeholder_index < placeholder_count ? PyTuple_GET_ITEM(
+				base->struct_class_var_positions,
+				placeholder_index
+			) :
+			NULL
+		);
+
+		Py_ssize_t const placeholder_position = (
+			placeholder != NULL ? PyLong_AsSsize_t(PyTuple_GET_ITEM(placeholder, 0)) :
+			-1
+		);
+
+		if (placeholder_position == -1 && PyErr_Occurred()) {
+			return RESULT_ERROR;
+		}
+
+		if (placeholder_position == entry) {
+			if (
+				(
+					append_parameter(
+						parameters,
+						PyTuple_GET_ITEM(placeholder, 1),
+						Py_None,
+						Py_None,
+						empty_extras
+					) != RESULT_OK
+				) ||
+				(
+					PyDict_SetItem(
+						default_by_name,
+						PyTuple_GET_ITEM(placeholder, 1),
+						PyTuple_GET_ITEM(placeholder, 2)
+					) < 0
+				)
+			) {
+				return RESULT_ERROR;
+			}
+
+			placeholder_index += 1;
+
+			continue;
+		}
+
+		switch (struct_parameter_kind(base, entry - placeholder_index)) {
 			case PARAMETER_FIELD: {
 				PyObject * const field_name = PyTuple_GET_ITEM(
 					base->struct_field_names,
@@ -516,7 +625,7 @@ static enum result append_inherited(
 						append_parameter(
 							parameters,
 							field_name,
-							false,
+							Py_False,
 							PyTuple_GET_ITEM(base->struct_annotations, field_index),
 							PyTuple_GET_ITEM(base->struct_metadata, field_index)
 						) != RESULT_OK
@@ -547,7 +656,7 @@ static enum result append_inherited(
 						append_parameter(
 							parameters,
 							init_var_name,
-							true,
+							Py_True,
 							PyTuple_GET_ITEM(base->struct_init_var_annotations, init_var_index),
 							empty_extras
 						) != RESULT_OK
@@ -857,7 +966,7 @@ static enum result append_declared(
 						append_parameter(
 							parameters,
 							field_name,
-							true,
+							Py_True,
 							annotation,
 							empty_extras
 						) != RESULT_OK
@@ -911,7 +1020,13 @@ static enum result append_declared(
 				return RESULT_ERROR;
 			}
 
-			if (redeclared && remove_parameter(parameters, inherited.position) != RESULT_OK) {
+			if (
+				(
+					redeclared ? remove_parameter(parameters, inherited.position) :
+					append_parameter(parameters, field_name, Py_None, Py_None, empty_extras)
+				) !=
+				RESULT_OK
+			) {
 				return RESULT_ERROR;
 			}
 

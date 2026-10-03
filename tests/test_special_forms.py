@@ -228,6 +228,84 @@ def test_a_class_var_over_an_inherited_field_takes_the_field_away():
         Sub(9, 10)
 
 
+def test_a_name_re_added_after_a_class_var_removed_it_keeps_its_position():
+    @dataclass
+    class StockA:
+        x: int = 1
+        y: int = 2
+
+    @dataclass
+    class StockB(StockA):
+        x: ClassVar[int] = 5
+
+    @dataclass
+    class StockC(StockB):
+        x: int = 7
+
+    class A(Struct):
+        x: int = 1
+        y: int = 2
+
+    class B(A):
+        x: ClassVar[int] = 5
+
+    class C(B):
+        x: int = 7
+
+    assert C._struct_fields_ == tuple(field.name for field in fields(StockC)) == ("x", "y")
+    assert (C(9).x, C(9).y) == (StockC(9).x, StockC(9).y) == (9, 2)
+
+
+def test_a_redeclaration_without_a_value_takes_the_class_var_value_as_its_default():
+    @dataclass
+    class StockA:
+        x: int = 1
+        y: int = 2
+
+    @dataclass
+    class StockB(StockA):
+        x: ClassVar[int] = 5
+
+    @dataclass
+    class StockC(StockB):
+        x: int
+
+    class A(Struct):
+        x: int = 1
+        y: int = 2
+
+    class B(A):
+        x: ClassVar[int] = 5
+
+    class C(B):
+        x: int
+
+    assert (C().x, C().y) == (StockC().x, StockC().y) == (5, 2)
+
+
+def test_a_field_over_an_inherited_class_var_takes_the_class_var_position():
+    @dataclass
+    class StockBase:
+        y: int = 2
+        z: ClassVar[int] = 3
+        w: int = 4
+
+    @dataclass
+    class StockSub(StockBase):
+        z: int = 5
+
+    class Base(Struct):
+        y: int = 2
+        z: ClassVar[int] = 3
+        w: int = 4
+
+    class Sub(Base):
+        z: int = 5
+
+    assert Sub._struct_fields_ == tuple(field.name for field in fields(StockSub)) == ("y", "z", "w")
+    assert (Sub(0, 1).y, Sub(0, 1).z, Sub(0, 1).w) == (0, 1, 4)
+
+
 def test_a_class_var_over_an_inherited_field_is_the_constant_it_was_written_as():
     class Base(Struct):
         x: int = 3
