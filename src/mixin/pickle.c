@@ -6,19 +6,49 @@
 #include "../owned.h"
 #include "../result.h"
 #include "../types.h"
+#include "../meta/meta.h"
+
+static PyObject * pickle_cached_build(enum pickle_cached const kind) {
+	static char const * const names[] = {
+		[PICKLE_REDUCE_EX_NAME] = "__reduce_ex__",
+		[PICKLE_REDUCE_NAME] = "__reduce__",
+		[PICKLE_SETSTATE_NAME] = "__setstate__",
+	};
+
+	return (
+		kind == PICKLE_OBJECT_REDUCE_EX ? PyObject_GetAttrString(
+			(PyObject *) &PyBaseObject_Type,
+			"__reduce_ex__"
+		) :
+		PyUnicode_InternFromString(names[kind])
+	);
+}
+
+enum result pickle_cache_fill(struct salix_state * const state) {
+	for (enum pickle_cached kind = 0; kind < PICKLE_CACHED_COUNT; kind += 1) {
+		Py_XSETREF(state->pickle_cache[kind], pickle_cached_build(kind));
+
+		if (state->pickle_cache[kind] == NULL) {
+			return RESULT_ERROR;
+		}
+	}
+
+	return RESULT_OK;
+}
+
+static PyObject * pickle_cached(PyObject * const self, enum pickle_cached const kind) {
+	return (
+		is_struct(self) ? Py_NewRef(struct_type_of(self)->struct_state->pickle_cache[kind]) :
+		pickle_cached_build(kind)
+	);
+}
 
 struct definition {
 	enum { DEFINITION_MISSING, DEFINITION_FOUND, DEFINITION_ERROR } tag;
 	PyTypeObject * owner;
 };
 
-static struct definition nearest_definition(PyTypeObject * const cls, char const * const name) {
-	PY_OWNED(key, PyUnicode_InternFromString(name));
-
-	if (key == NULL) {
-		return (struct definition){.tag = DEFINITION_ERROR};
-	}
-
+static struct definition nearest_definition(PyTypeObject * const cls, PyObject * const key) {
 	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(cls->tp_mro); i += 1) {
 		PyTypeObject * const entry = (PyTypeObject *) PyTuple_GET_ITEM(cls->tp_mro, i);
 
@@ -47,7 +77,13 @@ static struct definition nearest_definition(PyTypeObject * const cls, char const
 }
 
 static int defined_by_user_code(PyTypeObject * const cls, char const * const name) {
-	struct definition const found = nearest_definition(cls, name);
+	PY_OWNED(key, PyUnicode_InternFromString(name));
+
+	if (key == NULL) {
+		return -1;
+	}
+
+	struct definition const found = nearest_definition(cls, key);
 
 	switch (found.tag) {
 		case DEFINITION_ERROR:
@@ -61,13 +97,34 @@ static int defined_by_user_code(PyTypeObject * const cls, char const * const nam
 	return (found.owner->tp_flags & Py_TPFLAGS_HEAPTYPE) != 0;
 }
 
-int defines_reduce_hooks(PyTypeObject * const cls) {
+static bool foreign_storage_in_mro(PyTypeObject * const cls) {
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(cls->tp_mro); i += 1) {
+		PyTypeObject * const entry = (PyTypeObject *) PyTuple_GET_ITEM(cls->tp_mro, i);
+
+		if (
+			entry != &PyBaseObject_Type &&
+			entry != &StructMixin_Type &&
+			(entry->tp_flags & Py_TPFLAGS_HEAPTYPE) == 0 &&
+			!PyType_FastSubclass(entry, Py_TPFLAGS_BASE_EXC_SUBCLASS)
+		) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+int copies_through_reduce(PyTypeObject * const cls) {
 	static char const * const hooks[] = {
 		"__reduce_ex__",
 		"__reduce__",
 		"__getstate__",
 		"__setstate__",
 	};
+
+	if (foreign_storage_in_mro(cls)) {
+		return 1;
+	}
 
 	for (size_t i = 0; i < sizeof hooks / sizeof hooks[0]; i += 1) {
 		int const defined = defined_by_user_code(cls, hooks[i]);
@@ -80,8 +137,14 @@ int defines_reduce_hooks(PyTypeObject * const cls) {
 	return 0;
 }
 
-static int overrides_reduce(PyTypeObject * const cls) {
-	struct definition const found = nearest_definition(cls, "__reduce__");
+static int overrides_reduce(PyObject * const self) {
+	PY_OWNED(key, pickle_cached(self, PICKLE_REDUCE_NAME));
+
+	if (key == NULL) {
+		return -1;
+	}
+
+	struct definition const found = nearest_definition(Py_TYPE(self), key);
 
 	switch (found.tag) {
 		case DEFINITION_ERROR:
@@ -96,9 +159,46 @@ static int overrides_reduce(PyTypeObject * const cls) {
 }
 
 static PyObject * object_reduce_ex(PyObject * const self, PyObject * const protocol) {
-	PY_OWNED(method, PyObject_GetAttrString((PyObject *) &PyBaseObject_Type, "__reduce_ex__"));
+	PY_OWNED(method, pickle_cached(self, PICKLE_OBJECT_REDUCE_EX));
+	PyObject * const arguments[] = {self, protocol};
 
-	return method != NULL ? PyObject_CallFunctionObjArgs(method, self, protocol, NULL) : NULL;
+	return method != NULL ? PyObject_Vectorcall(method, arguments, 2, NULL) : NULL;
+}
+
+static PyObject * reduce_fallback(PyObject * const self) {
+	int const overridden = overrides_reduce(self);
+
+	if (overridden < 0) {
+		return NULL;
+	}
+
+	if (overridden == 0 && !foreign_storage_in_mro(Py_TYPE(self))) {
+		return NULL;
+	}
+
+	PY_OWNED(reductor, optional_attribute(self, "__reduce__"));
+
+	return reductor != NULL && reductor != Py_None ? PyObject_CallNoArgs(reductor) : NULL;
+}
+
+PyObject * copy_reduction(PyObject * const self, PyObject * const copier) {
+	if (copier != NULL) {
+		return PyObject_CallOneArg(copier, self);
+	}
+
+	PY_OWNED(reductor, optional_attribute(self, "__reduce_ex__"));
+
+	if (reductor == NULL && PyErr_Occurred()) {
+		return NULL;
+	}
+
+	if (reductor == NULL || reductor == Py_None) {
+		return reduce_fallback(self);
+	}
+
+	PY_OWNED(protocol, PyLong_FromLong(4));
+
+	return protocol != NULL ? PyObject_CallOneArg(reductor, protocol) : NULL;
 }
 
 PyObject * Struct_reduce_ex(PyObject * const self, PyObject * const protocol) {
@@ -108,7 +208,7 @@ PyObject * Struct_reduce_ex(PyObject * const self, PyObject * const protocol) {
 		return NULL;
 	}
 
-	PY_OWNED(name, PyUnicode_InternFromString("__reduce_ex__"));
+	PY_OWNED(name, pickle_cached(self, PICKLE_REDUCE_EX_NAME));
 
 	if (name == NULL) {
 		return NULL;
@@ -124,7 +224,7 @@ PyObject * Struct_reduce_ex(PyObject * const self, PyObject * const protocol) {
 		return PyObject_CallOneArg(deferred, protocol);
 	}
 
-	int const overridden = overrides_reduce(Py_TYPE(self));
+	int const overridden = overrides_reduce(self);
 
 	if (overridden < 0) {
 		return NULL;
@@ -208,8 +308,8 @@ static PyObject * member_descriptor(PyTypeObject * const cls, PyObject * const n
 			return NULL;
 		}
 
-		if (value != NULL) {
-			return PyObject_TypeCheck(value, &PyMemberDescr_Type) ? py_move(&value) : NULL;
+		if (value != NULL && PyObject_TypeCheck(value, &PyMemberDescr_Type)) {
+			return py_move(&value);
 		}
 	}
 
@@ -333,7 +433,7 @@ static enum result restore_impostor(PyObject * const self, struct state_parts co
 }
 
 PyObject * Struct_setstate(PyObject * const self, PyObject * const state) {
-	PY_OWNED(name, PyUnicode_InternFromString("__setstate__"));
+	PY_OWNED(name, pickle_cached(self, PICKLE_SETSTATE_NAME));
 
 	if (name == NULL) {
 		return NULL;

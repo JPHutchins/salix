@@ -356,3 +356,114 @@ def test_copy_honors_a_hook_assigned_after_the_class_statement():
 
     assert round_trip(Late(5)).x == 105
     assert copy.copy(Late(5)).x == 105
+
+
+class DictCoBase(dict, Struct, frozen=False):
+    a: int = 0
+
+
+class SetCoBase(set, Struct, frozen=False):
+    a: int = 0
+
+
+class ListCoBase(list, Struct, frozen=False):
+    a: int = 0
+
+
+class OrderedCoBase(OrderedDict, Struct, frozen=False):
+    a: int = 0
+
+
+def filled_builtin_co_bases() -> list[object]:
+    as_dict = DictCoBase()
+    as_dict["k"] = 1
+    as_set = SetCoBase()
+    as_set.add(1)
+    as_list = ListCoBase()
+    as_list.append(1)
+    as_ordered = OrderedCoBase()
+    as_ordered["k"] = 1
+
+    for value in (as_dict, as_set, as_list, as_ordered):
+        value.a = 3
+
+    return [as_dict, as_set, as_list, as_ordered]
+
+
+@pytest.mark.parametrize("duplicate", [copy.copy, copy.deepcopy, round_trip], ids=["copy", "deepcopy", "pickle"])
+def test_a_builtin_co_base_keeps_its_items_through_every_duplication(duplicate):
+    for original in filled_builtin_co_bases():
+        duplicated = duplicate(original)
+
+        assert type(duplicated) is type(original)
+        assert sorted(duplicated) == sorted(original)
+
+
+@pytest.mark.skipif(
+    sys.version_info < (3, 11), reason="set and OrderedDict reduce without slot state before 3.11"
+)
+@pytest.mark.parametrize("duplicate", [copy.copy, copy.deepcopy, round_trip], ids=["copy", "deepcopy", "pickle"])
+def test_a_builtin_co_base_keeps_its_field_through_every_duplication(duplicate):
+    for original in filled_builtin_co_bases():
+        assert duplicate(original).a == 3
+
+
+class NoReduceExWithReduce(Struct, frozen=False):
+    x: int
+    __reduce_ex__ = None
+
+    def __reduce__(self) -> tuple[type, tuple[str]]:
+        return (str, ("via reduce",))
+
+
+class NoReduceExOverDict(dict, Struct, frozen=False):
+    a: int = 0
+    __reduce_ex__ = None
+
+
+class HiddenReduceEx(Struct, frozen=False):
+    x: object
+
+    def __getstate__(self) -> tuple[None, dict[str, object]]:
+        return (None, {"x": self.x})
+
+    def __getattribute__(self, name: str) -> object:
+        if name == "__reduce_ex__":
+            raise AttributeError(name)
+
+        return object.__getattribute__(self, name)
+
+
+def test_a_none_reduce_ex_falls_back_to_a_body_reduce_as_copy_dot_py_does():
+    assert copy.copy(NoReduceExWithReduce(1)) == "via reduce"
+    assert copy.deepcopy(NoReduceExWithReduce(1)) == "via reduce"
+
+
+def test_a_none_reduce_ex_over_builtin_storage_falls_back_to_reduce_not_the_struct_s_copy():
+    with pytest.raises(TypeError, match="cannot be pickled"):
+        copy.copy(NoReduceExOverDict())
+
+
+def test_a_reduce_ex_that_raises_attribute_error_counts_as_absent():
+    original = HiddenReduceEx([1])
+
+    assert copy.copy(original).x is original.x
+
+
+class SlottedExtra:
+    __slots__ = ("extra",)
+
+
+class ExtraAttribute:
+    extra = 5
+
+
+class ShadowedSlot(Struct, ExtraAttribute, SlottedExtra, frozen=False):
+    y: int = 0
+
+
+def test_a_co_base_slot_behind_a_plain_class_attribute_restores():
+    shadowed = ShadowedSlot()
+    shadowed.extra = 9
+
+    assert round_trip(shadowed).extra == 9

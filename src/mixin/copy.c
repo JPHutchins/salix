@@ -118,22 +118,6 @@ PyObject * co_base_override(PyObject * const self, PyObject * const name) {
 	return NULL;
 }
 
-PyObject * copy_reduction(PyObject * const self, PyObject * const copier) {
-	if (copier != NULL) {
-		return PyObject_CallOneArg(copier, self);
-	}
-
-	PY_OWNED(reductor, PyObject_GetAttrString(self, "__reduce_ex__"));
-
-	if (reductor == NULL || reductor == Py_None) {
-		return NULL;
-	}
-
-	PY_OWNED(protocol, PyLong_FromLong(4));
-
-	return protocol != NULL ? PyObject_CallOneArg(reductor, protocol) : NULL;
-}
-
 PyObject * copy_dispatch_prologue(
 	PyObject * const self,
 	char const * const name,
@@ -353,7 +337,7 @@ PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 
 	PY_MOVABLE(
 		reduced,
-		copier != NULL || type->struct_reduce_hooked ? copy_reduction(self, copier) : NULL
+		copier != NULL || type->struct_copies_through_reduce ? copy_reduction(self, copier) : NULL
 	);
 
 	if (reduced == NULL && PyErr_Occurred()) {

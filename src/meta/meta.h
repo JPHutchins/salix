@@ -73,9 +73,18 @@ struct options inherited_options(StructType const * behaviour, struct base_facts
 bool any_struct_base_is_mutable(PyObject * bases);
 enum { SETTLE_BINDING_COUNT = 7 };
 
+enum pickle_cached {
+	PICKLE_REDUCE_EX_NAME,
+	PICKLE_REDUCE_NAME,
+	PICKLE_SETSTATE_NAME,
+	PICKLE_OBJECT_REDUCE_EX,
+	PICKLE_CACHED_COUNT,
+};
+
 struct salix_state {
 	PyObject * mixin_bindings[SETTLE_BINDING_COUNT];
 	PyObject * object_bindings[SETTLE_BINDING_COUNT];
+	PyObject * pickle_cache[PICKLE_CACHED_COUNT];
 	PyObject * handoff_attempt;
 	PyObject * handoff_declined;
 	PyObject * handoff_new;

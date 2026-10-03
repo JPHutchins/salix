@@ -178,13 +178,13 @@ enum result install_constructor(
 
 	struct_class->struct_cannot_create = cannot_create;
 
-	int const reduce_hooked = defines_reduce_hooks(&struct_class->heap_type.ht_type);
+	int const through_reduce = copies_through_reduce(&struct_class->heap_type.ht_type);
 
-	if (reduce_hooked < 0) {
+	if (through_reduce < 0) {
 		return RESULT_ERROR;
 	}
 
-	struct_class->struct_reduce_hooked = reduce_hooked == 1;
+	struct_class->struct_copies_through_reduce = through_reduce == 1;
 
 	if (own_init) {
 		initproc captured_init = struct_class->heap_type.ht_type.tp_init;

@@ -12,6 +12,7 @@
 #include "meta/settle/settle.h"
 #include "meta.h"
 #include "mixin.h"
+#include "mixin/mixin.h"
 #include "owned.h"
 #include "result.h"
 #include "types.h"
@@ -82,6 +83,10 @@ static void struct_free(void * const module) {
 	for (Py_ssize_t i = 0; i < SETTLE_BINDING_COUNT; ++i) {
 		Py_CLEAR(state->mixin_bindings[i]);
 		Py_CLEAR(state->object_bindings[i]);
+	}
+
+	for (Py_ssize_t i = 0; i < PICKLE_CACHED_COUNT; ++i) {
+		Py_CLEAR(state->pickle_cache[i]);
 	}
 
 	Py_CLEAR(state->frozen_instance_error);
@@ -217,7 +222,11 @@ static int struct_exec(PyObject * const module) {
 
 	struct salix_state * const state = (struct salix_state *) PyModule_GetState(module);
 
-	if (state == NULL || settle_cache_fill(state) != RESULT_OK) {
+	if (
+		state == NULL ||
+		settle_cache_fill(state) != RESULT_OK ||
+		pickle_cache_fill(state) != RESULT_OK
+	) {
 		return RESULT_ERROR;
 	}
 
