@@ -55,6 +55,11 @@ enum result bind_parameters(
 	PyObject * keyword_names
 );
 enum result fill_init_var_defaults(StructType const * type, PyObject * post_init_arguments);
+enum result refuse_missing_parameters(
+	StructType const * type,
+	PyObject * self,
+	PyObject * post_init_arguments
+);
 
 int change_names_touch(
 	StructType * type,

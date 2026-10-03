@@ -64,13 +64,17 @@ enum result refuse_unreachable_init_vars(
 			base != NULL &&
 			is_struct_class(candidate) &&
 			(StructType const *) candidate != base &&
-			((StructType const *) candidate)->struct_init_var_count > 0 &&
+			struct_parameter_count((StructType const *) candidate) > 0 &&
+			(
+				((StructType const *) candidate)->struct_init_var_count > 0 ||
+				base->struct_init_var_count > 0
+			) &&
 			!PyType_IsSubtype((PyTypeObject *) base, (PyTypeObject *) candidate)
 		) {
 			PyErr_Format(
 				PyExc_TypeError,
-				"the InitVars of %.200s would be dropped: a struct inherits its fields "
-				"and InitVars from one struct base, here %.200s",
+				"the fields and InitVars of %.200s would be dropped: a struct inherits "
+				"its fields and InitVars from one struct base, here %.200s",
 				((PyTypeObject *) candidate)->tp_name,
 				struct_type_name(base)
 			);

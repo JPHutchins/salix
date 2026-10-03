@@ -68,6 +68,21 @@ def test_a_missing_init_var_is_a_missing_argument() -> None:
         Seeded(1)
 
 
+def test_the_first_missing_argument_is_named_in_parameter_order() -> None:
+    class FlagFirst(Struct):
+        flag: InitVar[int]
+        a: int
+
+    with pytest.raises(TypeError, match="missing required argument 'flag'"):
+        FlagFirst()
+
+    with pytest.raises(TypeError, match="missing required argument 'flag'"):
+        salix.from_mapping(FlagFirst, {})
+
+    with pytest.raises(TypeError, match="missing required argument 'a'"):
+        FlagFirst(flag=1)
+
+
 @pytest.mark.parametrize(
     ("arguments", "keywords", "message"),
     [
@@ -309,6 +324,50 @@ class TestInheritance:
 
             class Combined(First, Second):
                 pass
+
+    def test_a_fielded_base_beside_an_init_var_base_is_refused_in_either_order(self) -> None:
+        class Seeds(Struct):
+            seed: InitVar[int] = 1
+
+        class Fielded(Struct):
+            field: int = 5
+
+        with pytest.raises(TypeError, match=r"fields and InitVars of .*Fielded would be dropped"):
+
+            class SeedsFirst(Seeds, Fielded):
+                pass
+
+        with pytest.raises(TypeError, match=r"fields and InitVars of .*Seeds would be dropped"):
+
+            class FieldedFirst(Fielded, Seeds):
+                pass
+
+    def test_a_delegate_that_drops_a_field_beside_an_init_var_is_refused(self) -> None:
+        class FieldDropping(META):
+            def __new__(
+                metacls: type,
+                name: str,
+                bases: tuple[type, ...],
+                namespace: dict[str, object],
+                **keywords: object,
+            ) -> type:
+                annotations = namespace.get("__annotations__", {})
+                kept = {key: value for key, value in annotations.items() if key != "b"}
+                slots = tuple(slot for slot in namespace.get("__slots__", ()) if slot != "b")
+
+                return super().__new__(
+                    metacls,
+                    name,
+                    bases,
+                    {**namespace, "__annotations__": kept, "__slots__": slots},
+                    **keywords,
+                )
+
+        class Base(Struct, metaclass=FieldDropping):
+            a: int
+
+        with pytest.raises(TypeError, match="did not plan"):
+            META("Built", (Base,), {"__annotations__": {"b": int, "flag": InitVar[int]}})
 
     def test_the_handoff_to_a_derived_metatype_keeps_the_init_vars(self) -> None:
         class Delegating(META):

@@ -39,6 +39,7 @@ static PyObject * construct_with_init_vars(
 					keyword_names
 				) == RESULT_OK
 			) &&
+			refuse_missing_parameters(type, self, post_init_arguments) == RESULT_OK &&
 			fill_defaults(type, self, true) == RESULT_OK &&
 			fill_init_var_defaults(type, post_init_arguments) == RESULT_OK &&
 			run_post_init_with(type, post_init_arguments) == RESULT_OK
@@ -95,6 +96,7 @@ static PyObject * from_mapping_with_init_vars(
 
 	return (
 		(
+			refuse_missing_parameters(type, built, post_init_arguments) == RESULT_OK &&
 			fill_defaults(type, built, true) == RESULT_OK &&
 			fill_init_var_defaults(type, post_init_arguments) == RESULT_OK &&
 			run_post_init_with(type, post_init_arguments) == RESULT_OK

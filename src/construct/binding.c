@@ -209,6 +209,61 @@ enum result bind_parameters(
 	return RESULT_OK;
 }
 
+static enum result refuse_missing(StructType const * const type, PyObject * const name) {
+	PyErr_Format(
+		PyExc_TypeError,
+		"%.200s() missing required argument '%U'",
+		struct_type_name(type),
+		name
+	);
+
+	return RESULT_ERROR;
+}
+
+enum result refuse_missing_parameters(
+	StructType const * const type,
+	PyObject * const self,
+	PyObject * const post_init_arguments
+) {
+	Py_ssize_t field_index = 0;
+	Py_ssize_t init_var_index = 0;
+
+	for (Py_ssize_t position = 0; position < struct_parameter_count(type); position += 1) {
+		switch (struct_parameter_kind(type, position)) {
+			case PARAMETER_FIELD:
+				if (
+					field_index < struct_required_count(type) &&
+					*struct_slot(type, self, field_index) == NULL
+				) {
+					return refuse_missing(
+						type,
+						PyTuple_GET_ITEM(type->struct_field_names, field_index)
+					);
+				}
+
+				field_index += 1;
+
+				break;
+			case PARAMETER_INIT_VAR:
+				if (
+					init_var_index < struct_required_init_var_count(type) &&
+					PyTuple_GET_ITEM(post_init_arguments, 1 + init_var_index) == NULL
+				) {
+					return refuse_missing(
+						type,
+						PyTuple_GET_ITEM(type->struct_init_var_names, init_var_index)
+					);
+				}
+
+				init_var_index += 1;
+
+				break;
+		}
+	}
+
+	return RESULT_OK;
+}
+
 enum result fill_init_var_defaults(
 	StructType const * const type,
 	PyObject * const post_init_arguments

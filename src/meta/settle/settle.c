@@ -179,6 +179,13 @@ static int same_parameters(
 		return same_init_vars;
 	}
 
+	if (
+		PyTuple_GET_SIZE(plan->init_var_flags) > 0 &&
+		PyTuple_GET_SIZE(plan->init_var_flags) != struct_parameter_count(struct_class)
+	) {
+		return 0;
+	}
+
 	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(plan->init_var_flags); i += 1) {
 		if (
 			(PyTuple_GET_ITEM(plan->init_var_flags, i) == Py_True) !=
