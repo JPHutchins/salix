@@ -179,6 +179,19 @@ static int same_parameters(
 		return same_init_vars;
 	}
 
+	int const same_declared = (
+		struct_class->struct_declared_names != NULL ? PyObject_RichCompareBool(
+			struct_class->struct_declared_names,
+			plan->declared_names,
+			Py_EQ
+		) :
+		0
+	);
+
+	if (same_declared != 1) {
+		return same_declared;
+	}
+
 	if (
 		PyTuple_GET_SIZE(plan->init_var_flags) > 0 &&
 		PyTuple_GET_SIZE(plan->init_var_flags) != struct_parameter_count(struct_class)

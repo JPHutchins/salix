@@ -2,7 +2,7 @@ import copy
 import inspect
 import sys
 import types
-from dataclasses import InitVar, dataclass
+from dataclasses import InitVar, dataclass, field
 from typing import ClassVar
 
 import pytest
@@ -371,7 +371,7 @@ class TestInheritance:
         class Second(Struct):
             second: InitVar[int]
 
-        with pytest.raises(TypeError, match=r"InitVars of .*Second would be dropped"):
+        with pytest.raises(TypeError, match=r"Second declares parameters on a path First does not inherit"):
 
             class Combined(First, Second):
                 pass
@@ -383,12 +383,12 @@ class TestInheritance:
         class Fielded(Struct):
             field: int = 5
 
-        with pytest.raises(TypeError, match=r"fields and InitVars of .*Fielded would be dropped"):
+        with pytest.raises(TypeError, match=r"Fielded declares parameters on a path Seeds does not inherit"):
 
             class SeedsFirst(Seeds, Fielded):
                 pass
 
-        with pytest.raises(TypeError, match=r"fields and InitVars of .*Seeds would be dropped"):
+        with pytest.raises(TypeError, match=r"Seeds declares parameters on a path Fielded does not inherit"):
 
             class FieldedFirst(Fielded, Seeds):
                 pass
@@ -433,6 +433,22 @@ class TestInheritance:
         assert seen == [5]
 
     def test_a_diamond_over_a_mutable_default_builds(self) -> None:
+        @dataclass
+        class StockCommon:
+            items: list[int] = field(default_factory=lambda: [1])
+
+        @dataclass
+        class StockSeeded(StockCommon):
+            seed: InitVar[int] = 1
+
+        @dataclass
+        class StockPlain(StockCommon):
+            pass
+
+        @dataclass
+        class StockCombined(StockSeeded, StockPlain):
+            pass
+
         class Common(Struct):
             items: list[int] = [1]  # noqa: RUF012
 
@@ -445,7 +461,231 @@ class TestInheritance:
         class Combined(Seeded, Plain):
             pass
 
-        assert Combined().items == [1]
+        assert list(inspect.signature(Combined).parameters) == list(
+            inspect.signature(StockCombined).parameters
+        )
+        assert Combined().items == StockCombined().items
+        assert Combined().items is not Combined().items
+
+    def test_a_diamond_whose_second_base_adds_only_a_class_variable_builds(self) -> None:
+        @dataclass
+        class StockCommon:
+            a: int = 0
+
+        @dataclass
+        class StockSeeded(StockCommon):
+            seed: InitVar[int] = 1
+
+        @dataclass
+        class StockTagged(StockCommon):
+            tag: ClassVar[str] = "tagged"
+
+        @dataclass
+        class StockCombined(StockTagged, StockSeeded):
+            pass
+
+        class Common(Struct):
+            a: int = 0
+
+        class Seeded(Common):
+            seed: InitVar[int] = 1
+
+        class Tagged(Common):
+            tag: ClassVar[str] = "tagged"
+
+        class Combined(Tagged, Seeded):
+            pass
+
+        assert parameters_of(Combined) == parameters_of(StockCombined)
+        assert Combined._struct_fields_ == ("a",)
+        assert Combined.tag == StockCombined.tag
+
+    def test_a_diamond_whose_second_base_takes_a_field_away_is_refused(self) -> None:
+        @dataclass
+        class StockCommon:
+            a: int = 0
+            w: int = 0
+
+        @dataclass
+        class StockSeeded(StockCommon):
+            seed: InitVar[int] = 1
+
+        @dataclass
+        class StockRemoving(StockCommon):
+            a: ClassVar[int] = 5
+
+        @dataclass
+        class StockCombined(StockRemoving, StockSeeded):
+            pass
+
+        assert list(inspect.signature(StockCombined).parameters) == ["w", "seed"]
+
+        class Common(Struct):
+            a: int = 0
+            w: int = 0
+
+        class Seeded(Common):
+            seed: InitVar[int] = 1
+
+        class Removing(Common):
+            a: ClassVar[int] = 5
+
+        with pytest.raises(TypeError, match=r"Removing declares parameters on a path Seeded does not inherit"):
+
+            class Combined(Removing, Seeded):
+                pass
+
+    def test_a_diamond_whose_second_base_redeclares_a_field_identically_is_refused(self) -> None:
+        class Common(Struct):
+            a: int = 0
+
+        class Seeded(Common):
+            seed: InitVar[int] = 1
+
+        class Redeclaring(Common):
+            a: int = 0
+
+        with pytest.raises(TypeError, match=r"Redeclaring declares parameters on a path Seeded does not inherit"):
+
+            class Combined(Seeded, Redeclaring):
+                pass
+
+    def test_the_refusal_names_the_ancestor_that_declares(self) -> None:
+        class Other(Struct):
+            y: InitVar[int] = 1
+
+        class Sub(Other):
+            pass
+
+        class Carrier(Struct):
+            x: int = 0
+
+        with pytest.raises(TypeError, match=r"Other declares parameters on a path Carrier does not inherit"):
+
+            class Combined(Carrier, Sub):
+                pass
+
+    @pytest.mark.parametrize("removing_first", [True, False], ids=["removing first", "removing second"])
+    def test_a_diamond_without_init_vars_whose_base_removes_a_field_is_refused(
+        self, removing_first: bool
+    ) -> None:
+        class Common(Struct):
+            a: int = 0
+            w: int = 0
+
+        class Removing(Common):
+            a: ClassVar[int] = 5
+
+        class Carrying(Common):
+            p: int = 1
+
+        bases = (Removing, Carrying) if removing_first else (Carrying, Removing)
+
+        with pytest.raises(TypeError, match=r"Removing declares parameters on a path Carrying does not inherit"):
+            META("Combined", bases, {})
+
+    def test_a_diamond_without_init_vars_whose_first_base_redefaults_a_field_is_refused(self) -> None:
+        @dataclass
+        class StockCommon:
+            a: int = 0
+
+        @dataclass
+        class StockRedefaulting(StockCommon):
+            a: int = 5
+
+        @dataclass
+        class StockCarrying(StockCommon):
+            p: int = 1
+
+        @dataclass
+        class StockCombined(StockRedefaulting, StockCarrying):
+            pass
+
+        assert StockCombined().a == 5
+
+        class Common(Struct):
+            a: int = 0
+
+        class Redefaulting(Common):
+            a: int = 5
+
+        class Carrying(Common):
+            p: int = 1
+
+        with pytest.raises(TypeError, match=r"Redefaulting declares parameters on a path Carrying does not inherit"):
+
+            class Combined(Redefaulting, Carrying):
+                pass
+
+    def test_a_diamond_whose_other_base_has_no_parameters_left_is_refused(self) -> None:
+        @dataclass
+        class StockCommon:
+            a: int = 0
+
+        @dataclass
+        class StockRemoving(StockCommon):
+            a: ClassVar[int] = 1
+
+        @dataclass
+        class StockSeeded(StockCommon):
+            seed: InitVar[int] = 0
+
+        @dataclass
+        class StockCombined(StockRemoving, StockSeeded):
+            pass
+
+        assert list(inspect.signature(StockCombined).parameters) == ["seed"]
+
+        class Common(Struct):
+            a: int = 0
+
+        class Removing(Common):
+            a: ClassVar[int] = 1
+
+        class Seeded(Common):
+            seed: InitVar[int] = 0
+
+        with pytest.raises(TypeError, match=r"Removing declares parameters on a path Seeded does not inherit"):
+
+            class Combined(Removing, Seeded):
+                pass
+
+    def test_a_diamond_whose_chosen_base_redeclares_a_field_the_other_base_carries_is_refused(
+        self,
+    ) -> None:
+        @dataclass
+        class StockCommon:
+            a: int = 0
+
+        @dataclass
+        class StockSeeded(StockCommon):
+            a: int = 5
+            seed: InitVar[int] = 1
+
+        @dataclass
+        class StockPlain(StockCommon):
+            pass
+
+        @dataclass
+        class StockCombined(StockPlain, StockSeeded):
+            pass
+
+        assert StockCombined().a == 0
+
+        class Common(Struct):
+            a: int = 0
+
+        class Seeded(Common):
+            a: int = 5
+            seed: InitVar[int] = 1
+
+        class Plain(Common):
+            pass
+
+        with pytest.raises(TypeError, match=r"Seeded declares parameters on a path Plain does not inherit"):
+
+            class Combined(Plain, Seeded):
+                pass
 
     def test_a_diamond_whose_chosen_base_takes_a_parameter_away_is_refused(self) -> None:
         class Common(Struct):
@@ -458,7 +698,7 @@ class TestInheritance:
         class Plain(Common):
             pass
 
-        with pytest.raises(TypeError, match=r"InitVars of .*Plain would be dropped"):
+        with pytest.raises(TypeError, match=r"Seeded declares parameters on a path Plain does not inherit"):
 
             class Combined(Seeded, Plain):
                 pass
@@ -473,7 +713,7 @@ class TestInheritance:
         class Reannotating(Common):
             a: float = 0
 
-        with pytest.raises(TypeError, match=r"InitVars of .*Reannotating would be dropped"):
+        with pytest.raises(TypeError, match=r"Reannotating declares parameters on a path Seeded does not inherit"):
 
             class Combined(Seeded, Reannotating):
                 pass
@@ -488,7 +728,7 @@ class TestInheritance:
         class Redefaulting(Common):
             a: int = 5
 
-        with pytest.raises(TypeError, match=r"InitVars of .*Redefaulting would be dropped"):
+        with pytest.raises(TypeError, match=r"Redefaulting declares parameters on a path Seeded does not inherit"):
 
             class Combined(Seeded, Redefaulting):
                 pass
@@ -538,6 +778,32 @@ class TestInheritance:
 
         assert type(Built) is Delegating
         assert Built(1, 2).a == 3
+
+    def test_a_delegate_that_drops_a_class_variable_annotation_is_refused(self) -> None:
+        class ClassVariableDropping(META):
+            def __new__(
+                metacls: type,
+                name: str,
+                bases: tuple[type, ...],
+                namespace: dict[str, object],
+                **keywords: object,
+            ) -> type:
+                annotations = namespace.get("__annotations__", {})
+                kept = {key: value for key, value in annotations.items() if key != "tag"}
+
+                return super().__new__(
+                    metacls, name, bases, {**namespace, "__annotations__": kept}, **keywords
+                )
+
+        class Base(Struct, metaclass=ClassVariableDropping):
+            a: int
+
+        with pytest.raises(TypeError, match="did not plan"):
+            META(
+                "Built",
+                (Base,),
+                {"__annotations__": {"tag": ClassVar[int], "flag": InitVar[int]}, "tag": 1},
+            )
 
     def test_a_delegate_that_drops_an_init_var_is_refused(self) -> None:
         class Dropping(META):

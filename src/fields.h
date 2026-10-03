@@ -28,5 +28,5 @@ extern char const * const reserved_metadata_names[];
 char const * reserved_metadata_name_of(PyObject * name);
 
 static inline bool field_plan_failed(struct field_plan const * const plan) {
-	return plan->all_names == NULL;
+	return plan->all_names == NULL || plan->declared_names == NULL;
 }
