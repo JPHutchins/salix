@@ -2,6 +2,7 @@
 #include <stdbool.h>
 
 #include "../../construct.h"
+#include "../../construct/construct.h"
 #include "../../fields.h"
 #include "../meta.h"
 #include "../../options.h"
@@ -13,8 +14,8 @@
 static Py_ssize_t * resolve_slot_offsets(
 	StructType * struct_class,
 	StructType const * base,
-	PyObject * new_names,
-	Py_ssize_t field_count
+	PyObject * field_names,
+	PyObject * new_names
 );
 static Py_ssize_t * resolve_member_offsets(
 	StructType * struct_class,
@@ -38,7 +39,7 @@ enum result install_fields(
 
 	Py_ssize_t const field_count = PyTuple_GET_SIZE(field_names);
 	Py_ssize_t * const offsets =
-		resolve_slot_offsets(struct_class, base, plan->new_names, field_count);
+		resolve_slot_offsets(struct_class, base, field_names, plan->new_names);
 
 	if (offsets == NULL) {
 		return RESULT_ERROR;
@@ -265,12 +266,37 @@ enum result install_post_init(StructType * const struct_class) {
 	return RESULT_OK;
 }
 
+static struct member_lookup inherited_member(
+	StructType const * const base,
+	PyObject * const field_name
+) {
+	struct field_lookup const found = (
+		base != NULL ? find_field(base, field_name) :
+		(struct field_lookup){.tag = FIELD_LOOKUP_MISSING}
+	);
+
+	switch (found.tag) {
+		case FIELD_LOOKUP_ERROR:
+			return (struct member_lookup){.tag = MEMBER_LOOKUP_ERROR};
+		case FIELD_LOOKUP_MISSING:
+			return (struct member_lookup){.tag = MEMBER_LOOKUP_MISSING};
+		case FIELD_LOOKUP_FOUND:
+			break;
+	}
+
+	return (struct member_lookup){
+		.tag = MEMBER_LOOKUP_FOUND,
+		.slot_offset = base->struct_slot_offsets[found.index],
+	};
+}
+
 static Py_ssize_t * resolve_slot_offsets(
 	StructType * const struct_class,
 	StructType const * const base,
-	PyObject * const new_names,
-	Py_ssize_t const field_count
+	PyObject * const field_names,
+	PyObject * const new_names
 ) {
+	Py_ssize_t const field_count = PyTuple_GET_SIZE(field_names);
 	Py_ssize_t * const offsets = PyMem_New(Py_ssize_t, field_count > 0 ? field_count : 1);
 
 	if (offsets == NULL) {
@@ -279,18 +305,23 @@ static Py_ssize_t * resolve_slot_offsets(
 		return NULL;
 	}
 
-	Py_ssize_t const inherited_count = base != NULL ? base->struct_field_count : 0;
-
-	for (Py_ssize_t i = 0; i < inherited_count; ++i) {
-		offsets[i] = base->struct_slot_offsets[i];
-	}
-
 	PyMemberDef const * const members = struct_heap_type_members(struct_class);
 	Py_ssize_t const member_count = Py_SIZE(struct_class);
 
-	for (Py_ssize_t i = 0; i < PyList_GET_SIZE(new_names); ++i) {
-		PyObject * const field_name = PyList_GET_ITEM(new_names, i);
-		struct member_lookup const found = find_member(members, member_count, field_name);
+	for (Py_ssize_t i = 0; i < field_count; i += 1) {
+		PyObject * const field_name = PyTuple_GET_ITEM(field_names, i);
+		int const declared_here = PySequence_Contains(new_names, field_name);
+
+		if (declared_here < 0) {
+			PyMem_Free(offsets);
+
+			return NULL;
+		}
+
+		struct member_lookup const found = (
+			declared_here == 1 ? find_member(members, member_count, field_name) :
+			inherited_member(base, field_name)
+		);
 
 		switch (found.tag) {
 			case MEMBER_LOOKUP_ERROR:
@@ -302,7 +333,7 @@ static Py_ssize_t * resolve_slot_offsets(
 
 				return NULL;
 			case MEMBER_LOOKUP_FOUND:
-				offsets[inherited_count + i] = found.slot_offset;
+				offsets[i] = found.slot_offset;
 		}
 	}
 
