@@ -266,7 +266,26 @@ static enum result refuse_misordered_parameters(
 	return RESULT_OK;
 }
 
-static struct field_plan plan_from_parameters(
+static PyObject * without_removed(PyObject * const values, PyObject * const init_var_flags) {
+	PY_MOVABLE(kept, PyList_New(0));
+
+	if (kept == NULL) {
+		return NULL;
+	}
+
+	for (Py_ssize_t i = 0; i < PyList_GET_SIZE(values); i += 1) {
+		if (
+			PyList_GET_ITEM(init_var_flags, i) != Py_None &&
+			PyList_Append(kept, PyList_GET_ITEM(values, i)) < 0
+		) {
+			return NULL;
+		}
+	}
+
+	return py_move(&kept);
+}
+
+static struct field_plan plan_from_kept_parameters(
 	struct parameter_lists const * const parameters,
 	PyObject * const new_names,
 	PyObject * const default_by_name
@@ -342,6 +361,53 @@ static struct field_plan plan_from_parameters(
 	plan.new_names = Py_NewRef(new_names);
 
 	return plan;
+}
+
+static struct field_plan plan_from_parameters(
+	struct parameter_lists const * const parameters,
+	PyObject * const new_names,
+	PyObject * const default_by_name
+) {
+	int const has_removed = PySequence_Contains(parameters->init_var_flags, Py_None);
+
+	if (has_removed < 0) {
+		return (struct field_plan){0};
+	}
+
+	if (has_removed == 1) {
+		PY_OWNED(kept_names, without_removed(parameters->names, parameters->init_var_flags));
+		PY_OWNED(
+			kept_annotations,
+			without_removed(parameters->annotations, parameters->init_var_flags)
+		);
+		PY_OWNED(kept_metadata, without_removed(parameters->metadata, parameters->init_var_flags));
+		PY_OWNED(
+			kept_flags,
+			without_removed(parameters->init_var_flags, parameters->init_var_flags)
+		);
+
+		if (
+			kept_names == NULL ||
+			kept_annotations == NULL ||
+			kept_metadata == NULL ||
+			kept_flags == NULL
+		) {
+			return (struct field_plan){0};
+		}
+
+		return plan_from_kept_parameters(
+			&(struct parameter_lists){
+				.names = kept_names,
+				.init_var_flags = kept_flags,
+				.annotations = kept_annotations,
+				.metadata = kept_metadata,
+			},
+			new_names,
+			default_by_name
+		);
+	}
+
+	return plan_from_kept_parameters(parameters, new_names, default_by_name);
 }
 
 static PyObject * checked_annotations(PyObject * const namespace) {
@@ -561,7 +627,7 @@ static enum result append_annotation(
 static enum result redeclare_parameter(
 	struct parameter_lists const * const parameters,
 	Py_ssize_t const position,
-	bool const init_var,
+	PyObject * const kind_flag,
 	struct annotation_entry const entry
 ) {
 	if (entry.annotation == NULL) {
@@ -575,13 +641,7 @@ static enum result redeclare_parameter(
 		(
 			annotation_set == 0 &&
 			metadata_set == 0 &&
-			(
-				PyList_SetItem(
-					parameters->init_var_flags,
-					position,
-					Py_NewRef(init_var ? Py_True : Py_False)
-				) == 0
-			)
+			(PyList_SetItem(parameters->init_var_flags, position, Py_NewRef(kind_flag)) == 0)
 		) ? RESULT_OK :
 		RESULT_ERROR
 	);
@@ -602,43 +662,38 @@ static enum result refuse_machinery_init_var(PyObject * const field_name) {
 	return RESULT_ERROR;
 }
 
-static enum result redeclare_inherited(
+static enum result redeclare_as_init_var(
+	struct parameter_lists const * const parameters,
+	Py_ssize_t const position,
+	PyObject * const annotation,
+	PyObject * const empty_extras
+) {
+	if (PyList_GET_ITEM(parameters->init_var_flags, position) == Py_True) {
+		return RESULT_OK;
+	}
+
+	return redeclare_parameter(
+		parameters,
+		position,
+		Py_True,
+		(struct annotation_entry){
+			.annotation = Py_NewRef(annotation),
+			.metadata = Py_NewRef(empty_extras),
+		}
+	);
+}
+
+static enum result redeclare_as_field(
 	struct parameter_lists const * const parameters,
 	Py_ssize_t const position,
 	PyObject * const field_name,
 	PyObject * const annotation,
-	struct special_form const special,
-	bool const init_var,
 	PyObject * const new_names,
 	PyObject * const empty_extras,
 	bool const typing_loaded
 ) {
-	bool const inherited_init_var = (
-		PyList_GET_ITEM(parameters->init_var_flags, position) == Py_True
-	);
-
-	if (init_var == inherited_init_var || (!init_var && special.name != NULL)) {
+	if (PyList_GET_ITEM(parameters->init_var_flags, position) == Py_False) {
 		return RESULT_OK;
-	}
-
-	if (init_var) {
-		return (
-			(
-				refuse_machinery_init_var(field_name) == RESULT_OK &&
-				(
-					redeclare_parameter(
-						parameters,
-						position,
-						true,
-						(struct annotation_entry){
-							.annotation = Py_NewRef(annotation),
-							.metadata = Py_NewRef(empty_extras),
-						}
-					) == RESULT_OK
-				)
-			) ? RESULT_OK :
-			RESULT_ERROR
-		);
 	}
 
 	return (
@@ -648,11 +703,21 @@ static enum result redeclare_inherited(
 				redeclare_parameter(
 					parameters,
 					position,
-					false,
+					Py_False,
 					annotation_entry_of(annotation, empty_extras, typing_loaded)
 				) == RESULT_OK
 			)
 		) ? RESULT_OK :
+		RESULT_ERROR
+	);
+}
+
+static enum result remove_parameter(
+	struct parameter_lists const * const parameters,
+	Py_ssize_t const position
+) {
+	return (
+		PyList_SetItem(parameters->init_var_flags, position, Py_NewRef(Py_None)) == 0 ? RESULT_OK :
 		RESULT_ERROR
 	);
 }
@@ -760,42 +825,29 @@ static enum result append_declared(
 			init_var_top_level(annotation, &probes)
 		);
 
-		switch (inherited.tag) {
-			case INHERITANCE_ERROR:
-				return RESULT_ERROR;
-			case INHERITANCE_INHERITED:
-				if (
-					redeclare_inherited(
-						parameters,
-						inherited.position,
-						field_name,
-						annotation,
-						special,
-						init_var,
-						new_names,
-						empty_extras,
-						probes.class_var != NULL
-					) != RESULT_OK
-				) {
-					return RESULT_ERROR;
-				}
-
-				continue;
-			case INHERITANCE_NEW:
-				break;
-		}
+		bool const redeclared = inherited.tag == INHERITANCE_INHERITED;
 
 		if (init_var) {
 			if (
 				refuse_machinery_init_var(field_name) != RESULT_OK ||
 				(
-					append_parameter(
-						parameters,
-						field_name,
-						true,
-						annotation,
-						empty_extras
-					) != RESULT_OK
+					redeclared ? (
+						redeclare_as_init_var(
+							parameters,
+							inherited.position,
+							annotation,
+							empty_extras
+						) != RESULT_OK
+					) :
+					(
+						append_parameter(
+							parameters,
+							field_name,
+							true,
+							annotation,
+							empty_extras
+						) != RESULT_OK
+					)
 				)
 			) {
 				return RESULT_ERROR;
@@ -845,6 +897,10 @@ static enum result append_declared(
 				return RESULT_ERROR;
 			}
 
+			if (redeclared && remove_parameter(parameters, inherited.position) != RESULT_OK) {
+				return RESULT_ERROR;
+			}
+
 			continue;
 		}
 
@@ -858,6 +914,24 @@ static enum result append_declared(
 			);
 
 			return RESULT_ERROR;
+		}
+
+		if (redeclared) {
+			if (
+				redeclare_as_field(
+					parameters,
+					inherited.position,
+					field_name,
+					annotation,
+					new_names,
+					empty_extras,
+					probes.class_var != NULL
+				) != RESULT_OK
+			) {
+				return RESULT_ERROR;
+			}
+
+			continue;
 		}
 
 		if (
