@@ -25,7 +25,7 @@ PyObject * Struct_repr(PyObject * const self) {
 		return NULL;
 	}
 
-	return PyUnicode_FromFormat("%s(%U)", Py_TYPE(self)->tp_name, inner);
+	return PyUnicode_FromFormat("%U(%U)", struct_type_of(self)->heap_type.ht_qualname, inner);
 }
 
 static PyObject * fields_repr(StructType const * const type, PyObject * const self) {

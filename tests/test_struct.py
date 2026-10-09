@@ -137,6 +137,27 @@ def test_a_struct_is_unequal_to_a_tuple_of_its_values():
     assert Point2D(1.0, 2.0) != (1.0, 2.0)
 
 
+def test_repr_names_the_qualified_class_like_stock_dataclasses():
+    def define():
+        @dataclass
+        class StockPoint:
+            x: int
+
+        class Point(Struct):
+            x: int
+
+        return StockPoint, Point
+
+    StockPoint, Point = define()
+
+    assert repr(Point(1)) == repr(StockPoint(1)).replace("StockPoint", "Point")
+
+    StockPoint.__qualname__ = "Renamed"
+    Point.__qualname__ = "Renamed"
+
+    assert repr(Point(1)) == repr(StockPoint(1)) == "Renamed(x=1)"
+
+
 def test_hash():
     assert hash(Point2D(1.0, 2.0)) == hash(Point2D(1.0, 2.0))
     assert hash(Point2D(1.0, 2.0)) == hash((1.0, 2.0))
@@ -174,7 +195,7 @@ def test_empty_struct():
         pass
 
     assert Empty() == Empty()
-    assert repr(Empty()) == "Empty()"
+    assert repr(Empty()) == f"{Empty.__qualname__}()"
 
 
 def test_metaclass_identity():

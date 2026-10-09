@@ -386,7 +386,7 @@ class TestRepr:
         class Child(NoRepr, repr=True):
             y: object = 0
 
-        assert repr(Child(1)) == "Child(x=1, y=0)"
+        assert repr(Child(1)) == f"{Child.__qualname__}(x=1, y=0)"
 
     def test_the_other_dunders_are_untouched(self):
         assert NoRepr(1) == NoRepr(1)

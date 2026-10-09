@@ -174,7 +174,7 @@ def test_a_shared_struct_is_safe_to_read_while_another_thread_writes_it():
             hashed = hash(sealed)
 
             if i % 1000 == 0:
-                assert rendered.startswith("Shared(value=")
+                assert rendered.startswith(f"{Shared.__qualname__}(value=")
                 assert equal is False
                 assert isinstance(hashed, int)
 

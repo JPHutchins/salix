@@ -1,5 +1,5 @@
 import sys
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, dataclass
 
 import pytest
 from values import EVERY, identify
@@ -21,7 +21,19 @@ def test_a_struct_is_frozen_unless_it_says_otherwise():
     with pytest.raises(FrozenInstanceError, match="cannot assign to field 'x'"):
         Frozen(1).x = 9
 
-    with pytest.raises(AttributeError, match="does not support attribute deletion"):
+    with pytest.raises(FrozenInstanceError, match="cannot delete field 'x'"):
+        del Frozen(1).x
+
+
+def test_deleting_a_frozen_field_raises_like_stock_dataclasses():
+    @dataclass(frozen=True)
+    class StockFrozen:
+        x: int
+
+    with pytest.raises(FrozenInstanceError, match="cannot delete field 'x'"):
+        del StockFrozen(1).x
+
+    with pytest.raises(FrozenInstanceError, match="cannot delete field 'x'"):
         del Frozen(1).x
 
 
@@ -172,7 +184,7 @@ def test_frozen_true_over_a_mutable_base_holds_beside_a_permissive_co_base():
         with pytest.raises(FrozenInstanceError, match="cannot assign to field 'x'"):
             Child(1).x = 9
 
-        with pytest.raises(AttributeError, match="does not support attribute"):
+        with pytest.raises(FrozenInstanceError, match="cannot delete field 'x'"):
             del Child(1).x
 
 
@@ -201,7 +213,7 @@ def test_a_frozen_child_of_a_frozen_base_holds_beside_a_permissive_co_base():
         with pytest.raises(FrozenInstanceError, match="cannot assign to field 'x'"):
             Child(1).x = 9
 
-        with pytest.raises(AttributeError, match="does not support attribute"):
+        with pytest.raises(FrozenInstanceError, match="cannot delete field 'x'"):
             del Child(1).x
 
 
@@ -236,7 +248,7 @@ def test_a_frozen_setattr_escape_beside_a_permissive_co_base_keeps_answering():
 
             assert instance.x == 9
 
-            with pytest.raises(AttributeError, match="does not support attribute"):
+            with pytest.raises(FrozenInstanceError, match="cannot delete field 'x'"):
                 del instance.x
         else:
             with pytest.raises(TypeError):

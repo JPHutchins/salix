@@ -467,11 +467,15 @@ static int Struct_set_attribute(
 		return 0;
 	}
 
-	if (value != NULL && PyUnicode_Check(name) && struct_type_of(self)->struct_options.frozen) {
+	if (PyUnicode_Check(name) && struct_type_of(self)->struct_options.frozen) {
 		PyObject * const frozen_error = frozen_instance_error(struct_type_of(self));
 
 		if (frozen_error != NULL) {
-			PyErr_Format(frozen_error, "cannot assign to field %R", name);
+			PyErr_Format(
+				frozen_error,
+				value == NULL ? "cannot delete field %R" : "cannot assign to field %R",
+				name
+			);
 
 			return RESULT_ERROR;
 		}

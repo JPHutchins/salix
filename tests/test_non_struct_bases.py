@@ -385,7 +385,7 @@ def test_a_later_bases_body_repr_is_shadowed_by_the_record():
     class C(Plain, Later):
         pass
 
-    assert repr(C(1)).startswith("C(")
+    assert repr(C(1)).startswith(f"{C.__qualname__}(")
 
 
 def test_a_co_base_that_paired_them_itself_keeps_its_own_inequality():
