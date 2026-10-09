@@ -6,11 +6,11 @@
 
 rustPlatform.buildRustPackage rec {
   pname = "jphfmt";
-  version = "0.2.2";
+  version = "0.3.0";
 
   src = fetchCrate {
     inherit pname version;
-    hash = "sha256-NLpCZfhM5oVrg+jVTbGQ/zjBT+U9bZeVi73ENGyNVDU=";
+    hash = "sha256-qBpcX73EXZ4EweEqQ0xAHPrMTqZBf2777Pkk2ioo9CE=";
   };
 
   cargoLock.lockFile = ./jphfmt-Cargo.lock;
