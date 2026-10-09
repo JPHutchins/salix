@@ -185,6 +185,9 @@ def main() -> int:
     checkout = HERE / ".cpython" / tag
     fetch_cpython_tests(checkout, tag)
     outcomes = run_suite(checkout)
+    if not outcomes:
+        print(f"CPython {tag} test_dataclasses collected no tests")
+        return 1
     print(f"CPython {tag} test_dataclasses through the shim: {summary(outcomes)}")
     expected = json.loads(expected_file.read_text()) if expected_file.exists() else {}
     changed = differences(expected, recorded(outcomes))
