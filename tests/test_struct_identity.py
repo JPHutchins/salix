@@ -1109,10 +1109,7 @@ class TestAMetaclassSubclass:
 
         assert (built(1, 7) != built(1, 8)) is False
 
-    def test_a_delegate_that_strips_new_is_settled(self):
-        """The fresh build keeps a body __new__ in the class dict (dispatch
-        never consults it), so a delegate that strips it is restored.
-        """
+    def test_a_body_new_is_refused_though_a_delegate_strips_it(self):
 
         class Stripping(META):
             def __new__(metacls, name, bases, namespace, **keywords):
@@ -1130,14 +1127,11 @@ class TestAMetaclassSubclass:
             x: int
 
         namespace = {"__annotations__": {"y": int}, "__new__": body_new}
-        built = META("Built", (Base,), namespace)
 
-        assert "__new__" in built.__dict__
+        with pytest.raises(TypeError, match=r"Built\.__new__ cannot be used on a struct"):
+            META("Built", (Base,), namespace)
 
     def test_a_delegate_that_injects_new_is_refused(self):
-        """A __new__ the delegate adds while the body defined none would
-        change construction, so the settle refuses.
-        """
 
         class Injecting(META):
             def __new__(metacls, name, bases, namespace, **keywords):
@@ -1151,7 +1145,7 @@ class TestAMetaclassSubclass:
         class Base(Struct, metaclass=Injecting):
             x: int
 
-        with pytest.raises(TypeError, match="did not plan"):
+        with pytest.raises(TypeError, match=r"Built\.__new__ cannot be used on a struct"):
             META("Built", (Base,), {"__annotations__": {"y": int}})
 
     def test_a_delegate_that_adds_a_non_struct_base_is_refused(self):

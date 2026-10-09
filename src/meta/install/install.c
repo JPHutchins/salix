@@ -166,6 +166,96 @@ static bool resolves_new_to_none(PyTypeObject * const cls) {
 	return false;
 }
 
+struct new_definer {
+	enum {
+		NEW_DEFINER_ERROR,
+		NEW_DEFINER_OBJECT,
+		NEW_DEFINER_NONE,
+		NEW_DEFINER_PYTHON,
+		NEW_DEFINER_C,
+	} tag;
+	PyTypeObject * owner;
+};
+
+static struct new_definer nearest_new(PyTypeObject * const cls) {
+	PyObject * const mro = cls->tp_mro;
+
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); i += 1) {
+		PyTypeObject * const owner = (PyTypeObject *) PyTuple_GET_ITEM(mro, i);
+		PY_OWNED(entry_dict, struct_type_dict(owner));
+
+		if (entry_dict == NULL) {
+			return (struct new_definer){.tag = NEW_DEFINER_ERROR};
+		}
+
+		PyObject * const entry = dict_get_string(entry_dict, "__new__");
+
+		if (entry == NULL && PyErr_Occurred()) {
+			return (struct new_definer){.tag = NEW_DEFINER_ERROR};
+		}
+
+		if (entry != NULL) {
+			return (struct new_definer){
+				.tag = (
+					entry == Py_None ? NEW_DEFINER_NONE :
+					owner == &PyBaseObject_Type ? NEW_DEFINER_OBJECT :
+					PyCFunction_Check(entry) ? NEW_DEFINER_C :
+					NEW_DEFINER_PYTHON
+				),
+				.owner = owner,
+			};
+		}
+	}
+
+	return (struct new_definer){.tag = NEW_DEFINER_OBJECT, .owner = &PyBaseObject_Type};
+}
+
+static enum result refuse_a_skipped_new(
+	StructType const * const struct_class,
+	bool const own_init
+) {
+	PyTypeObject * const cls = (PyTypeObject *) &struct_class->heap_type.ht_type;
+
+	if (is_exception_struct(cls)) {
+		return RESULT_OK;
+	}
+
+	struct new_definer const definer = nearest_new(cls);
+
+	switch (definer.tag) {
+		case NEW_DEFINER_ERROR:
+			return RESULT_ERROR;
+		case NEW_DEFINER_OBJECT:
+		case NEW_DEFINER_NONE:
+			return RESULT_OK;
+		case NEW_DEFINER_PYTHON:
+			PyErr_Format(
+				PyExc_TypeError,
+				"%.200s.__new__ cannot be used on a struct: salix creates, copies and "
+				"replaces instances without calling a __new__ written in Python; "
+				"set fields in __post_init__ or build instances in a classmethod",
+				definer.owner->tp_name
+			);
+
+			return RESULT_ERROR;
+		case NEW_DEFINER_C:
+			if (own_init) {
+				return RESULT_OK;
+			}
+
+			PyErr_Format(
+				PyExc_TypeError,
+				"a struct cannot extend %.200s: it sets up its instances in __new__, "
+				"which the struct constructor does not call",
+				definer.owner->tp_name
+			);
+
+			return RESULT_ERROR;
+	}
+
+	Py_UNREACHABLE();
+}
+
 enum result install_constructor(
 	StructType * const struct_class,
 	PyObject * const namespace,
@@ -173,6 +263,10 @@ enum result install_constructor(
 ) {
 	bool const own_init = defines_own_init(struct_class, namespace);
 	struct_class->struct_own_init = own_init;
+
+	if (refuse_a_skipped_new(struct_class, own_init) != RESULT_OK) {
+		return RESULT_ERROR;
+	}
 
 	bool const cannot_create = resolves_new_to_none(&struct_class->heap_type.ht_type);
 

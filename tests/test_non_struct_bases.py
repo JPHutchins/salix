@@ -1,3 +1,6 @@
+import array
+import collections
+
 import pytest
 
 from salix import Struct
@@ -521,3 +524,43 @@ def test_a_body_that_writes_object_equality_has_still_written_one():
     assert B.__hash__ is None
     assert (B(1, 0) == B(1, 0)) is False
     assert (B(1, 0) != B(1, 0)) is True
+
+
+@pytest.mark.parametrize("co_base", [frozenset, array.array, float, complex], ids=lambda co_base: co_base.__name__)
+def test_a_co_base_that_sets_up_its_instances_in_new_is_refused(co_base):
+    with pytest.raises(TypeError, match=f"a struct cannot extend {co_base.__name__}"):
+
+        class Over(co_base, Struct):
+            a: int = 0
+
+
+@pytest.mark.parametrize(
+    ("co_base", "add"),
+    [
+        (dict, lambda instance: instance.__setitem__("k", 1)),
+        (list, lambda instance: instance.append(1)),
+        (set, lambda instance: instance.add(1)),
+        (bytearray, lambda instance: instance.extend(b"k")),
+        (collections.OrderedDict, lambda instance: instance.__setitem__("k", 1)),
+        (collections.deque, lambda instance: instance.append(1)),
+    ],
+    ids=lambda value: getattr(value, "__name__", ""),
+)
+def test_a_co_base_with_its_own_init_still_constructs(co_base, add):
+    class Over(co_base, Struct, frozen=False):
+        a: int = 0
+
+    instance = Over()
+    add(instance)
+
+    assert (len(instance), instance.a) == (1, 0)
+
+
+def test_a_body_new_is_refused_rather_than_skipped():
+    with pytest.raises(TypeError, match=r"WithNew\.__new__ cannot be used on a struct"):
+
+        class WithNew(Struct):
+            x: int
+
+            def __new__(cls, *args: object, **kwargs: object) -> object:
+                return super().__new__(cls)

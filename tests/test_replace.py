@@ -193,21 +193,14 @@ def test_a_positional_only_init_propagates_its_own_type_error():
         replace(PositionalOnly(1), x=2)
 
 
-def test_a_body_new_is_discarded_by_replace_as_by_construction():
-    calls = []
+def test_a_body_new_that_replace_would_skip_is_refused_at_class_creation():
+    with pytest.raises(TypeError, match=r"WithNew\.__new__ cannot be used on a struct"):
 
-    class WithNew(Struct, frozen=False):
-        x: int
+        class WithNew(Struct, frozen=False):
+            x: int
 
-        def __new__(cls, *args: object, **kwargs: object) -> object:
-            calls.append(1)
-            return super().__new__(cls)
-
-    original = WithNew(1)
-    replaced = replace(original, x=2)
-
-    assert calls == []
-    assert replaced == WithNew(2)
+            def __new__(cls, *args: object, **kwargs: object) -> object:
+                return super().__new__(cls)
 
 
 def test_an_instance_dict_entry_does_not_shadow_the_dunder():
