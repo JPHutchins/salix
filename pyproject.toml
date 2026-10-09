@@ -51,8 +51,8 @@ packages = ["salix"]
 salix = ["py.typed", "__init__.pyi"]
 
 [dependency-groups]
-ci = ["camas==0.1.29"]
-dev = ["setuptools>=77", "camas[mcp]==0.1.29"]
+ci = ["camas==0.1.30"]
+dev = ["setuptools>=77", "camas[mcp]==0.1.30"]
 
 [tool.pyright]
 reportUnnecessaryTypeIgnoreComment = "error"

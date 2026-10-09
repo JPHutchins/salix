@@ -1,15 +1,5 @@
 {
   "hooks": {
-    "PostToolBatch": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "uv run camas mcp fix || exit 0"
-          }
-        ]
-      }
-    ],
     "Stop": [
       {
         "hooks": [
