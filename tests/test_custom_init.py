@@ -106,7 +106,7 @@ def test_defaults_are_written_before_a_body_init_runs():
             self.x = 1
 
     assert Partial().y == 99
-    assert repr(Partial()) == "Partial(x=1, y=99)"
+    assert repr(Partial()) == f"{Partial.__qualname__}(x=1, y=99)"
 
 
 def test_a_body_init_can_read_the_default_and_overwrite_it():

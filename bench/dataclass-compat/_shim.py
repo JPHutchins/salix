@@ -899,6 +899,7 @@ def _rebuild_struct_subclass(
     )
     namespace["__dataclass_fields__"] = _merged_dataclass_fields(field_order, real_fields, pseudo_fields)
     namespace["__dataclass_params__"] = _dataclass_params(init, repr, eq, order, unsafe_hash, frozen, match_args, kw_only)
+    namespace["__qualname__"] = cls.__qualname__
     if not names and _called_from_init_subclass(cls):
         return cls
 
@@ -1086,6 +1087,7 @@ def dataclass(
         )
         namespace["__dataclass_fields__"] = _merged_dataclass_fields(body_annotations, real_fields, pseudo_fields)
         namespace["__dataclass_params__"] = _dataclass_params(init, repr, eq, order, unsafe_hash, frozen, match_args, kw_only)
+        namespace["__qualname__"] = cls.__qualname__
         built = _builder_for(type(cls))(
             cls.__name__,
             (Struct, *cls.__bases__),

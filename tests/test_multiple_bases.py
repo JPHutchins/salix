@@ -36,7 +36,7 @@ def test_a_fieldless_base_in_front_does_not_hide_the_fields_behind_it():
 
     assert Both._struct_fields_ == ("a", "b", "c")
     assert (instance.a, instance.b, instance.c) == (1, 2, 3)
-    assert repr(instance) == "Both(a=1, b=2, c=3)"
+    assert repr(instance) == f"{Both.__qualname__}(a=1, b=2, c=3)"
 
 
 def test_a_weakref_base_in_front_does_not_hide_them_either():
@@ -209,7 +209,7 @@ class TestWhichBaseAnswers:
         class Child(Both, repr=True):
             d: int = 0
 
-        assert repr(Child(1, 2, 3)) == "Child(a=1, b=2, c=3, d=0)"
+        assert repr(Child(1, 2, 3)) == f"{Child.__qualname__}(a=1, b=2, c=3, d=0)"
 
     def test_an_identity_equal_base_in_front_takes_equality_with_it(self):
         """And takes the hash with it, which is the half that has to follow."""
@@ -367,7 +367,7 @@ class TestWhichBaseAnswers:
         class Equal(ByIdentity, WithFields, eq=True):
             c: int
 
-        assert repr(Represented(1, 2, 3)) == "Represented(a=1, b=2, c=3)"
+        assert repr(Represented(1, 2, 3)) == f"{Represented.__qualname__}(a=1, b=2, c=3)"
         assert Equal(1, 2, 3) == Equal(1, 2, 3)
 
     def test_a_base_that_agrees_changes_nothing(self):
