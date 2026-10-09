@@ -480,18 +480,25 @@ def test_group_copy_arms_carry_the_members():
     assert str(salix.from_mapping(EG, {"x": 2})) == "2 (0 sub-exception)"
 
 
-def test_a_body_new_beside_a_body_init_is_refused_outside_the_exception_family():
-    with pytest.raises(TypeError, match=r"BodyNew\.__new__ cannot be used on a struct"):
+class BodyNew(Struct, frozen=False):
+    a: int
+    b: int = 5
 
-        class BodyNew(Struct, frozen=False):
-            a: int
-            b: int = 5
+    def __new__(cls, *args, **kwargs):
+        return super().__new__(cls)
 
-            def __new__(cls, *args, **kwargs):
-                return super().__new__(cls)
+    def __init__(self, a):
+        self.a = a
 
-            def __init__(self, a):
-                self.a = a
+
+def test_a_body_new_keeps_the_defaults_and_the_required_validation():
+    instance = BodyNew(1)
+
+    assert instance.a == 1
+    assert instance.b == 5
+
+    with pytest.raises(TypeError):
+        BodyNew()
 
 
 class Uninstantiable(Exception, Struct, frozen=False):
@@ -530,27 +537,24 @@ class SubclassBase(Struct, frozen=False):
         self.a = a
 
 
-class SubclassInit(SubclassBase):
+class SubclassNew(SubclassBase):
+    def __new__(cls, *args, **kwargs):
+        return super().__new__(cls)
+
+
+class SubclassInit(SubclassNew):
     def __init__(self, a):
         self.a = a
 
 
-class SubclassPlain(SubclassBase):
+class SubclassPlain(SubclassNew):
     pass
 
 
 def test_subclasses_of_own_init_structs_construct():
-    assert SubclassBase(1).b == 5
+    assert SubclassNew(1).b == 5
     assert SubclassInit(1).a == 1
     assert SubclassPlain(1).a == 1
-
-
-def test_a_subclass_new_over_an_own_init_struct_is_refused():
-    with pytest.raises(TypeError, match=r"SubclassNew\.__new__ cannot be used on a struct"):
-
-        class SubclassNew(SubclassBase):
-            def __new__(cls, *args, **kwargs):
-                return super().__new__(cls)
 
 
 @pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
@@ -1066,21 +1070,25 @@ def test_a_frozen_zero_field_subclass_of_a_none_new_struct_defines_and_refuses()
         FB()
 
 
-def test_a_body_new_over_the_inherited_none_new_marker_is_refused():
+def test_a_body_new_overrides_the_inherited_none_new_marker():
     class A(Struct):
         __new__ = None
+
+    class B(A):
+        def __new__(cls):
+            return object.__new__(cls)
+
+        def __init__(self):
+            pass
+
+    class C(B):
+        pass
 
     with pytest.raises(TypeError, match="cannot create"):
         A()
 
-    with pytest.raises(TypeError, match=r"B\.__new__ cannot be used on a struct"):
-
-        class B(A):
-            def __new__(cls):
-                return object.__new__(cls)
-
-            def __init__(self):
-                pass
+    assert isinstance(B(), B)
+    assert isinstance(C(), C)
 
 
 @pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")

@@ -1,5 +1,6 @@
 import array
 import collections
+import dataclasses
 
 import pytest
 
@@ -557,10 +558,52 @@ def test_a_co_base_with_its_own_init_still_constructs(co_base, add):
 
 
 def test_a_body_new_is_refused_rather_than_skipped():
-    with pytest.raises(TypeError, match=r"WithNew\.__new__ cannot be used on a struct"):
+    with pytest.raises(TypeError, match=r"WithNew\.__new__ cannot be used on a struct without an __init__ of its own"):
 
         class WithNew(Struct):
             x: int
 
             def __new__(cls, *args: object, **kwargs: object) -> object:
                 return super().__new__(cls)
+
+
+def test_a_python_base_new_runs_for_a_struct_with_its_own_init_like_stock_dataclasses():
+    class Marking:
+        def __new__(cls, *args: object, **kwargs: object) -> object:
+            instance = super().__new__(cls)
+            instance.marker = "set in __new__"
+            return instance
+
+    @dataclasses.dataclass
+    class Stock(Marking):
+        x: int = 0
+
+    class Ours(Marking, Struct, frozen=False):
+        x: int = 0
+
+        def __init__(self, x: int = 0) -> None:
+            self.x = x
+
+    for Class in (Stock, Ours):
+        instance = Class(3)
+
+        assert (instance.x, instance.marker) == (3, "set in __new__")
+
+
+def test_a_python_base_new_is_refused_for_a_struct_without_its_own_init():
+    class Marking:
+        def __new__(cls, *args: object, **kwargs: object) -> object:
+            return super().__new__(cls)
+
+    with pytest.raises(TypeError, match=r"Marking\.__new__ cannot be used on a struct without an __init__ of its own"):
+
+        class Ours(Marking, Struct, frozen=False):
+            x: int = 0
+
+
+def test_object_new_assigned_in_the_body_is_object_s_and_builds():
+    class Aliased(Struct, frozen=False):
+        x: int = 0
+        __new__ = object.__new__
+
+    assert Aliased(3).x == 3
