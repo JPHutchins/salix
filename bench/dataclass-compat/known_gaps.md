@@ -56,8 +56,11 @@ Where the shim and salix differ from stock dataclasses. CPython's own
   stock but does not honor `dict_factory` options; `replace` is a
   dict-comprehension `salix.replace` equivalent.
 - The ordering rule counts a default on an `init=False` field, which stock
-  ignores: CPython's `test_class_marker` fails with `non-default field 'z'
+  ignores: CPython's `test_class_marker` errors with `non-default field 'z'
   follows a field with a default`.
+- The shim does not write stock's generated `__doc__`, the class's
+  signature for a body without a docstring: 12 of CPython's 14
+  `TestDocString` tests error on its absence.
 - A body `__init__` suppresses `__post_init__` and factory fills — the same
   degenerate state stock dataclasses produce (its `init` parameter is ignored
   when the body defines `__init__`, and the generated init that would call

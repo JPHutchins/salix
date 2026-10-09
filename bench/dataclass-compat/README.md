@@ -6,14 +6,23 @@ tier's shim-based legs (`../source-tiers/`) and the CPython conformance
 run below use it. `known_gaps.md` lists where the shim and salix differ
 from stock.
 
+`install()` has to run before the code under test imports
+`dataclasses`. A class with a static-type base, such as `dict`, stays a
+stock dataclass. `exclude_prefixes` keeps a package's own dataclasses
+stock: hydra needs it, because its internals read their own instance
+`__dict__` (540 of the source tier's 544 hydra failures).
+
 ## CPython conformance
 
 `camas conformance` builds salix in place and runs CPython's own
-`test_dataclasses` through the shim. The tests are fetched by a sparse
-checkout of the pinned tag into `.cpython/`. Every test's outcome is
-compared with `conformance-v3.14.6.json`, and a change in either
+`test_dataclasses` through the shim, on the exact interpreter the tests
+were tagged for. The tests are fetched by a sparse checkout of the tag
+into `.cpython/`. Every test's outcome, and for a failure its exception
+type, is compared with `conformance-v3.14.6.json`. A change in either
 direction fails the run. A fix that turns a test green therefore
-re-records the file with `conformance.py --record`.
+re-records the file with `--record`, which prints the per-test delta
+before writing. Skips are left out of the file, because a skip measures
+the interpreter rather than salix.
 
 Measured 2026-10-09 on salix 70bf53c, CPython v3.14.6:
 

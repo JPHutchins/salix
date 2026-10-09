@@ -160,12 +160,15 @@ free_threaded_pytest = Task(
     agent_format=JUNIT_FORMAT,
 )
 free_threaded = Sequential(free_threaded_build, free_threaded_pytest)
-IN_PLACE_BUILD = "uv run python setup.py build_ext --inplace"
-benchmark = Sequential(Task(IN_PLACE_BUILD, mutates=True, env=STRICT_BUILD), bench)
+in_place_build = Task("uv run python setup.py build_ext --inplace", mutates=True, env=STRICT_BUILD)
+benchmark = Sequential(in_place_build, bench)
+CONFORMANCE_PYTHON = "3.14.6"
 conformance = Sequential(
-    Task(IN_PLACE_BUILD, mutates=True, env=STRICT_BUILD),
+    in_place_build,
     Task(
-        "uv run --package salix-bench python dataclass-compat/conformance.py", cwd=Path("bench")
+        f"uv run --no-project --managed-python --python {CONFORMANCE_PYTHON}"
+        f" python dataclass-compat/conformance.py {CONFORMANCE_PYTHON}",
+        cwd=Path("bench"),
     ),
 )
 check = Parallel(test, free_threaded, format_check, lock_check, lint, analyze, c_test, type_check)
