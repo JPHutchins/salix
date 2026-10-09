@@ -1,5 +1,5 @@
 import sys
-from dataclasses import InitVar, dataclass, fields
+from dataclasses import MISSING, InitVar, dataclass, fields
 from typing import Annotated, ClassVar, Final
 
 import pytest
@@ -304,6 +304,497 @@ def test_a_field_over_an_inherited_class_var_takes_the_class_var_position():
 
     assert Sub._struct_fields_ == tuple(field.name for field in fields(StockSub)) == ("y", "z", "w")
     assert (Sub(0, 1).y, Sub(0, 1).z, Sub(0, 1).w) == (0, 1, 4)
+
+
+def test_a_redeclaration_without_a_value_reads_the_class_var_as_reassigned():
+    @dataclass
+    class StockBase:
+        a: int = 0
+        x: ClassVar[int] = 1
+        b: int = 2
+
+    class Base(Struct):
+        a: int = 0
+        x: ClassVar[int] = 1
+        b: int = 2
+
+    StockBase.x = 9
+    Base.x = 9
+
+    @dataclass
+    class StockSub(StockBase):
+        x: int
+
+    class Sub(Base):
+        x: int
+
+    assert Sub._struct_fields_ == tuple(field.name for field in fields(StockSub)) == ("a", "x", "b")
+    assert (Sub().a, Sub().x, Sub().b) == (StockSub().a, StockSub().x, StockSub().b) == (0, 9, 2)
+
+
+def test_a_redeclaration_without_a_value_reads_a_mixin_that_shadows_the_class_var():
+    @dataclass
+    class StockBase:
+        a: int = 0
+        x: ClassVar[int] = 1
+
+    class Base(Struct):
+        a: int = 0
+        x: ClassVar[int] = 1
+
+    class Shadowing:
+        x = 5
+
+    @dataclass
+    class StockSub(Shadowing, StockBase):
+        x: int
+
+    class Sub(Shadowing, Base):
+        x: int
+
+    assert Sub().x == StockSub().x == 5
+
+
+def test_an_init_var_redeclared_without_a_value_reads_the_class_var_as_reassigned():
+    seen: list[int] = []
+
+    @dataclass
+    class StockBase:
+        a: int = 0
+        x: ClassVar[int] = 1
+
+    class Base(Struct):
+        a: int = 0
+        x: ClassVar[int] = 1
+
+    StockBase.x = 9
+    Base.x = 9
+
+    @dataclass
+    class StockSub(StockBase):
+        x: InitVar[int]
+
+        def __post_init__(self, x: int) -> None:
+            seen.append(x)
+
+    class Sub(Base):
+        x: InitVar[int]
+
+        def __post_init__(self, x: int) -> None:
+            seen.append(x)
+
+    StockSub()
+    Sub()
+
+    assert seen == [9, 9]
+
+
+def test_a_redeclaration_without_a_value_copies_the_class_var_value_at_class_creation():
+    class Base(Struct):
+        x: ClassVar[list[int]] = [1]
+
+    class Sub(Base):
+        x: list[int]
+
+    Base.x.append(2)
+
+    assert Sub().x == [1]
+
+
+def test_a_redeclaration_built_through_a_metatype_handoff_reads_the_class_var_as_reassigned():
+    class Delegating(type(Struct)):
+        def __new__(
+            metacls: type,
+            name: str,
+            bases: tuple[type, ...],
+            namespace: dict[str, object],
+            **keywords: object,
+        ) -> type:
+            return super().__new__(metacls, name, bases, namespace, **keywords)
+
+    class Base(Struct, metaclass=Delegating):
+        a: int = 0
+        x: ClassVar[int] = 1
+
+    Base.x = 9
+
+    Built = type(Struct)("Built", (Base,), {"__annotations__": {"x": int}})
+
+    assert type(Built) is Delegating
+    assert Built().x == 9
+
+
+def test_a_class_var_only_secondary_base_keeps_its_class_var_position():
+    @dataclass
+    class StockFielded:
+        a: int = 0
+        b: int = 1
+
+    @dataclass
+    class StockConstants:
+        x: ClassVar[int] = 7
+
+    @dataclass
+    class StockCombined(StockFielded, StockConstants):
+        x: int
+
+    class Fielded(Struct):
+        a: int = 0
+        b: int = 1
+
+    class Constants(Struct):
+        x: ClassVar[int] = 7
+
+    class Combined(Fielded, Constants):
+        x: int
+
+    assert Combined._struct_fields_ == tuple(field.name for field in fields(StockCombined))
+    assert Combined._struct_fields_ == ("x", "a", "b")
+    assert Combined().x == StockCombined().x == 7
+
+
+def test_an_init_var_over_a_class_var_only_secondary_base_keeps_its_position_and_value():
+    seen: list[int] = []
+
+    @dataclass
+    class StockFielded:
+        a: int = 0
+
+    @dataclass
+    class StockConstants:
+        p: ClassVar[int] = 10
+
+    @dataclass
+    class StockCombined(StockFielded, StockConstants):
+        p: InitVar[int]
+
+        def __post_init__(self, p: int) -> None:
+            seen.append(p)
+
+    class Fielded(Struct):
+        a: int = 0
+
+    class Constants(Struct):
+        p: ClassVar[int] = 10
+
+    class Combined(Fielded, Constants):
+        p: InitVar[int]
+
+        def __post_init__(self, p: int) -> None:
+            seen.append(p)
+
+    StockCombined(11, 0)
+    Combined(11, 0)
+    Combined()
+
+    assert seen == [11, 11, 10]
+
+
+@pytest.mark.parametrize(
+    ("order", "expected"),
+    [
+        (("Left", "Right"), ("a", "y", "b")),
+        (("Right", "Left"), ("a", "b", "y")),
+    ],
+)
+def test_a_secondary_class_var_beside_a_shared_ancestor_lands_where_stock_puts_it(
+    order: tuple[str, ...], expected: tuple[str, ...]
+):
+    @dataclass
+    class StockCommon:
+        a: int = 0
+        x: ClassVar[int] = 1
+
+    @dataclass
+    class StockLeft(StockCommon):
+        b: int = 2
+
+    @dataclass
+    class StockRight(StockCommon):
+        y: ClassVar[int] = 3
+
+    class Common(Struct):
+        a: int = 0
+        x: ClassVar[int] = 1
+
+    class Left(Common):
+        b: int = 2
+
+    class Right(Common):
+        y: ClassVar[int] = 3
+
+    stock_bases = {"Left": StockLeft, "Right": StockRight}
+    bases = {"Left": Left, "Right": Right}
+    StockCombined = dataclass(
+        type("StockCombined", tuple(stock_bases[name] for name in order), {"__annotations__": {"y": int}})
+    )
+    Combined = type(Struct)(
+        "Combined", tuple(bases[name] for name in order), {"__annotations__": {"y": int}}
+    )
+
+    assert Combined._struct_fields_ == tuple(field.name for field in fields(StockCombined)) == expected
+
+
+@pytest.mark.parametrize(
+    ("order", "expected"),
+    [
+        (("Fielded", "P", "Q"), ("q", "p", "a")),
+        (("P", "Fielded", "Q"), ("q", "a", "p")),
+        (("P", "Q", "Fielded"), ("a", "q", "p")),
+    ],
+)
+def test_class_var_only_bases_merge_their_positions_in_stock_order(
+    order: tuple[str, ...], expected: tuple[str, ...]
+):
+    @dataclass
+    class StockFielded:
+        a: int = 0
+
+    @dataclass
+    class StockP:
+        p: ClassVar[int] = 10
+
+    @dataclass
+    class StockQ:
+        q: ClassVar[int] = 20
+
+    class Fielded(Struct):
+        a: int = 0
+
+    class P(Struct):
+        p: ClassVar[int] = 10
+
+    class Q(Struct):
+        q: ClassVar[int] = 20
+
+    stock_bases = {"Fielded": StockFielded, "P": StockP, "Q": StockQ}
+    bases = {"Fielded": Fielded, "P": P, "Q": Q}
+    StockTwo = dataclass(
+        type(
+            "StockTwo",
+            tuple(stock_bases[name] for name in order),
+            {"__annotations__": {"q": int, "p": int}},
+        )
+    )
+    Two = type(Struct)(
+        "Two", tuple(bases[name] for name in order), {"__annotations__": {"q": int, "p": int}}
+    )
+
+    assert Two._struct_fields_ == tuple(field.name for field in fields(StockTwo)) == expected
+    assert (Two().p, Two().q) == (StockTwo().p, StockTwo().q) == (10, 20)
+
+
+def test_a_redeclaration_over_a_deleted_class_var_is_required():
+    @dataclass
+    class StockBase:
+        x: ClassVar[int] = 1
+        a: int = 0
+
+    class Base(Struct):
+        x: ClassVar[int] = 1
+        a: int = 0
+
+    del StockBase.x
+    del Base.x
+
+    @dataclass
+    class StockSub(StockBase):
+        x: int
+
+    class Sub(Base):
+        x: int
+
+    assert Sub._struct_fields_ == tuple(field.name for field in fields(StockSub)) == ("x", "a")
+    assert Sub._struct_defaults_ == (0,)
+    assert (Sub(7).x, StockSub(7).x) == (7, 7)
+
+    with pytest.raises(TypeError):
+        StockSub()
+
+    with pytest.raises(TypeError):
+        Sub()
+
+
+def test_a_redeclaration_over_a_deleted_class_var_after_a_default_is_refused():
+    @dataclass
+    class StockBase:
+        a: int = 0
+        x: ClassVar[int] = 1
+
+    class Base(Struct):
+        a: int = 0
+        x: ClassVar[int] = 1
+
+    del StockBase.x
+    del Base.x
+
+    with pytest.raises(TypeError, match="non-default argument 'x'"):
+
+        @dataclass
+        class StockSub(StockBase):
+            x: int
+
+    with pytest.raises(TypeError, match="non-default field 'x' follows a field with a default"):
+
+        class Sub(Base):
+            x: int
+
+
+def test_a_redeclaration_over_a_deleted_class_var_after_an_init_var_default_is_refused():
+    @dataclass
+    class StockBase:
+        flag: InitVar[int] = 3
+        x: ClassVar[int] = 1
+
+        def __post_init__(self, flag: int) -> None:
+            pass
+
+    class Base(Struct):
+        flag: InitVar[int] = 3
+        x: ClassVar[int] = 1
+
+        def __post_init__(self, flag: int) -> None:
+            pass
+
+    del StockBase.x
+    del Base.x
+
+    with pytest.raises(TypeError, match="non-default argument 'x'"):
+
+        @dataclass
+        class StockSub(StockBase):
+            x: int
+
+    with pytest.raises(TypeError, match="non-default field 'x' follows an InitVar with a default"):
+
+        class Sub(Base):
+            x: int
+
+
+class Answering:
+    def __get__(self, instance: object, owner: type) -> int:
+        return 42
+
+
+class Refusing:
+    def __get__(self, instance: object, owner: type) -> int:
+        raise RuntimeError("descriptor read")
+
+
+class Slotted:
+    __slots__ = ("s",)
+
+
+def test_a_redeclaration_reads_a_descriptor_class_var_through_its_get():
+    @dataclass
+    class StockBase:
+        x: ClassVar[int] = 1
+        a: int = 0
+
+    class Base(Struct):
+        x: ClassVar[int] = 1
+        a: int = 0
+
+    StockBase.x = Answering()
+    Base.x = Answering()
+
+    @dataclass
+    class StockSub(StockBase):
+        x: int
+
+    class Sub(Base):
+        x: int
+
+    assert Sub().x == StockSub().x == 42
+
+
+def test_a_descriptor_class_var_that_raises_fails_the_redeclaring_class():
+    @dataclass
+    class StockBase:
+        x: ClassVar[int] = 1
+
+    class Base(Struct):
+        x: ClassVar[int] = 1
+
+    StockBase.x = Refusing()
+    Base.x = Refusing()
+
+    with pytest.raises(RuntimeError, match="descriptor read"):
+
+        @dataclass
+        class StockSub(StockBase):
+            x: int
+
+    with pytest.raises(RuntimeError, match="descriptor read"):
+
+        class Sub(Base):
+            x: int
+
+
+def test_a_member_descriptor_class_var_leaves_the_redeclaration_required():
+    @dataclass
+    class StockBase:
+        x: ClassVar[int] = 1
+        a: int = 0
+
+    class Base(Struct):
+        x: ClassVar[int] = 1
+        a: int = 0
+
+    StockBase.x = Slotted.__dict__["s"]
+    Base.x = Slotted.__dict__["s"]
+
+    @dataclass
+    class StockSub(StockBase):
+        x: int
+
+    class Sub(Base):
+        x: int
+
+    assert [field.name for field in fields(StockSub) if field.default is MISSING] == ["x"]
+    assert Sub._struct_defaults_ == (0,)
+    assert Sub(7).x == 7
+
+    with pytest.raises(TypeError):
+        Sub()
+
+
+def test_an_init_var_over_a_deleted_class_var_is_required():
+    seen: list[int] = []
+
+    @dataclass
+    class StockBase:
+        x: ClassVar[int] = 1
+
+    class Base(Struct):
+        x: ClassVar[int] = 1
+
+    del StockBase.x
+    del Base.x
+
+    @dataclass
+    class StockSub(StockBase):
+        x: InitVar[int]
+
+        def __post_init__(self, x: int) -> None:
+            seen.append(x)
+
+    class Sub(Base):
+        x: InitVar[int]
+
+        def __post_init__(self, x: int) -> None:
+            seen.append(x)
+
+    with pytest.raises(TypeError):
+        StockSub()
+
+    with pytest.raises(TypeError):
+        Sub()
+
+    StockSub(4)
+    Sub(4)
+
+    assert seen == [4, 4]
 
 
 def test_a_class_var_over_an_inherited_field_is_the_constant_it_was_written_as():
