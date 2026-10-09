@@ -459,7 +459,7 @@ static int Struct_set_attribute(
 	PyObject * const name,
 	PyObject * const value
 ) {
-	if (!is_struct(self)) {
+	if (!is_struct(self) || !struct_type_of(self)->struct_options.frozen) {
 		return PyObject_GenericSetAttr(self, name, value);
 	}
 
@@ -467,7 +467,7 @@ static int Struct_set_attribute(
 		return 0;
 	}
 
-	if (PyUnicode_Check(name) && struct_type_of(self)->struct_options.frozen) {
+	if (PyUnicode_Check(name)) {
 		PyObject * const frozen_error = frozen_instance_error(struct_type_of(self));
 
 		if (frozen_error != NULL) {
