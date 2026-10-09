@@ -20,12 +20,13 @@ PyObject * Struct_repr(PyObject * const self) {
 
 	PY_OWNED(inner, fields_repr(struct_type_of(self), self));
 	Py_ReprLeave(self);
+	PY_OWNED(qualname, inner != NULL ? struct_type_qualname(struct_type_of(self)) : NULL);
 
-	if (inner == NULL) {
+	if (qualname == NULL) {
 		return NULL;
 	}
 
-	return PyUnicode_FromFormat("%U(%U)", struct_type_of(self)->heap_type.ht_qualname, inner);
+	return PyUnicode_FromFormat("%U(%U)", qualname, inner);
 }
 
 static PyObject * fields_repr(StructType const * const type, PyObject * const self) {

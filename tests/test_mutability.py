@@ -30,11 +30,13 @@ def test_deleting_a_frozen_field_raises_like_stock_dataclasses():
     class StockFrozen:
         x: int
 
-    with pytest.raises(FrozenInstanceError, match="cannot delete field 'x'"):
+    with pytest.raises(FrozenInstanceError) as stock:
         del StockFrozen(1).x
 
-    with pytest.raises(FrozenInstanceError, match="cannot delete field 'x'"):
+    with pytest.raises(FrozenInstanceError) as ours:
         del Frozen(1).x
+
+    assert str(ours.value) == str(stock.value)
 
 
 def test_a_frozen_refusal_never_formats_a_non_str_name():

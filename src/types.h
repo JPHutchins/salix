@@ -100,6 +100,16 @@ static inline char const * struct_type_name(StructType const * const type) {
 	return type->heap_type.ht_type.tp_name;
 }
 
+#if PY_VERSION_HEX < 0x030B0000
+static inline PyObject * struct_type_qualname(StructType * const type) {
+	return Py_NewRef(type->heap_type.ht_qualname);
+}
+#else
+static inline PyObject * struct_type_qualname(StructType * const type) {
+	return PyType_GetQualName(&type->heap_type.ht_type);
+}
+#endif
+
 static inline PyObject * * struct_slot(
 	StructType const * const type,
 	PyObject * const self,
