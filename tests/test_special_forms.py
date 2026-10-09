@@ -1,5 +1,5 @@
 import sys
-from dataclasses import InitVar, dataclass, fields
+from dataclasses import MISSING, InitVar, dataclass, fields
 from typing import Annotated, ClassVar, Final
 
 import pytest
@@ -582,6 +582,219 @@ def test_class_var_only_bases_merge_their_positions_in_stock_order(
 
     assert Two._struct_fields_ == tuple(field.name for field in fields(StockTwo)) == expected
     assert (Two().p, Two().q) == (StockTwo().p, StockTwo().q) == (10, 20)
+
+
+def test_a_redeclaration_over_a_deleted_class_var_is_required():
+    @dataclass
+    class StockBase:
+        x: ClassVar[int] = 1
+        a: int = 0
+
+    class Base(Struct):
+        x: ClassVar[int] = 1
+        a: int = 0
+
+    del StockBase.x
+    del Base.x
+
+    @dataclass
+    class StockSub(StockBase):
+        x: int
+
+    class Sub(Base):
+        x: int
+
+    assert Sub._struct_fields_ == tuple(field.name for field in fields(StockSub)) == ("x", "a")
+    assert Sub._struct_defaults_ == (0,)
+    assert (Sub(7).x, StockSub(7).x) == (7, 7)
+
+    with pytest.raises(TypeError):
+        StockSub()
+
+    with pytest.raises(TypeError):
+        Sub()
+
+
+def test_a_redeclaration_over_a_deleted_class_var_after_a_default_is_refused():
+    @dataclass
+    class StockBase:
+        a: int = 0
+        x: ClassVar[int] = 1
+
+    class Base(Struct):
+        a: int = 0
+        x: ClassVar[int] = 1
+
+    del StockBase.x
+    del Base.x
+
+    with pytest.raises(TypeError, match="non-default argument 'x'"):
+
+        @dataclass
+        class StockSub(StockBase):
+            x: int
+
+    with pytest.raises(TypeError, match="non-default field 'x' follows a field with a default"):
+
+        class Sub(Base):
+            x: int
+
+
+def test_a_redeclaration_over_a_deleted_class_var_after_an_init_var_default_is_refused():
+    @dataclass
+    class StockBase:
+        flag: InitVar[int] = 3
+        x: ClassVar[int] = 1
+
+        def __post_init__(self, flag: int) -> None:
+            pass
+
+    class Base(Struct):
+        flag: InitVar[int] = 3
+        x: ClassVar[int] = 1
+
+        def __post_init__(self, flag: int) -> None:
+            pass
+
+    del StockBase.x
+    del Base.x
+
+    with pytest.raises(TypeError, match="non-default argument 'x'"):
+
+        @dataclass
+        class StockSub(StockBase):
+            x: int
+
+    with pytest.raises(TypeError, match="non-default field 'x' follows an InitVar with a default"):
+
+        class Sub(Base):
+            x: int
+
+
+class Answering:
+    def __get__(self, instance: object, owner: type) -> int:
+        return 42
+
+
+class Refusing:
+    def __get__(self, instance: object, owner: type) -> int:
+        raise RuntimeError("descriptor read")
+
+
+class Slotted:
+    __slots__ = ("s",)
+
+
+def test_a_redeclaration_reads_a_descriptor_class_var_through_its_get():
+    @dataclass
+    class StockBase:
+        x: ClassVar[int] = 1
+        a: int = 0
+
+    class Base(Struct):
+        x: ClassVar[int] = 1
+        a: int = 0
+
+    StockBase.x = Answering()
+    Base.x = Answering()
+
+    @dataclass
+    class StockSub(StockBase):
+        x: int
+
+    class Sub(Base):
+        x: int
+
+    assert Sub().x == StockSub().x == 42
+
+
+def test_a_descriptor_class_var_that_raises_fails_the_redeclaring_class():
+    @dataclass
+    class StockBase:
+        x: ClassVar[int] = 1
+
+    class Base(Struct):
+        x: ClassVar[int] = 1
+
+    StockBase.x = Refusing()
+    Base.x = Refusing()
+
+    with pytest.raises(RuntimeError, match="descriptor read"):
+
+        @dataclass
+        class StockSub(StockBase):
+            x: int
+
+    with pytest.raises(RuntimeError, match="descriptor read"):
+
+        class Sub(Base):
+            x: int
+
+
+def test_a_member_descriptor_class_var_leaves_the_redeclaration_required():
+    @dataclass
+    class StockBase:
+        x: ClassVar[int] = 1
+        a: int = 0
+
+    class Base(Struct):
+        x: ClassVar[int] = 1
+        a: int = 0
+
+    StockBase.x = Slotted.__dict__["s"]
+    Base.x = Slotted.__dict__["s"]
+
+    @dataclass
+    class StockSub(StockBase):
+        x: int
+
+    class Sub(Base):
+        x: int
+
+    assert [field.name for field in fields(StockSub) if field.default is MISSING] == ["x"]
+    assert Sub._struct_defaults_ == (0,)
+    assert Sub(7).x == 7
+
+    with pytest.raises(TypeError):
+        Sub()
+
+
+def test_an_init_var_over_a_deleted_class_var_is_required():
+    seen: list[int] = []
+
+    @dataclass
+    class StockBase:
+        x: ClassVar[int] = 1
+
+    class Base(Struct):
+        x: ClassVar[int] = 1
+
+    del StockBase.x
+    del Base.x
+
+    @dataclass
+    class StockSub(StockBase):
+        x: InitVar[int]
+
+        def __post_init__(self, x: int) -> None:
+            seen.append(x)
+
+    class Sub(Base):
+        x: InitVar[int]
+
+        def __post_init__(self, x: int) -> None:
+            seen.append(x)
+
+    with pytest.raises(TypeError):
+        StockSub()
+
+    with pytest.raises(TypeError):
+        Sub()
+
+    StockSub(4)
+    Sub(4)
+
+    assert seen == [4, 4]
 
 
 def test_a_class_var_over_an_inherited_field_is_the_constant_it_was_written_as():

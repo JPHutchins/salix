@@ -124,6 +124,10 @@ static bool machinery_name(PyObject * const name) {
 	);
 }
 static PyObject * build_defaults(PyObject * all_names, PyObject * default_by_name);
+static enum result refuse_misordered_parameters(
+	struct parameter_lists const * parameters,
+	PyObject * default_by_name
+);
 static PyObject * checked_annotations(PyObject * namespace);
 static struct inheritance_lookup inherited_position(
 	PyObject * parameter_names,
@@ -208,6 +212,7 @@ struct field_plan field_plan_build(
 	PY_OWNED(declared_list, PyDict_Keys(annotations));
 	plan_built.declared_names = declared_list != NULL ? PyList_AsTuple(declared_list) : NULL;
 	plan_built.mro_default_names = PyList_AsTuple(mro_default_names);
+	plan_built.default_by_name = Py_NewRef(default_by_name);
 
 	if (plan_built.declared_names == NULL || plan_built.mro_default_names == NULL) {
 		field_plan_clear(&plan_built);
@@ -230,6 +235,7 @@ void field_plan_clear(struct field_plan * const plan) {
 	Py_CLEAR(plan->declared_names);
 	Py_CLEAR(plan->class_var_positions);
 	Py_CLEAR(plan->mro_default_names);
+	Py_CLEAR(plan->default_by_name);
 }
 
 static PyObject * class_value_in_mro(PyTypeObject * const created, PyObject * const name) {
@@ -253,93 +259,73 @@ static PyObject * class_value_in_mro(PyTypeObject * const created, PyObject * co
 	return NULL;
 }
 
-static PyObject * with_default_replaced(
-	PyObject * const names,
-	PyObject * const defaults,
-	PyObject * const name,
-	PyObject * const value
-) {
-	Py_ssize_t const name_index = PySequence_Index(names, name);
+static PyObject * class_default_of(PyTypeObject * const created, PyObject * const name) {
+	PY_MOVABLE(found, class_value_in_mro(created, name));
 
-	if (name_index < 0) {
+	if (found == NULL) {
 		return NULL;
 	}
 
-	Py_ssize_t const replaced_index = (
-		name_index -
-		(PySequence_Size(names) - PyTuple_GET_SIZE(defaults))
-	);
+	descrgetfunc const bind = Py_TYPE(found)->tp_descr_get;
+	PY_MOVABLE(value, bind != NULL ? bind(found, NULL, (PyObject *) created) : py_move(&found));
 
-	if (replaced_index < 0) {
-		PyErr_Format(
-			PyExc_SystemError,
-			"salix internal error: '%U' redeclares a ClassVar without a recorded default",
-			name
-		);
-
-		return NULL;
-	}
-
-	PY_OWNED(stored, struct_default_copy(value));
-	PY_MOVABLE(replaced, stored != NULL ? PyTuple_New(PyTuple_GET_SIZE(defaults)) : NULL);
-
-	if (replaced == NULL) {
-		return NULL;
-	}
-
-	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(defaults); i += 1) {
-		PyTuple_SET_ITEM(
-			replaced,
-			i,
-			Py_NewRef(i == replaced_index ? stored : PyTuple_GET_ITEM(defaults, i))
-		);
-	}
-
-	return py_move(&replaced);
+	return value != NULL && PyObject_TypeCheck(value, &PyMemberDescr_Type) ? NULL : py_move(&value);
 }
 
 enum result field_plan_resolve_mro_defaults(
 	struct field_plan * const plan,
 	PyTypeObject * const created
 ) {
+	if (PyTuple_GET_SIZE(plan->mro_default_names) == 0) {
+		return RESULT_OK;
+	}
+
 	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(plan->mro_default_names); i += 1) {
 		PyObject * const name = PyTuple_GET_ITEM(plan->mro_default_names, i);
-		PY_OWNED(value, class_value_in_mro(created, name));
+		PY_OWNED(value, class_default_of(created, name));
 
-		if (value == NULL) {
-			if (PyErr_Occurred()) {
-				return RESULT_ERROR;
-			}
-
-			continue;
-		}
-
-		int const init_var = PySequence_Contains(plan->init_var_names, name);
-
-		if (init_var < 0) {
+		if (
+			value != NULL ? PyDict_SetItem(plan->default_by_name, name, value) < 0 :
+			PyErr_Occurred() != NULL || PyDict_DelItem(plan->default_by_name, name) < 0
+		) {
 			return RESULT_ERROR;
 		}
-
-		if (init_var == 1) {
-			PyObject * const replaced =
-				with_default_replaced(plan->init_var_names, plan->init_var_defaults, name, value);
-
-			if (replaced == NULL) {
-				return RESULT_ERROR;
-			}
-
-			Py_SETREF(plan->init_var_defaults, replaced);
-		} else {
-			PyObject * const replaced =
-				with_default_replaced(plan->all_names, plan->defaults, name, value);
-
-			if (replaced == NULL) {
-				return RESULT_ERROR;
-			}
-
-			Py_SETREF(plan->defaults, replaced);
-		}
 	}
+
+	PY_OWNED(init_var_name_list, PySequence_List(plan->init_var_names));
+	PY_OWNED(init_var_flag_list, PySequence_List(plan->init_var_flags));
+
+	if (
+		init_var_name_list == NULL ||
+		init_var_flag_list == NULL ||
+		(
+			PyList_GET_SIZE(init_var_name_list) > 0 &&
+			(
+				refuse_misordered_parameters(
+					&(struct parameter_lists){
+						.names = plan->parameter_names,
+						.init_var_flags = init_var_flag_list,
+					},
+					plan->default_by_name
+				) != RESULT_OK
+			)
+		)
+	) {
+		return RESULT_ERROR;
+	}
+
+	PY_MOVABLE(defaults, build_defaults(plan->all_names, plan->default_by_name));
+	PY_MOVABLE(
+		init_var_defaults,
+		defaults != NULL ? build_defaults(init_var_name_list, plan->default_by_name) : NULL
+	);
+
+	if (init_var_defaults == NULL) {
+		return RESULT_ERROR;
+	}
+
+	Py_SETREF(plan->defaults, py_move(&defaults));
+	Py_SETREF(plan->init_var_defaults, py_move(&init_var_defaults));
 
 	return RESULT_OK;
 }
@@ -628,8 +614,9 @@ static PyObject * checked_annotations(PyObject * const namespace) {
 	return NULL;
 }
 
-static enum result append_parameter(
+static enum result insert_parameter(
 	struct parameter_lists const * const parameters,
+	Py_ssize_t const at,
 	PyObject * const parameter_name,
 	PyObject * const kind_flag,
 	PyObject * const annotation,
@@ -637,12 +624,29 @@ static enum result append_parameter(
 ) {
 	return (
 		(
-			PyList_Append(parameters->names, parameter_name) >= 0 &&
-			PyList_Append(parameters->init_var_flags, kind_flag) >= 0 &&
-			PyList_Append(parameters->annotations, annotation) >= 0 &&
-			PyList_Append(parameters->metadata, metadata) >= 0
+			PyList_Insert(parameters->names, at, parameter_name) >= 0 &&
+			PyList_Insert(parameters->init_var_flags, at, kind_flag) >= 0 &&
+			PyList_Insert(parameters->annotations, at, annotation) >= 0 &&
+			PyList_Insert(parameters->metadata, at, metadata) >= 0
 		) ? RESULT_OK :
 		RESULT_ERROR
+	);
+}
+
+static enum result append_parameter(
+	struct parameter_lists const * const parameters,
+	PyObject * const parameter_name,
+	PyObject * const kind_flag,
+	PyObject * const annotation,
+	PyObject * const metadata
+) {
+	return insert_parameter(
+		parameters,
+		PyList_GET_SIZE(parameters->names),
+		parameter_name,
+		kind_flag,
+		annotation,
+		metadata
 	);
 }
 
@@ -897,23 +901,6 @@ static enum result record_merged_order(
 	return RESULT_OK;
 }
 
-static enum result insert_placeholder(
-	struct parameter_lists const * const parameters,
-	Py_ssize_t const at,
-	PyObject * const name,
-	PyObject * const empty_extras
-) {
-	return (
-		(
-			PyList_Insert(parameters->names, at, name) >= 0 &&
-			PyList_Insert(parameters->init_var_flags, at, Py_None) >= 0 &&
-			PyList_Insert(parameters->annotations, at, Py_None) >= 0 &&
-			PyList_Insert(parameters->metadata, at, empty_extras) >= 0
-		) ? RESULT_OK :
-		RESULT_ERROR
-	);
-}
-
 static enum result merge_secondary_class_vars(
 	PyObject * const bases,
 	StructType const * const base,
@@ -979,7 +966,7 @@ static enum result merge_secondary_class_vars(
 		}
 
 		if (
-			insert_placeholder(parameters, at, name, empty_extras) != RESULT_OK ||
+			insert_parameter(parameters, at, name, Py_None, Py_None, empty_extras) != RESULT_OK ||
 			PyDict_SetItem(default_by_name, name, value) < 0
 		) {
 			return RESULT_ERROR;

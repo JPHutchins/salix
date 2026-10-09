@@ -20,6 +20,7 @@ struct field_plan {
 	PyObject * declared_names;
 	PyObject * class_var_positions;
 	PyObject * mro_default_names;
+	PyObject * default_by_name;
 };
 
 struct field_plan field_plan_build(StructType const * base, PyObject * bases, PyObject * namespace);
