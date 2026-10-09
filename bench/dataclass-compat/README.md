@@ -1,96 +1,40 @@
 # dataclass-compat
 
-Consumer-tier experiments for [salix #160](https://github.com/JPHutchins/salix/issues/160):
-can salix serve as a drop-in replacement for `dataclasses` in real libraries?
+`_shim.py` builds salix `Struct`s behind the `dataclasses` API, for
+[salix #160](https://github.com/JPHutchins/salix/issues/160). The source
+tier's shim-based legs (`../source-tiers/`) and the CPython conformance
+run below use it. `known_gaps.md` lists where the shim and salix differ
+from stock.
 
-## Patch tier: omegaconf, zero source changes
+## CPython conformance
 
-`_shim.py` replaces `dataclasses.dataclass`, `fields`, `asdict`, `replace`, and
-`is_dataclass` with implementations that build salix `Struct`s behind the
-dataclasses API. Omegaconf's source is untouched: its `@dataclass` decorators
-route through the patch, and its own internal dataclasses become salix Structs.
+`camas conformance` builds salix in place and runs CPython's own
+`test_dataclasses` through the shim. The tests are fetched by a sparse
+checkout of the pinned tag into `.cpython/`. Every test's outcome is
+compared with `conformance-v3.14.6.json`, and a change in either
+direction fails the run. A fix that turns a test green therefore
+re-records the file with `conformance.py --record`.
 
-`run_omegaconf.sh` runs omegaconf's own test suite against the patch. It pins
-the omegaconf revision, the dependency set (`requirements.txt`), and the salix
-wheel, so a run is reproducible from this repo's build alone.
+Measured 2026-10-09 on salix 70bf53c, CPython v3.14.6:
 
-```sh
-./run_omegaconf.sh --salix-wheel <path-to-built-salix-wheel>
-```
+| | pass | skip | fail | error |
+|---|---|---|---|---|
+| stock `dataclasses` | 275 | 1 | 0 | 0 |
+| through the shim | 147 | 1 | 71 | 57 |
 
-### Measured result (salix e93d04f, omegaconf a8bcf1f, 2026-10-03)
-
-- 8508 passed, 362 skipped
-- 5 failed, in two documented gaps (see `known_gaps.md`):
-  - 3 arbitrary instance attributes (structs have no `__dict__`)
-  - 2 pickles written by omegaconf 2.0.6 and 2.1.0rc1, whose metadata
-    classes were dataclasses then
-- 1 module excluded at collection: two unrelated Struct bases (layout conflict)
-
-### Mechanics
-
-The patch is installed by a generated root `conftest.py`
-(`from _shim import install; install()`) so it is active before any test module
-imports. Stock dataclasses functions are captured at import; non-struct
-objects fall through to them. Classes with static-type bases (e.g. `dict`)
-fall back to stock dataclasses entirely — salix's C layout cannot coexist
-with them.
-
-## Patch tier: tyro, zero source changes
-
-`run_tyro.sh` does the same against tyro's suite (pinned `d0c9877f`), with
-`install(exclude_prefixes=("tyro",))` — tyro's own internal dataclasses stay
-stock, every user-facing dataclass in the tests is shimmed.
-
-### Measured result (salix e93d04f, tyro d0c9877f, 2026-10-03)
-
-- 5077 passed, 288 skipped
-- 15 failed: attributes a `__post_init__` sets outside the fields (8),
-  empty-struct field equality (2), functools.partial resolution (4), and
-  `test_runtime_checkable_edge_case[argparse]`, which passes alone (1)
-  — see `known_gaps.md`
-
-## Patch tier: hydra, zero source changes
-
-`run_hydra.sh` runs hydra's suite (pinned `d1e07c8f`) with the patch installed
-unconditionally. Hydra's own internals stay stock all the same: its pytest11
-plugin imports them before the generated `conftest.py` installs the patch
-(measured: `InputDefault` is a struct only under `-p no:hydra_pytest`).
-
-### Measured result (salix e93d04f, hydra d1e07c8f, 2026-10-03)
-
-- 3264 passed, 219 skipped, 1 xfailed
-- 2 failed — the bash-completion scripts run a subprocess that cannot
-  import omegaconf in this environment
+The skipped test needs `_testcapi`.
 
 ## Measured startup deltas, per library (real workloads, 2026-09-01)
 
-Fresh interpreter per run, median of 5; the libraries' own workloads —
-omegaconf runs its suite's structured-config corpus, hydra composes its
-own example config, tyro parses a real CLI module, transformers is a
-plain import. Reproduced by the `startup_bench.py` script in this
-directory; `startup_bench.py` and `typebench.py` both hard-code
-machine-specific interpreter paths and `/tmp` fixtures (the numbers
-below are this repo's measured run).
+Fresh interpreter per run, median of 5, on each library's own workload:
+- omegaconf runs its suite's structured-config corpus.
+- transformers is a plain import.
+
+`startup_bench.py` and `typebench.py` hard-code machine-specific
+interpreter paths and `/tmp` fixtures. The numbers below are this
+repo's measured run.
 
 | library | pre | post | delta |
 |---|---|---|---|
 | omegaconf (fork migration) | 134.5 ms | 129.7 ms | −4.8 ms (−3.6%) |
 | transformers (fork migration) | 588.9 ms | 577.4 ms | −11.5 ms (−2.0%) |
-| hydra (patch tier, internals excluded) | 156.5 ms | 157.6 ms | +0.7% |
-| tyro (patch tier, internals excluded) | 55.2 ms | 57.9 ms | +4.9% |
-
-Real migrations start faster; patch-only tiers don't, because their own
-internals stay stock.
-
-## Source tier
-
-Fork [JPHutchins/omegaconf-salix](https://github.com/JPHutchins/omegaconf-salix)
-(branch `salix-native`, draft PR), rewriting omegaconf to salix-native idioms:
-`Metadata`/`ContainerMetadata` are salix `Struct`s with `__reduce__`
-reconstruction, struct input is recognized in `_utils`, and pickle works
-through `__getstate__`/`__setstate__` resolving the class by module+qualname.
-
-Measured (salix e93d04f, 2026-10-03): 8512 passed / 1 failed — the 1 loads
-a pickle omegaconf 2.0.6 wrote. `benchmarks/salix_vs_stock.py` A/B
-(2026-09-01): deepcopy −22%, pickle +47%, the rest parity.

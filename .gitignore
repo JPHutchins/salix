@@ -12,3 +12,4 @@ dist/
 compile_flags.txt
 /.free-threaded-python/
 /.venvs/
+/bench/dataclass-compat/.cpython/
