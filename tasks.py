@@ -77,7 +77,10 @@ pytest = Task(
 )
 compile_flags = Task("uv run --no-sync python tools/compile_flags.py", mutates=True)
 
-clean = Task("git clean -xdf -e .venv -e .venvs -e .free-threaded-python -e .camas -e .claude", mutates=True)
+clean = Task(
+    "git clean -xdf -e .venv -e .venvs -e .free-threaded-python -e .camas -e .claude -e .cpython",
+    mutates=True,
+)
 update_python_targets = Task("uv run python tools/update_python_targets.py", mutates=True)
 
 c_format = Task("jphfmt -i {paths}", paths=C_SOURCES, mutates=True)
@@ -160,8 +163,21 @@ free_threaded_pytest = Task(
     agent_format=JUNIT_FORMAT,
 )
 free_threaded = Sequential(free_threaded_build, free_threaded_pytest)
-benchmark = Sequential(
-    Task("uv run python setup.py build_ext --inplace", mutates=True, env=STRICT_BUILD), bench
+in_place_build = Task("uv run python setup.py build_ext --inplace", mutates=True, env=STRICT_BUILD)
+benchmark = Sequential(in_place_build, bench)
+CONFORMANCE_PYTHON = "3.14.6"
+CONFORMANCE_RUN = f"uv run --no-project --managed-python --python {CONFORMANCE_PYTHON}"
+conformance = Sequential(
+    Task(
+        CONFORMANCE_RUN + " --with setuptools python setup.py build_ext --inplace",
+        mutates=True,
+        env=STRICT_BUILD,
+    ),
+    Task(
+        CONFORMANCE_RUN + f" python dataclass-compat/conformance.py {CONFORMANCE_PYTHON}",
+        cwd=Path("bench"),
+        when=".",
+    ),
 )
 check = Parallel(test, free_threaded, format_check, lock_check, lint, analyze, c_test, type_check)
 
@@ -199,6 +215,8 @@ coverage = Parallel(
     ),
 )
 
-ci = Parallel(flake_check, free_threaded, format_check, lock_check, lint, analyze, type_check)
+ci = Parallel(
+    flake_check, free_threaded, format_check, lock_check, lint, analyze, type_check, conformance
+)
 
 _ = Config(default_task=check, github_task=ci, agent=Claude(fix=format, check=check))
