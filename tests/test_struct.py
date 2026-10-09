@@ -1,3 +1,5 @@
+from dataclasses import dataclass
+
 import pytest
 
 from salix import Struct
@@ -76,7 +78,7 @@ def test_immutable():
         del p.x
 
 
-def test_eq_structural():
+def test_eq_compares_instances_of_one_class():
     assert Point2D(1.0, 2.0) == Point2D(1.0, 2.0)
     assert Point2D(1.0, 2.0) != Point2D(1.0, 9.0)
 
@@ -84,12 +86,55 @@ def test_eq_structural():
         x: float
         y: float
 
-    assert Point2D(1.0, 2.0) == Other2D(1.0, 2.0)
+    assert Point2D(1.0, 2.0) != Other2D(1.0, 2.0)
 
     class Point1D(Struct):
         x: float
 
     assert Point1D(1.0) != Point2D(1.0, 2.0)
+
+
+def test_two_field_less_classes_are_unequal_like_stock_dataclasses():
+    @dataclass(frozen=True)
+    class StockTop:
+        pass
+
+    @dataclass(frozen=True)
+    class StockDead:
+        pass
+
+    class Top(Struct):
+        pass
+
+    class Dead(Struct):
+        pass
+
+    assert (StockTop() == StockDead(), Top() == Dead()) == (False, False)
+    assert (len({StockTop(), StockDead()}), len({Top(), Dead()})) == (2, 2)
+    assert Top() == Top()
+
+
+def test_a_subclass_instance_is_unequal_to_its_base_s_like_stock_dataclasses():
+    @dataclass(frozen=True)
+    class StockBase:
+        x: int
+
+    @dataclass(frozen=True)
+    class StockChild(StockBase):
+        pass
+
+    class Base(Struct):
+        x: int
+
+    class Child(Base):
+        pass
+
+    assert (StockBase(1) == StockChild(1), Base(1) == Child(1)) == (False, False)
+    assert (StockChild(1) == StockBase(1), Child(1) == Base(1)) == (False, False)
+
+
+def test_a_struct_is_unequal_to_a_tuple_of_its_values():
+    assert Point2D(1.0, 2.0) != (1.0, 2.0)
 
 
 def test_hash():
