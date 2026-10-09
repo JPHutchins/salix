@@ -2,6 +2,7 @@ import copy
 import pickle
 import sys
 from collections import OrderedDict
+from collections.abc import Iterable
 from dataclasses import InitVar
 
 import pytest
@@ -498,12 +499,36 @@ def test_a_c_defined_co_base_refuses_duplication_like_a_stock_subclass():
             duplicate(BuilderCoBase())
 
 
-class FrozenSetCoBase(set, Struct):
+class InitSetCoBase(set, Struct):
     a: int = 0
 
+    def __init__(self, items: Iterable[object] = (), a: int = 0) -> None:
+        super().__init__(items)
+        set_field(self, "a", a)
 
-class FrozenOrderedCoBase(OrderedDict, Struct):
+
+class InitOrderedCoBase(OrderedDict, Struct):
     a: int = 0
+
+    def __init__(self, items: Iterable[tuple[object, object]] = (), a: int = 0) -> None:
+        super().__init__(items)
+        set_field(self, "a", a)
+
+
+class RequiredSetCoBase(set, Struct):
+    a: int
+
+
+class RequiredOrderedCoBase(OrderedDict, Struct):
+    a: int
+
+
+class StockSlottedSet(set):
+    __slots__ = ("a",)
+
+
+class StockSlottedOrdered(OrderedDict):
+    __slots__ = ("a",)
 
 
 def test_a_value_co_base_whose_new_construction_skips_is_refused():
@@ -513,13 +538,34 @@ def test_a_value_co_base_whose_new_construction_skips_is_refused():
             a: int = 0
 
 
-@pytest.mark.xfail(
-    sys.version_info >= (3, 11),
-    strict=True,
-    raises=TypeError,
-    reason="a frozen struct refuses state once its co-base's reduce has called the class",
+@pytest.mark.parametrize(
+    "make",
+    [lambda: InitSetCoBase([1], a=7), lambda: InitOrderedCoBase([("k", 1)], a=7)],
+    ids=["set", "OrderedDict"],
 )
-@pytest.mark.parametrize("make", [FrozenSetCoBase, FrozenOrderedCoBase], ids=["set", "OrderedDict"])
 @pytest.mark.parametrize("duplicate", [copy.copy, copy.deepcopy, round_trip], ids=["copy", "deepcopy", "pickle"])
-def test_a_frozen_struct_over_a_class_calling_co_base_duplicates(make, duplicate):
-    assert duplicate(make()) == make()
+def test_a_frozen_struct_refuses_state_once_its_co_base_reduce_has_called_the_class(make, duplicate):
+    if sys.version_info >= (3, 11):
+        with pytest.raises(TypeError, match="cannot restore state into a live frozen"):
+            duplicate(make())
+    else:
+        assert duplicate(make()).a == 0
+
+
+@pytest.mark.parametrize(
+    ("ours", "stock", "items"),
+    [
+        (RequiredSetCoBase, StockSlottedSet, [1]),
+        (RequiredOrderedCoBase, StockSlottedOrdered, [("k", 1)]),
+    ],
+    ids=["set", "OrderedDict"],
+)
+@pytest.mark.parametrize("duplicate", [copy.copy, copy.deepcopy, round_trip], ids=["copy", "deepcopy", "pickle"])
+def test_a_class_calling_co_base_carries_field_state_like_a_stock_slotted_subclass(ours, stock, items, duplicate):
+    original = ours(items)
+    set_field(original, "a", 7)
+    stock_original = stock(items)
+    stock_original.a = 7
+
+    assert getattr(duplicate(original), "a", None) == getattr(duplicate(stock_original), "a", None)
+    assert getattr(duplicate(original), "a", None) == (7 if sys.version_info >= (3, 11) else None)
