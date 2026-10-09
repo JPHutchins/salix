@@ -1,4 +1,5 @@
 import weakref
+from dataclasses import dataclass
 
 import pytest
 from values import EVERY, HASHABLE, identify
@@ -285,15 +286,26 @@ class TestOrder:
                 assert (Ordered(*left) < Ordered(*right)) == (left < right)
                 assert (Ordered(*left) <= Ordered(*right)) == (left <= right)
 
-    def test_it_is_structural_like_equality(self):
-        """Matching field names, any class -- the rule `==` already follows."""
+    def test_it_compares_only_instances_of_one_class(self):
+        @dataclass(order=True)
+        class StockOrdered:
+            x: object
+            y: object = 0
+
+        @dataclass(order=True)
+        class StockSame:
+            x: object
+            y: object = 0
 
         class Same(Struct, order=True):
             x: object
             y: object = 0
 
-        assert Same(1, 2) == Ordered(1, 2)
-        assert Same(1, 2) < Ordered(1, 3)
+        with pytest.raises(TypeError, match="'<' not supported"):
+            _ = StockSame(1, 2) < StockOrdered(1, 3)
+
+        with pytest.raises(TypeError, match="'<' not supported"):
+            _ = Same(1, 2) < Ordered(1, 3)
 
     def test_different_field_names_are_not_ordered(self):
         class Other(Struct, order=True):

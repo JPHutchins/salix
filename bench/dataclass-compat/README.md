@@ -24,12 +24,12 @@ re-records the file with `--record`, which prints the per-test delta
 before writing. Skips are left out of the file, because a skip measures
 the interpreter rather than salix.
 
-Measured 2026-10-09 on salix 70bf53c, CPython v3.14.6:
+Measured 2026-10-09 with structs comparing only within one class, CPython v3.14.6:
 
 | | pass | skip | fail | error |
 |---|---|---|---|---|
 | stock `dataclasses` | 275 | 1 | 0 | 0 |
-| through the shim | 147 | 1 | 71 | 57 |
+| through the shim | 150 | 1 | 68 | 57 |
 
 The skipped test needs `_testcapi`.
 

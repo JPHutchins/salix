@@ -185,9 +185,8 @@ static inline PyObject * struct_slot_ref(
 }
 
 static inline struct slot_pair struct_slot_pair_ref(
-	StructType const * const self_type,
+	StructType const * const type,
 	PyObject * const self,
-	StructType const * const other_type,
 	PyObject * const other,
 	Py_ssize_t const index
 ) {
@@ -195,8 +194,8 @@ static inline struct slot_pair struct_slot_pair_ref(
 	PyObject * theirs;
 
 	STRUCT_BEGIN_CRITICAL_SECTION2(self, other);
-	mine = *struct_slot(self_type, self, index);
-	theirs = *struct_slot(other_type, other, index);
+	mine = *struct_slot(type, self, index);
+	theirs = *struct_slot(type, other, index);
 	mine = Py_NewRef(mine != NULL ? mine : Py_None);
 	theirs = Py_NewRef(theirs != NULL ? theirs : Py_None);
 	STRUCT_END_CRITICAL_SECTION2();

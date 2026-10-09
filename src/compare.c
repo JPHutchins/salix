@@ -13,16 +13,10 @@ enum comparison {
 static PyObject * equality_result(PyObject * self, PyObject * other, int op);
 static PyObject * ordering_result(PyObject * self, PyObject * other, int op);
 static enum comparison structs_equal(PyObject * self, PyObject * other);
-static enum comparison names_equal(StructType const * self_type, StructType const * other_type);
-static enum comparison values_equal(
-	StructType const * self_type,
-	PyObject * self,
-	StructType const * other_type,
-	PyObject * other
-);
+static enum comparison values_equal(StructType const * type, PyObject * self, PyObject * other);
 
 PyObject * Struct_rich_compare(PyObject * const self, PyObject * const other, int const op) {
-	if (!is_struct(self) || !is_struct(other)) {
+	if (!is_struct(self) || Py_TYPE(other) != Py_TYPE(self)) {
 		Py_RETURN_NOTIMPLEMENTED;
 	}
 
@@ -46,24 +40,14 @@ static PyObject * equality_result(PyObject * const self, PyObject * const other,
 }
 
 static PyObject * ordering_result(PyObject * const self, PyObject * const other, int const op) {
-	StructType const * const self_type = struct_type_of(self);
-	StructType const * const other_type = struct_type_of(other);
+	StructType const * const type = struct_type_of(self);
 
-	if (!self_type->struct_options.order || !other_type->struct_options.order) {
+	if (!type->struct_options.order) {
 		Py_RETURN_NOTIMPLEMENTED;
 	}
 
-	switch (names_equal(self_type, other_type)) {
-		case COMPARISON_ERROR:
-			return NULL;
-		case COMPARISON_UNEQUAL:
-			Py_RETURN_NOTIMPLEMENTED;
-		case COMPARISON_EQUAL:
-			break;
-	}
-
-	for (Py_ssize_t i = 0; i < self_type->struct_field_count; ++i) {
-		struct slot_pair const pair = struct_slot_pair_ref(self_type, self, other_type, other, i);
+	for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
+		struct slot_pair const pair = struct_slot_pair_ref(type, self, other, i);
 		PY_OWNED(mine, pair.mine);
 		PY_OWNED(theirs, pair.theirs);
 		int const equal = PyObject_RichCompareBool(mine, theirs, Py_EQ);
@@ -81,35 +65,16 @@ static PyObject * ordering_result(PyObject * const self, PyObject * const other,
 }
 
 static enum comparison structs_equal(PyObject * const self, PyObject * const other) {
-	StructType const * const self_type = struct_type_of(self);
-	StructType const * const other_type = struct_type_of(other);
-	enum comparison const named_alike = names_equal(self_type, other_type);
-
-	return (
-		named_alike != COMPARISON_EQUAL ? named_alike :
-		values_equal(self_type, self, other_type, other)
-	);
-}
-
-static enum comparison names_equal(
-	StructType const * const self_type,
-	StructType const * const other_type
-) {
-	return PyObject_RichCompareBool(
-		self_type->struct_field_names,
-		other_type->struct_field_names,
-		Py_EQ
-	);
+	return values_equal(struct_type_of(self), self, other);
 }
 
 static enum comparison values_equal(
-	StructType const * const self_type,
+	StructType const * const type,
 	PyObject * const self,
-	StructType const * const other_type,
 	PyObject * const other
 ) {
-	for (Py_ssize_t i = 0; i < self_type->struct_field_count; ++i) {
-		struct slot_pair const pair = struct_slot_pair_ref(self_type, self, other_type, other, i);
+	for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
+		struct slot_pair const pair = struct_slot_pair_ref(type, self, other, i);
 		PY_OWNED(mine, pair.mine);
 		PY_OWNED(theirs, pair.theirs);
 		int const equal = PyObject_RichCompareBool(mine, theirs, Py_EQ);

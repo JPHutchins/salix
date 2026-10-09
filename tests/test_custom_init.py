@@ -40,14 +40,16 @@ def test_the_struct_machinery_is_otherwise_untouched():
     assert Handwritten._struct_fields_ == ("x", "y")
     assert Handwritten.__match_args__ == ("x", "y")
     assert repr(Handwritten(7)) == "Handwritten(x=7, y=7)"
-    assert Handwritten(7) == Generated(7, 7)
+    assert Handwritten(7) == Handwritten(7)
+    assert Handwritten(7) != Handwritten(8)
 
 
 def test_an_inherited_init_is_honoured_too():
     class Child(Handwritten):
         pass
 
-    assert Child(3) == Handwritten(3)
+    assert (Child(3).x, Child(3).y) == (3, 3)
+    assert Child(3) == Child(3)
 
 
 def test_a_body_init_under_a_generated_base_declines_the_vectorcall_too():

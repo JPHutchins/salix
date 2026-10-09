@@ -1,4 +1,5 @@
 import sys
+from dataclasses import dataclass
 from typing import ClassVar, Protocol
 
 import pytest
@@ -20,8 +21,19 @@ class Nested(Struct):
     items: list
 
 
-def test_equality_is_structural_not_nominal():
-    assert Point(1, 2) == SameShape(1, 2)
+def test_equality_is_nominal_like_stock_dataclasses():
+    @dataclass
+    class StockPoint:
+        x: int
+        y: int
+
+    @dataclass
+    class StockSameShape:
+        x: int
+        y: int
+
+    assert StockPoint(1, 2) != StockSameShape(1, 2)
+    assert Point(1, 2) != SameShape(1, 2)
 
 
 def test_differing_field_names_are_never_equal():
@@ -64,8 +76,9 @@ def test_hash_matches_the_tuple_of_values():
     assert hash(Point(1, 2)) == hash((1, 2))
 
 
-def test_equal_structs_share_a_hash_bucket():
-    assert len({Point(1, 2), SameShape(1, 2)}) == 1
+def test_structs_of_two_classes_keep_two_set_entries():
+    assert hash(Point(1, 2)) == hash(SameShape(1, 2))
+    assert len({Point(1, 2), SameShape(1, 2)}) == 2
 
 
 def test_an_unhashable_field_makes_the_struct_unhashable():

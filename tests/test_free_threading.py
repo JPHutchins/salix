@@ -188,9 +188,8 @@ def test_a_shared_ordered_struct_is_safe_to_compare_while_another_thread_writes_
     It is the weaker of the four, and honestly so: reverting just this loop to
     a borrowed read survives 3/3 here, and 3/3 again at five times these rounds.
     The same was true of hash before the fix -- it read exactly as == did and
-    exited 0/0/0 while == exited 139/134/134. One racing load per call, behind a
-    names_equal tuple comparison and the richcompare dispatch, is apparently not
-    often enough. So this pins that ordering keeps working under concurrent
+    exited 0/0/0 while == exited 139/134/134. One racing load per call, behind
+    the richcompare dispatch, is apparently not often enough. So this pins that ordering keeps working under concurrent
     writes rather than that it would crash without the lock; the crash is pinned
     by the test above, through the helper both paths share.
 
