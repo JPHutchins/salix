@@ -1329,6 +1329,19 @@ class TestFieldsReboundDuringClassCreation:
 
         assert (Base.x, Sub.x) == (5, 9)
 
+    def test_a_hook_deleting_a_redeclared_class_var_is_refused(self) -> None:
+        class Base(Struct):
+            limit: ClassVar[int] = 1
+
+            def __init_subclass__(cls, **keywords: object) -> None:
+                super().__init_subclass__(**keywords)
+                del cls.limit
+
+        with pytest.raises(TypeError, match=r"Sub\.limit does not reach its ClassVar's value"):
+
+            class Sub(Base):
+                limit: ClassVar[int] = 2
+
     def test_a_hook_rebinding_a_field_to_its_own_descriptor_builds(self) -> None:
         class Base(Struct):
             y: int = 0
@@ -1442,6 +1455,18 @@ class TestFieldAndClassVarNamesAfterClassCreation:
 
         with pytest.raises(TypeError, match="can't apply this __delattr__"):
             type.__delattr__(Later, "y")
+
+    def test_writing_a_base_s_field_descriptor_onto_a_subclass_is_refused(self) -> None:
+        class Base(Struct):
+            z: int = 0
+
+        class Sub(Base):
+            w: int = 0
+
+        with pytest.raises(TypeError, match=r"cannot set 'z' attribute of struct class 'Sub'"):
+            Sub.z = Base.__dict__["z"]
+
+        assert "z" not in Sub.__dict__
 
     def test_type_setattr_is_refused_for_every_name(self) -> None:
         class Later(Struct):

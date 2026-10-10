@@ -447,6 +447,15 @@ struct class_entry class_entry_of(PyTypeObject * const type, PyObject * const na
 		PY_OWNED(owner_dict, struct_type_dict(owner));
 
 		if (owner_dict == NULL) {
+			if (!PyErr_Occurred()) {
+				PyErr_Format(
+					PyExc_SystemError,
+					"%.200s has no class dict to look '%U' up in",
+					owner->tp_name,
+					name
+				);
+			}
+
 			return (struct class_entry){.tag = CLASS_ENTRY_ERROR};
 		}
 
@@ -527,7 +536,9 @@ static int StructMeta_setattro(
 			break;
 	}
 
-	if (value != NULL && value == entry.value) {
+	bool const being_created = ((StructType const *) self)->struct_field_names == NULL;
+
+	if (being_created && value != NULL && value == entry.value) {
 		return PyType_Type.tp_setattro(self, name, value);
 	}
 

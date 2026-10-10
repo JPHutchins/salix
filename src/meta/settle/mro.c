@@ -89,10 +89,7 @@ enum result refuse_rebound_class_names(StructType * const struct_class) {
 			return RESULT_ERROR;
 		}
 
-		if (
-			entry.tag != CLASS_ENTRY_CLASS_VAR ||
-			(entry.owner == created && entry.value != PyTuple_GET_ITEM(position, 2))
-		) {
+		if (entry.tag != CLASS_ENTRY_CLASS_VAR || entry.value != PyTuple_GET_ITEM(position, 2)) {
 			return refuse_a_rebound_name(
 				created,
 				class_var_name,

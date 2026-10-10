@@ -907,7 +907,11 @@ def _rebuild_struct_subclass(
     built = cast(Any, type(cls))(
         cls.__name__,
         cls.__bases__,
-        namespace,
+        {
+            key: value
+            for key, value in namespace.items()
+            if key not in names or key in own_annotations
+        },
         frozen=frozen,
         eq=eq,
         order=order,

@@ -56,19 +56,15 @@ def test_a_redefaulted_inherited_field_is_not_shadowed_by_its_class_variable():
     assert repr(instance) == f"{Defaulted.__qualname__}(x=1, y=9)"
 
 
-def test_a_bare_binding_over_an_inherited_field_is_not_shadowed_either():
-    """The same shadowing, reached without re-annotating: a class variable whose
-    name is already a field would otherwise sit ahead of the base's descriptor
-    in the MRO, and attribute access alone would disagree with everything else.
-    """
+def test_a_bare_binding_over_an_inherited_field_is_refused():
+    with pytest.raises(
+        TypeError,
+        match=r"'y' is a field this class inherits, and the class body binds a int to that "
+        r"name without an annotation.*redeclare it with its annotation",
+    ):
 
-    class Bound(Base):
-        y = 42
-
-    instance = Bound(1, 9)
-
-    assert instance.y == 9
-    assert repr(instance) == f"{Bound.__qualname__}(x=1, y=9)"
+        class Bound(Base):
+            y = 42
 
 
 def test_a_required_field_may_not_follow_a_defaulted_one():

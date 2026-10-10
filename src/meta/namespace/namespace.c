@@ -559,6 +559,48 @@ enum result refuse_colliding_methods(
 	return RESULT_OK;
 }
 
+enum result refuse_unannotated_field_bindings(
+	PyObject * const original_namespace,
+	PyObject * const all_names,
+	PyObject * const declared_names
+) {
+	for (Py_ssize_t i = 0; i < PyList_GET_SIZE(all_names); ++i) {
+		PyObject * const field_name = PyList_GET_ITEM(all_names, i);
+		int const declared = PySequence_Contains(declared_names, field_name);
+
+		if (declared < 0) {
+			return RESULT_ERROR;
+		}
+
+		if (declared == 1) {
+			continue;
+		}
+
+		PY_OWNED(bound, dict_value_ref(original_namespace, field_name));
+
+		if (bound == NULL) {
+			if (PyErr_Occurred()) {
+				return RESULT_ERROR;
+			}
+
+			continue;
+		}
+
+		PyErr_Format(
+			PyExc_TypeError,
+			"'%U' is a field this class inherits, and the class body binds a %.100s to "
+			"that name without an annotation, which salix would drop; to give the field "
+			"a new default, redeclare it with its annotation",
+			field_name,
+			Py_TYPE(bound)->tp_name
+		);
+
+		return RESULT_ERROR;
+	}
+
+	return RESULT_OK;
+}
+
 static PyObject * qualname_direct(PyObject * const value) {
 	if (PyFunction_Check(value)) {
 		return Py_XNewRef(((PyFunctionObject *) value)->func_qualname);
