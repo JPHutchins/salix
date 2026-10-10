@@ -413,6 +413,18 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 
 	PY_MOVABLE(init_keywords, NULL);
 
+	if (type->struct_builtin_init_owner != NULL) {
+		PyErr_Format(
+			PyExc_TypeError,
+			"cannot build a '%.200s' from a mapping: its __init__ comes from %.200s, which "
+			"does not bind struct fields",
+			struct_type_name(type),
+			type->struct_builtin_init_owner->tp_name
+		);
+
+		return NULL;
+	}
+
 	if (type->struct_own_init && !type->struct_family_owned) {
 		if (dict_values != NULL) {
 			init_keywords = Py_NewRef(dict_values);

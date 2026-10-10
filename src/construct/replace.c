@@ -146,6 +146,18 @@ PyObject * Struct_replace(
 	PyTypeObject * const cls = &type->heap_type.ht_type;
 
 	if (type->struct_own_init) {
+		if (type->struct_builtin_init_owner != NULL) {
+			PyErr_Format(
+				PyExc_TypeError,
+				"cannot replace a '%.200s': its __init__ comes from %.200s, which does not "
+				"bind struct fields",
+				struct_type_name(type),
+				type->struct_builtin_init_owner->tp_name
+			);
+
+			return NULL;
+		}
+
 		for (Py_ssize_t i = 0; i < change_count; ++i) {
 			if (accept_change_name(type, PyTuple_GET_ITEM(keyword_names, i)) != RESULT_OK) {
 				return NULL;

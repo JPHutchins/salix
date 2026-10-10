@@ -5,4 +5,9 @@
 
 bool group_family_in_mro(PyTypeObject * cls);
 bool family_owns_in_mro(PyTypeObject * cls);
-bool defines_own_init(StructType * struct_class, PyObject * namespace);
+struct init_source {
+	bool own;
+	PyTypeObject * builtin_owner;
+};
+
+struct init_source init_source_of(StructType * struct_class, PyObject * namespace);

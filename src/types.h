@@ -54,6 +54,7 @@ typedef struct StructType {
 	bool struct_cannot_create;
 	bool struct_copies_through_reduce;
 	initproc struct_installed_init;
+	PyTypeObject * struct_builtin_init_owner;
 	Py_ssize_t struct_message_index;
 	Py_ssize_t struct_exceptions_index;
 } StructType;

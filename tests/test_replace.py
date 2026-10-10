@@ -1,9 +1,11 @@
+import collections
 import copy
+import dataclasses
 import sys
 
 import pytest
 
-from salix import Struct, replace
+from salix import Struct, replace, set_field
 
 
 class Point(Struct):
@@ -337,3 +339,56 @@ def test_a_metaclass_call_returning_a_subclass_instance_is_accepted():
 
     assert type(replaced) is Sub
     assert replaced.x == 0
+
+
+class DictSubclass(dict):
+    pass
+
+
+BUILTIN_INIT_CO_BASES = [
+    (dict, "dict"),
+    (collections.OrderedDict, "collections.OrderedDict"),
+    (set, "set"),
+    (collections.deque, "collections.deque"),
+    (bytearray, "bytearray"),
+    (DictSubclass, "dict"),
+]
+
+
+@pytest.mark.parametrize(("co_base", "owner"), BUILTIN_INIT_CO_BASES, ids=[co_base.__name__ for co_base, _ in BUILTIN_INIT_CO_BASES])
+def test_replace_refuses_a_struct_whose_init_comes_from_a_builtin_container(co_base, owner):
+    class Over(co_base, Struct, frozen=False):
+        a: int = 0
+
+    with pytest.raises(TypeError, match=rf"its __init__ comes from {owner}, which does not bind struct fields"):
+        replace(Over(), a=7)
+
+
+def test_replace_over_a_container_with_a_body_init_binds_the_field_like_stock_dataclasses():
+    @dataclasses.dataclass
+    class Stock(collections.OrderedDict):
+        a: int = 0
+
+    class Ours(collections.OrderedDict, Struct, frozen=False):
+        a: int = 0
+
+        def __init__(self, a: int = 0) -> None:
+            super().__init__()
+            set_field(self, "a", a)
+
+    for original in (Stock(a=5), Ours(a=5)):
+        original["k"] = 1
+        replaced = replace(original, a=7) if isinstance(original, Ours) else dataclasses.replace(original, a=7)
+
+        assert (replaced.a, list(replaced.items())) == (7, [])
+
+
+def test_replace_through_a_cooperative_python_init_binds_the_field():
+    class Cooperative:
+        def __init__(self, *, a: int = 0) -> None:
+            set_field(self, "a", a)
+
+    class Over(Cooperative, Struct, frozen=False):
+        a: int = 0
+
+    assert replace(Over(a=3), a=7).a == 7

@@ -138,11 +138,28 @@ bool family_owns_in_mro(PyTypeObject * const cls) {
 	return false;
 }
 
-bool defines_own_init(StructType * const struct_class, PyObject * const namespace) {
+static bool init_written_in_c(PyTypeObject * const entry) {
+	if ((entry->tp_flags & Py_TPFLAGS_HEAPTYPE) == 0) {
+		return true;
+	}
+
+	PY_OWNED(dict, struct_type_dict(entry));
+	PyObject * const init_value = dict != NULL ? dict_get_string(dict, "__init__") : NULL;
+
+	if (init_value == NULL) {
+		PyErr_Clear();
+
+		return false;
+	}
+
+	return Py_IS_TYPE(init_value, &PyWrapperDescr_Type);
+}
+
+struct init_source init_source_of(StructType * const struct_class, PyObject * const namespace) {
 	PyTypeObject * const type = &struct_class->heap_type.ht_type;
 
 	if (type->tp_init == PyBaseObject_Type.tp_init) {
-		return false;
+		return (struct init_source){.own = false, .builtin_owner = NULL};
 	}
 
 	PyObject * const mro = type->tp_mro;
@@ -155,11 +172,17 @@ bool defines_own_init(StructType * const struct_class, PyObject * const namespac
 		);
 
 		if (owner != INIT_OWNER_NONE) {
-			return owner == INIT_OWNER_AUTHOR;
+			bool const own = owner == INIT_OWNER_AUTHOR;
+			bool const builtin = (
+				!PyType_FastSubclass(entry, Py_TPFLAGS_BASE_EXC_SUBCLASS) &&
+				init_written_in_c(entry)
+			);
+
+			return (struct init_source){.own = own, .builtin_owner = own && builtin ? entry : NULL};
 		}
 	}
 
-	return false;
+	return (struct init_source){.own = false, .builtin_owner = NULL};
 }
 
 #ifdef TESTING
@@ -179,8 +202,8 @@ static char const groups_source[] = {
 static void test_a_body_init_owns_the_construction(void) {
 	PyObject * const owners = testing_evaluate(owners_source);
 
-	TEST_ASSERT_FALSE(defines_own_init((StructType *) testing_entry(owners, "plain"), NULL));
-	TEST_ASSERT_TRUE(defines_own_init((StructType *) testing_entry(owners, "authored"), NULL));
+	TEST_ASSERT_FALSE(init_source_of((StructType *) testing_entry(owners, "plain"), NULL).own);
+	TEST_ASSERT_TRUE(init_source_of((StructType *) testing_entry(owners, "authored"), NULL).own);
 
 	Py_DECREF(owners);
 }
@@ -189,10 +212,10 @@ static void test_a_protocol_init_placeholder_owns_nothing(void) {
 	PyObject * const owners = testing_evaluate(owners_source);
 
 	TEST_ASSERT_FALSE(
-		defines_own_init((StructType *) testing_entry(owners, "protocol_placeholder"), NULL)
+		init_source_of((StructType *) testing_entry(owners, "protocol_placeholder"), NULL).own
 	);
 	TEST_ASSERT_FALSE(
-		defines_own_init((StructType *) testing_entry(owners, "protocol_subclass"), NULL)
+		init_source_of((StructType *) testing_entry(owners, "protocol_subclass"), NULL).own
 	);
 	TEST_ASSERT_FALSE(
 		((StructType *) testing_entry(owners, "protocol_placeholder"))->struct_own_init
@@ -206,16 +229,16 @@ static void test_the_class_body_answers_while_the_type_is_built(void) {
 	PyObject * const owners = testing_evaluate(owners_source);
 
 	TEST_ASSERT_FALSE(
-		defines_own_init(
+		init_source_of(
 			(StructType *) testing_entry(owners, "raised"),
 			testing_entry(owners, "empty_namespace")
-		)
+		).own
 	);
 	TEST_ASSERT_TRUE(
-		defines_own_init(
+		init_source_of(
 			(StructType *) testing_entry(owners, "raised"),
 			testing_entry(owners, "authored_namespace")
-		)
+		).own
 	);
 
 	Py_DECREF(owners);

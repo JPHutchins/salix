@@ -103,7 +103,7 @@ class TestMethods:
         """Two different mechanisms reaching the same place. `__repr__` is a
         dunder the mixin binds and the body's rebinding wins in the MRO;
         `__init__` is not a dunder salix writes at all -- the constructor is a
-        vectorcall, and `defines_own_init` drops it for `PyType_GenericNew` when
+        vectorcall, and `init_source_of` drops it for `PyType_GenericNew` when
         the body defines one.
 
         `set_field` rather than `self.x = ...` because the struct is frozen by

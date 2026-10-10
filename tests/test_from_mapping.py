@@ -1,8 +1,9 @@
+import collections
 from collections.abc import Mapping
 
 import pytest
 
-from salix import Struct, from_mapping
+from salix import Struct, from_mapping, set_field
 
 
 class Point(Struct):
@@ -245,3 +246,27 @@ def test_the_field_bind_path_bypasses_a_metaclass_call():
 def test_an_own_init_class_refuses_a_non_string_key_like_the_constructor():
     with pytest.raises(TypeError, match="keywords must be strings"):
         from_mapping(WithInit, {1: "one"})  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("co_base", "owner"),
+    [(dict, "dict"), (collections.OrderedDict, "collections.OrderedDict"), (set, "set")],
+    ids=["dict", "OrderedDict", "set"],
+)
+def test_from_mapping_refuses_a_struct_whose_init_comes_from_a_builtin_container(co_base, owner):
+    class Over(co_base, Struct, frozen=False):
+        a: int = 0
+
+    with pytest.raises(TypeError, match=rf"its __init__ comes from {owner}, which does not bind struct fields"):
+        from_mapping(Over, {"a": 7})
+
+
+def test_from_mapping_through_a_cooperative_python_init_binds_the_field():
+    class Cooperative:
+        def __init__(self, *, a: int = 0) -> None:
+            set_field(self, "a", a)
+
+    class Over(Cooperative, Struct, frozen=False):
+        a: int = 0
+
+    assert from_mapping(Over, {"a": 7}).a == 7

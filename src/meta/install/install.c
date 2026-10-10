@@ -257,8 +257,10 @@ enum result install_constructor(
 	PyObject * const namespace,
 	bool const bases_divert_setattro
 ) {
-	bool const own_init = defines_own_init(struct_class, namespace);
+	struct init_source const init_source = init_source_of(struct_class, namespace);
+	bool const own_init = init_source.own;
 	struct_class->struct_own_init = own_init;
+	struct_class->struct_builtin_init_owner = init_source.builtin_owner;
 
 	struct new_definer const definer = nearest_new(&struct_class->heap_type.ht_type);
 
