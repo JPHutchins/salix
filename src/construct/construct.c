@@ -300,6 +300,59 @@ PyObject * Struct_vectorcall(
 	return py_move(&self);
 }
 
+enum result refuse_a_builtin_init(StructType const * const type, char const * const operation) {
+	PyTypeObject const * const cls = &type->heap_type.ht_type;
+	initproc const init = (
+		cls->tp_init == Struct_init_wrapper ? type->struct_installed_init :
+		cls->tp_init
+	);
+
+	if (init == NULL || init == PyBaseObject_Type.tp_init) {
+		return RESULT_OK;
+	}
+
+	PY_OWNED(mro, Py_XNewRef(cls->tp_mro));
+
+	for (Py_ssize_t i = 0; mro != NULL && i < PyTuple_GET_SIZE(mro); i += 1) {
+		PyTypeObject * const entry = (PyTypeObject *) PyTuple_GET_ITEM(mro, i);
+
+		if (entry->tp_init != init || (entry->tp_base != NULL && entry->tp_base->tp_init == init)) {
+			continue;
+		}
+
+		if (PyType_FastSubclass(entry, Py_TPFLAGS_BASE_EXC_SUBCLASS)) {
+			return RESULT_OK;
+		}
+
+		PY_OWNED(entry_dict, struct_type_dict(entry));
+		PyObject * const init_entry = (
+			entry_dict != NULL ? dict_get_string(entry_dict, "__init__") :
+			NULL
+		);
+
+		if (PyErr_Occurred()) {
+			return RESULT_ERROR;
+		}
+
+		if (init_entry == NULL || !Py_IS_TYPE(init_entry, &PyWrapperDescr_Type)) {
+			return RESULT_OK;
+		}
+
+		PyErr_Format(
+			PyExc_TypeError,
+			"%s: '%.200s' takes its __init__ from %.200s, a built-in that salix does not pass "
+			"struct fields to",
+			operation,
+			struct_type_name(type),
+			entry->tp_name
+		);
+
+		return RESULT_ERROR;
+	}
+
+	return RESULT_OK;
+}
+
 int Struct_init_wrapper(
 	PyObject * const self,
 	PyObject * const arguments,
@@ -359,6 +412,15 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 		return NULL;
 	}
 
+	if (
+		type->struct_own_init &&
+		!type->struct_family_owned &&
+		!type->struct_group_family &&
+		refuse_a_builtin_init(type, "from_mapping()") != RESULT_OK
+	) {
+		return NULL;
+	}
+
 	PyObject * const dict_values = PyDict_Check(values) ? values : NULL;
 	PY_MOVABLE(items, NULL);
 
@@ -412,18 +474,6 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 	}
 
 	PY_MOVABLE(init_keywords, NULL);
-
-	if (type->struct_builtin_init_owner != NULL) {
-		PyErr_Format(
-			PyExc_TypeError,
-			"cannot build a '%.200s' from a mapping: its __init__ comes from %.200s, which "
-			"does not bind struct fields",
-			struct_type_name(type),
-			type->struct_builtin_init_owner->tp_name
-		);
-
-		return NULL;
-	}
 
 	if (type->struct_own_init && !type->struct_family_owned) {
 		if (dict_values != NULL) {

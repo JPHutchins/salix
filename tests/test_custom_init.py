@@ -138,7 +138,7 @@ def test_a_field_with_no_default_is_left_unset():
 
 
 def test_a_subclass_that_writes_no_init_gets_its_defaults_too():
-    """The case that made this a bug rather than a consequence. `init_source_of`
+    """The case that made this a bug rather than a consequence. `defines_own_init`
     reads tp_init, which an inherited __init__ satisfies -- so a subclass that
     says nothing about construction lost its own declared default as well as the
     base's, and had no way to ask for it back.

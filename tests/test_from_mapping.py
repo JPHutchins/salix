@@ -1,4 +1,6 @@
 import collections
+import dataclasses
+import re
 from collections.abc import Mapping
 
 import pytest
@@ -257,7 +259,7 @@ def test_from_mapping_refuses_a_struct_whose_init_comes_from_a_builtin_container
     class Over(co_base, Struct, frozen=False):
         a: int = 0
 
-    with pytest.raises(TypeError, match=rf"its __init__ comes from {owner}, which does not bind struct fields"):
+    with pytest.raises(TypeError, match=rf"takes its __init__ from {re.escape(owner)}, a built-in that salix does not pass"):
         from_mapping(Over, {"a": 7})
 
 
@@ -270,3 +272,12 @@ def test_from_mapping_through_a_cooperative_python_init_binds_the_field():
         a: int = 0
 
     assert from_mapping(Over, {"a": 7}).a == 7
+
+
+def test_an_init_var_struct_over_a_container_is_refused_because_from_mapping_calls_the_class():
+    class WithInitVar(dict, Struct, frozen=False):
+        a: int = 0
+        flag: dataclasses.InitVar[int] = 1
+
+    with pytest.raises(TypeError, match="takes its __init__ from dict,"):
+        from_mapping(WithInitVar, {"a": 7})

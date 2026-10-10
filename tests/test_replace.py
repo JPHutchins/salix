@@ -1,6 +1,7 @@
 import collections
 import copy
 import dataclasses
+import re
 import sys
 
 import pytest
@@ -360,7 +361,7 @@ def test_replace_refuses_a_struct_whose_init_comes_from_a_builtin_container(co_b
     class Over(co_base, Struct, frozen=False):
         a: int = 0
 
-    with pytest.raises(TypeError, match=rf"its __init__ comes from {owner}, which does not bind struct fields"):
+    with pytest.raises(TypeError, match=rf"takes its __init__ from {re.escape(owner)}, a built-in that salix does not pass"):
         replace(Over(), a=7)
 
 
@@ -392,3 +393,34 @@ def test_replace_through_a_cooperative_python_init_binds_the_field():
         a: int = 0
 
     assert replace(Over(a=3), a=7).a == 7
+
+
+def test_rebinding_init_to_python_lifts_the_built_in_refusal():
+    class Over(dict, Struct, frozen=False):
+        a: int = 0
+
+    def init(self: Over, a: int = 0) -> None:
+        dict.__init__(self)
+        set_field(self, "a", a)
+
+    Over.__init__ = init
+
+    assert replace(Over(), a=7).a == 7
+
+
+def test_a_body_init_assigned_from_a_container_names_the_container():
+    class Assigned(dict, Struct, frozen=False):
+        a: int = 0
+        __init__ = dict.__init__
+
+    with pytest.raises(TypeError, match="'Assigned' takes its __init__ from dict,"):
+        replace(Assigned(), a=7)
+
+
+def test_an_init_var_struct_over_a_container_is_refused_because_replace_calls_the_class():
+    class WithInitVar(dict, Struct, frozen=False):
+        a: int = 0
+        flag: dataclasses.InitVar[int] = 1
+
+    with pytest.raises(TypeError, match="takes its __init__ from dict,"):
+        replace(WithInitVar(), a=7)

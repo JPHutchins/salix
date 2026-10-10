@@ -146,15 +146,11 @@ PyObject * Struct_replace(
 	PyTypeObject * const cls = &type->heap_type.ht_type;
 
 	if (type->struct_own_init) {
-		if (type->struct_builtin_init_owner != NULL) {
-			PyErr_Format(
-				PyExc_TypeError,
-				"cannot replace a '%.200s': its __init__ comes from %.200s, which does not "
-				"bind struct fields",
-				struct_type_name(type),
-				type->struct_builtin_init_owner->tp_name
-			);
-
+		if (
+			!type->struct_family_owned &&
+			!type->struct_group_family &&
+			refuse_a_builtin_init(type, "replace()") != RESULT_OK
+		) {
 			return NULL;
 		}
 
