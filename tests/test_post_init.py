@@ -1,5 +1,3 @@
-import sys
-
 import pytest
 from values import EVERY, identify
 
@@ -59,19 +57,7 @@ def test_a_mutable_struct_can_derive_a_field_from_the_others():
     assert Derived(21).doubled == 42
 
 
-def test_object_setattr_on_a_frozen_struct_follows_the_interpreter():
-    """The frozen-dataclass escape hatch reaches a struct only on 3.13 and up.
-
-    CPython's setattr hackcheck walks the MRO to whichever type defines the
-    current tp_setattro and refuses unless it is object's. For a dataclass that
-    is object; for a struct it is the mixin, whose slot is what freezing *is*.
-    3.13 dropped the check.
-
-    This is why set_field exists: it is the door that does not depend on the
-    interpreter. object.__setattr__ is not a supported way into a struct, and
-    this test pins what it does rather than endorsing it.
-    """
-
+def test_object_setattr_writes_a_frozen_struct_on_every_interpreter():
     class Frozen(Struct):
         reading: int
         doubled: int = 0
@@ -79,11 +65,7 @@ def test_object_setattr_on_a_frozen_struct_follows_the_interpreter():
         def __post_init__(self) -> None:
             object.__setattr__(self, "doubled", self.reading * 2)
 
-    if sys.version_info >= (3, 13):
-        assert Frozen(21).doubled == 42
-    else:
-        with pytest.raises(TypeError, match="can't apply this __setattr__"):
-            Frozen(21)
+    assert Frozen(21).doubled == 42
 
 
 def test_set_field_derives_a_frozen_field_on_every_interpreter():

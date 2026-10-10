@@ -1,5 +1,4 @@
 import pickle
-import sys
 from dataclasses import FrozenInstanceError
 
 import pytest
@@ -228,10 +227,7 @@ def test_a_frozen_body_init_writes_its_fields_with_set_field():
     assert Frozen().x == 1
 
 
-@pytest.mark.skipif(
-    sys.version_info < (3, 13), reason="object.__setattr__ reaches a struct only on 3.13+"
-)
-def test_a_frozen_body_init_can_use_object_setattr_where_the_interpreter_allows_it():
+def test_a_frozen_body_init_can_use_object_setattr():
     class Frozen(Struct):
         x: int
 

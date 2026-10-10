@@ -36,12 +36,27 @@ enum result settle_mro_bindings(
 ) {
 	PyTypeObject * const type = (PyTypeObject *) struct_class;
 
-	if (options.frozen && type->tp_setattro != StructMixin_Type.tp_setattro) {
-#ifdef TESTING
-		frozen_column_repair_owner = type;
-#endif
-		if (settle_rebind(struct_class, original_namespace, rebind_mutability, true) != RESULT_OK) {
+	if (options.frozen) {
+		struct setter_sources const sources = setter_sources_of(type);
+
+		if (sources.assigns == SETTER_SOURCE_ERROR || sources.deletes == SETTER_SOURCE_ERROR) {
 			return RESULT_ERROR;
+		}
+
+		if (sources.assigns != SETTER_SOURCE_STRUCT || sources.deletes != SETTER_SOURCE_STRUCT) {
+#ifdef TESTING
+			frozen_column_repair_owner = type;
+#endif
+			if (
+				settle_rebind(
+					struct_class,
+					original_namespace,
+					rebind_mutability,
+					true
+				) != RESULT_OK
+			) {
+				return RESULT_ERROR;
+			}
 		}
 	}
 
@@ -316,9 +331,9 @@ static void test_a_raw_tp_setattro_co_base_does_not_divert_the_struct_slot(void)
 	PY_OWNED(frozen_child, struct_class_with_field(frozen_bases, NULL, false));
 	TEST_ASSERT_NOT_NULL(frozen_child);
 	TEST_ASSERT_EQUAL_PTR(NULL, frozen_column_repair_owner);
-	TEST_ASSERT_EQUAL_PTR(
-		StructMixin_Type.tp_setattro,
-		((PyTypeObject *) frozen_child)->tp_setattro
+	TEST_ASSERT_EQUAL_INT(
+		SETTER_SOURCE_STRUCT,
+		setter_sources_of((PyTypeObject *) frozen_child).assigns
 	);
 	TEST_ASSERT_EQUAL_INT(
 		1,
@@ -359,6 +374,39 @@ static PyObject * struct_class_empty(PyObject * bases, PyObject * keywords) {
 	}
 
 	return PyObject_Call((PyObject *) &StructMeta_Type, args, keywords);
+}
+
+static void test_a_raw_tp_setattro_co_base_ahead_of_a_fieldless_frozen_base_stays_refused(void) {
+	TEST_ASSERT_EQUAL_INT(0, PyType_Ready(&SwallowingType));
+	TEST_ASSERT_EQUAL_INT(1, dict_has_string(SwallowingType.tp_dict, "__setattr__"));
+	TEST_ASSERT_EQUAL_INT(1, dict_has_string(SwallowingType.tp_dict, "__delattr__"));
+
+	PY_OWNED(salix, PyImport_ImportModule("salix"));
+	TEST_ASSERT_NOT_NULL(salix);
+
+	PY_OWNED(struct_base, PyObject_GetAttrString(salix, "Struct"));
+	TEST_ASSERT_NOT_NULL(struct_base);
+
+	PY_OWNED(struct_bases, PyTuple_Pack(1, struct_base));
+	PY_OWNED(fieldless_frozen, struct_class_empty(struct_bases, NULL));
+	TEST_ASSERT_NOT_NULL(fieldless_frozen);
+
+	PY_OWNED(bases, PyTuple_Pack(2, (PyObject *) &SwallowingType, fieldless_frozen));
+	PY_OWNED(child, struct_class_with_field(bases, NULL, false));
+	TEST_ASSERT_NOT_NULL(child);
+	TEST_ASSERT_EQUAL_PTR(&SwallowingType, ((PyTypeObject *) child)->tp_base);
+	TEST_ASSERT_EQUAL_INT(SETTER_SOURCE_STRUCT, setter_sources_of((PyTypeObject *) child).assigns);
+
+	Py_ssize_t const calls_before = swallow_calls;
+	PY_OWNED(instance, PyObject_CallFunction(child, "i", 1));
+	TEST_ASSERT_NOT_NULL(instance);
+	PY_OWNED(nine, PyLong_FromLong(9));
+	PY_OWNED(field_name, PyUnicode_FromString("x"));
+	TEST_ASSERT_EQUAL_INT(-1, PyObject_SetAttr(instance, field_name, nine));
+	PyErr_Clear();
+	TEST_ASSERT_EQUAL_INT(-1, PyObject_DelAttr(instance, field_name));
+	PyErr_Clear();
+	TEST_ASSERT_EQUAL_INT(calls_before, swallow_calls);
 }
 
 static void test_a_later_bases_slot_forces_the_record(void) {
@@ -431,6 +479,7 @@ void mro_tests(void) {
 	Unity.TestFile = __FILE__;
 
 	RUN_TEST(test_a_raw_tp_setattro_co_base_does_not_divert_the_struct_slot);
+	RUN_TEST(test_a_raw_tp_setattro_co_base_ahead_of_a_fieldless_frozen_base_stays_refused);
 	RUN_TEST(test_a_later_bases_slot_forces_the_record);
 	RUN_TEST(test_only_struct_bases_are_counted);
 	RUN_TEST(test_the_repair_runs_only_past_one_struct_base);
