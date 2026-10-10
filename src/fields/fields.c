@@ -309,23 +309,16 @@ enum result field_plan_resolve_mro_defaults(
 }
 
 static enum result plan_defaults(struct field_plan * const plan) {
-	PY_OWNED(init_var_name_list, PySequence_List(plan->init_var_names));
-	PY_OWNED(init_var_flag_list, PySequence_List(plan->init_var_flags));
-
 	if (
-		init_var_name_list == NULL ||
-		init_var_flag_list == NULL ||
+		PyTuple_GET_SIZE(plan->init_var_names) > 0 &&
 		(
-			PyList_GET_SIZE(init_var_name_list) > 0 &&
-			(
-				refuse_misordered_parameters(
-					&(struct parameter_lists){
-						.names = plan->parameter_names,
-						.init_var_flags = init_var_flag_list,
-					},
-					plan->default_by_name
-				) != RESULT_OK
-			)
+			refuse_misordered_parameters(
+				&(struct parameter_lists){
+					.names = plan->parameter_names,
+					.init_var_flags = plan->init_var_flags,
+				},
+				plan->default_by_name
+			) != RESULT_OK
 		)
 	) {
 		return RESULT_ERROR;
@@ -334,7 +327,7 @@ static enum result plan_defaults(struct field_plan * const plan) {
 	PY_MOVABLE(defaults, build_defaults(plan->all_names, plan->default_by_name));
 	PY_MOVABLE(
 		init_var_defaults,
-		defaults != NULL ? build_defaults(init_var_name_list, plan->default_by_name) : NULL
+		defaults != NULL ? build_defaults(plan->init_var_names, plan->default_by_name) : NULL
 	);
 
 	if (init_var_defaults == NULL) {
@@ -392,9 +385,9 @@ static enum result refuse_misordered_parameters(
 ) {
 	PyObject * first_defaulted_flag = NULL;
 
-	for (Py_ssize_t i = 0; i < PyList_GET_SIZE(parameters->names); i += 1) {
-		PyObject * const parameter_name = PyList_GET_ITEM(parameters->names, i);
-		PyObject * const init_var_flag = PyList_GET_ITEM(parameters->init_var_flags, i);
+	for (Py_ssize_t i = 0; i < PySequence_Fast_GET_SIZE(parameters->names); i += 1) {
+		PyObject * const parameter_name = PySequence_Fast_GET_ITEM(parameters->names, i);
+		PyObject * const init_var_flag = PySequence_Fast_GET_ITEM(parameters->init_var_flags, i);
 		int const has_default = PyDict_Contains(default_by_name, parameter_name);
 
 		if (has_default < 0) {
@@ -1410,11 +1403,11 @@ static struct inheritance_lookup inherited_position(
 }
 
 static PyObject * build_defaults(PyObject * const all_names, PyObject * const default_by_name) {
-	Py_ssize_t const field_count = PyList_GET_SIZE(all_names);
+	Py_ssize_t const field_count = PySequence_Fast_GET_SIZE(all_names);
 	Py_ssize_t first_default = field_count;
 
 	for (Py_ssize_t i = 0; i < field_count; ++i) {
-		PyObject * const field_name = PyList_GET_ITEM(all_names, i);
+		PyObject * const field_name = PySequence_Fast_GET_ITEM(all_names, i);
 		int const has_default = PyDict_Contains(default_by_name, field_name);
 
 		if (has_default < 0) {
@@ -1445,7 +1438,7 @@ static PyObject * build_defaults(PyObject * const all_names, PyObject * const de
 	}
 
 	for (Py_ssize_t i = first_default; i < field_count; ++i) {
-		PyObject * const field_name = PyList_GET_ITEM(all_names, i);
+		PyObject * const field_name = PySequence_Fast_GET_ITEM(all_names, i);
 		PY_OWNED(value, dict_value_ref(default_by_name, field_name));
 
 		if (value == NULL) {
