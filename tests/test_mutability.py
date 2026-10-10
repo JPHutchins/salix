@@ -355,6 +355,66 @@ def test_a_mutable_struct_lets_its_own_body_delattr_observe_deletion():
     assert "x" in deleted
 
 
+def test_a_mutable_body_setattr_may_delegate_to_super_like_stock_dataclasses():
+    written = []
+
+    @dataclass
+    class Stock:
+        x: int = 0
+
+        def __setattr__(self, name: str, value: object) -> None:
+            written.append((name, value))
+            super().__setattr__(name, value)
+
+    class Delegating(Struct, frozen=False):
+        x: int = 0
+
+        def __setattr__(self, name: str, value: object) -> None:
+            written.append((name, value))
+            super().__setattr__(name, value)
+
+    for Class in (Stock, Delegating):
+        instance = Class()
+        instance.x = 5
+
+        assert instance.x == 5
+
+    assert written.count(("x", 5)) == 2
+
+
+def test_a_mutable_body_delattr_may_delegate_to_super_like_stock_dataclasses():
+    @dataclass
+    class Stock:
+        x: int
+
+        def __delattr__(self, name: str) -> None:
+            super().__delattr__(name)
+
+    class Delegating(Struct, frozen=False):
+        x: int
+
+        def __delattr__(self, name: str) -> None:
+            super().__delattr__(name)
+
+    for Class in (Stock, Delegating):
+        instance = Class(1)
+        del instance.x
+
+        with pytest.raises(AttributeError):
+            _ = instance.x
+
+
+def test_a_frozen_body_setattr_delegating_to_super_is_still_refused():
+    class Delegating(Struct):
+        x: int = 0
+
+        def __setattr__(self, name: str, value: object) -> None:
+            super().__setattr__(name, value)
+
+    with pytest.raises(FrozenInstanceError, match="cannot assign to field 'x'"):
+        Delegating().x = 5
+
+
 def test_a_frozen_structs_body_delattr_keeps_answering():
     """The escape hatch works for either half: a body __delattr__ is skipped
     by the rebind per name, so deletes reach the hook while writes stay
