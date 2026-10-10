@@ -3,7 +3,7 @@ import functools
 import struct as struct_module
 import sys
 import weakref
-from typing import NamedTuple
+from typing import ClassVar, NamedTuple
 
 import pytest
 
@@ -1155,3 +1155,134 @@ class TestTheFunctoolsSpellingsAreRefused:
             type(Struct)(
                 "H", (Struct,), {"__annotations__": {"handler": object}, "handler": Hostile()}
             )
+
+
+def rebinding_hook(name: str, value: object, frozen: bool = True) -> type:
+    class Rebinding(Struct, frozen=frozen):
+        def __init_subclass__(cls, **keywords: object) -> None:
+            super().__init_subclass__(**keywords)
+            setattr(cls, name, value)
+
+    return Rebinding
+
+
+class TestFieldsReboundDuringClassCreation:
+    @pytest.mark.parametrize("frozen", [False, True])
+    def test_an_init_subclass_rebinding_a_new_field_is_refused(self, frozen: bool) -> None:
+        with pytest.raises(TypeError, match=r"Sub\.y was rebound or deleted.*field 'y'"):
+
+            class Sub(rebinding_hook("y", 7, frozen), frozen=frozen):
+                y: int
+
+    def test_an_init_subclass_rebinding_an_inherited_field_is_refused(self) -> None:
+        class Base(Struct):
+            y: int = 0
+
+            def __init_subclass__(cls, **keywords: object) -> None:
+                super().__init_subclass__(**keywords)
+                cls.y = 7
+
+        with pytest.raises(TypeError, match=r"Inheriting\.y was rebound or deleted"):
+
+            class Inheriting(Base):
+                z: int = 0
+
+    def test_an_init_subclass_deleting_a_field_is_refused(self) -> None:
+        class Base(Struct):
+            def __init_subclass__(cls, **keywords: object) -> None:
+                super().__init_subclass__(**keywords)
+                del cls.y
+
+        with pytest.raises(TypeError, match=r"Sub\.y was rebound or deleted"):
+
+            class Sub(Base):
+                y: int
+
+    def test_a_set_name_hook_rebinding_a_field_is_refused(self) -> None:
+        class Clobber:
+            def __set_name__(self, owner: type, name: str) -> None:
+                owner.y = 9
+
+        with pytest.raises(TypeError, match=r"Sub\.y was rebound or deleted"):
+
+            class Sub(Struct):
+                y: int
+                marker = Clobber()
+
+    def test_a_redeclaration_over_a_class_var_rebound_by_a_hook_is_refused(self) -> None:
+        class Base(Struct):
+            x: ClassVar[int] = 5
+
+            def __init_subclass__(cls, **keywords: object) -> None:
+                super().__init_subclass__(**keywords)
+                cls.x = 7
+
+        with pytest.raises(TypeError, match=r"Sub\.x was rebound or deleted"):
+
+            class Sub(Base):
+                x: int
+
+    def test_a_hook_binding_another_field_s_descriptor_is_refused(self) -> None:
+        class Base(Struct):
+            def __init_subclass__(cls, **keywords: object) -> None:
+                super().__init_subclass__(**keywords)
+                cls.y = vars(cls)["z"]
+
+        with pytest.raises(TypeError, match=r"Sub\.y was rebound or deleted"):
+
+            class Sub(Base):
+                y: int
+                z: int
+
+    def test_a_hook_binding_an_unrelated_struct_s_descriptor_is_refused(self) -> None:
+        class Unrelated(Struct):
+            y: int
+
+        class Base(Struct):
+            def __init_subclass__(cls, **keywords: object) -> None:
+                super().__init_subclass__(**keywords)
+                cls.y = vars(Unrelated)["y"]
+
+        with pytest.raises(TypeError, match=r"Sub\.y was rebound or deleted"):
+
+            class Sub(Base):
+                y: int
+
+    def test_a_hook_rebinding_a_field_to_its_own_descriptor_builds(self) -> None:
+        class Base(Struct):
+            y: int = 0
+
+            def __init_subclass__(cls, **keywords: object) -> None:
+                super().__init_subclass__(**keywords)
+                for name in ("y", "z"):
+                    setattr(cls, name, getattr(cls, name))
+
+        class Sub(Base):
+            z: int = 0
+
+        made = Sub(1, 2)
+
+        assert (made.y, made.z) == (1, 2)
+        assert repr(made).endswith("Sub(y=1, z=2)")
+
+    def test_a_hook_binding_other_names_builds(self) -> None:
+        class Sub(rebinding_hook("label", "tagged")):
+            y: int
+
+        assert Sub.label == "tagged"
+        assert Sub(y=1).y == 1
+
+    def test_a_slotted_dataclass_fails_at_construction_instead(self) -> None:
+        class Base:
+            __slots__ = ()
+
+            def __init_subclass__(cls, **keywords: object) -> None:
+                super().__init_subclass__(**keywords)
+                cls.y = 7
+
+        @dataclasses.dataclass(slots=True)
+        class Sub(Base):
+            y: int
+
+        with pytest.raises(AttributeError, match="'y' is read-only"):
+            Sub(y=1)

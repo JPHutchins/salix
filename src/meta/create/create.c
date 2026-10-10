@@ -306,7 +306,16 @@ PyObject * build_struct_class(
 			int const defines_hash = dict_has_string(original_namespace, rebind_hash[0]);
 			int const defines_setattr = dict_has_string(original_namespace, "__setattr__");
 
-			if (defines_hash < 0 || defines_setattr < 0) {
+			if (
+				defines_hash < 0 ||
+				defines_setattr < 0 ||
+				(
+					refuse_replaced_field_slots(
+						&struct_class->heap_type.ht_type,
+						plan.all_names
+					) != RESULT_OK
+				)
+			) {
 				Py_CLEAR(struct_class);
 			} else {
 				struct binding_plan const bindings = binding_plan(
