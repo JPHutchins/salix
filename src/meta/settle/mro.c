@@ -36,12 +36,28 @@ enum result settle_mro_bindings(
 ) {
 	PyTypeObject * const type = (PyTypeObject *) struct_class;
 
-	if (options.frozen && type->tp_setattro != StructMixin_Type.tp_setattro) {
-#ifdef TESTING
-		frozen_column_repair_owner = type;
-#endif
-		if (settle_rebind(struct_class, original_namespace, rebind_mutability, true) != RESULT_OK) {
+	if (options.frozen) {
+		enum setter_source const assigns = setter_source_of(type, "__setattr__");
+		enum setter_source const deletes = setter_source_of(type, "__delattr__");
+
+		if (assigns == SETTER_SOURCE_ERROR || deletes == SETTER_SOURCE_ERROR) {
 			return RESULT_ERROR;
+		}
+
+		if (assigns != SETTER_SOURCE_STRUCT || deletes != SETTER_SOURCE_STRUCT) {
+#ifdef TESTING
+			frozen_column_repair_owner = type;
+#endif
+			if (
+				settle_rebind(
+					struct_class,
+					original_namespace,
+					rebind_mutability,
+					true
+				) != RESULT_OK
+			) {
+				return RESULT_ERROR;
+			}
 		}
 	}
 
@@ -316,9 +332,9 @@ static void test_a_raw_tp_setattro_co_base_does_not_divert_the_struct_slot(void)
 	PY_OWNED(frozen_child, struct_class_with_field(frozen_bases, NULL, false));
 	TEST_ASSERT_NOT_NULL(frozen_child);
 	TEST_ASSERT_EQUAL_PTR(NULL, frozen_column_repair_owner);
-	TEST_ASSERT_EQUAL_PTR(
-		StructMixin_Type.tp_setattro,
-		((PyTypeObject *) frozen_child)->tp_setattro
+	TEST_ASSERT_EQUAL_INT(
+		SETTER_SOURCE_STRUCT,
+		setter_source_of((PyTypeObject *) frozen_child, "__setattr__")
 	);
 	TEST_ASSERT_EQUAL_INT(
 		1,

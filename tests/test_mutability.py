@@ -1,10 +1,13 @@
-import sys
+from collections import OrderedDict
 from dataclasses import FrozenInstanceError, dataclass
+from typing import Generic, TypeVar
 
 import pytest
 from values import EVERY, identify
 
 from salix import Struct
+
+T = TypeVar("T")
 
 
 class Frozen(Struct):
@@ -169,7 +172,7 @@ def test_a_frozen_struct_may_strengthen_a_mutable_one():
 
 
 def test_frozen_true_over_a_mutable_base_holds_beside_a_permissive_co_base():
-    """The block is enforced by the mixin's tp_setattro, which the MRO reaches
+    """The block is enforced by the mixin's __setattr__ and __delattr__, which the MRO reaches
     before any co-base, in either order, for writes and deletes."""
 
     class Permissive:
@@ -244,20 +247,13 @@ def test_a_frozen_setattr_escape_beside_a_permissive_co_base_keeps_answering():
             object.__setattr__(self, name, value)
 
     for Child in (EscapedAhead, EscapedBehind):
-        if sys.version_info >= (3, 13):
-            instance = Child(1)
-            instance.x = 9
+        instance = Child(1)
+        instance.x = 9
 
-            assert instance.x == 9
+        assert instance.x == 9
 
-            with pytest.raises(FrozenInstanceError, match="cannot delete field 'x'"):
-                del instance.x
-        else:
-            with pytest.raises(TypeError):
-                Child(1).x = 9
-
-            with pytest.raises(AttributeError):
-                del Child(1).x
+        with pytest.raises(FrozenInstanceError, match="cannot delete field 'x'"):
+            del instance.x
 
     class Escaping(FrozenBase):
         def __setattr__(self, name: str, value: object) -> None:
@@ -290,17 +286,10 @@ def test_a_frozen_delattr_escape_beside_a_permissive_co_base_keeps_answering():
             object.__delattr__(self, name)
 
     for Child in (EscapedAhead, EscapedBehind):
-        if sys.version_info >= (3, 13):
-            del Child(1).x
+        del Child(1).x
 
-            with pytest.raises(FrozenInstanceError, match="cannot assign to field 'x'"):
-                Child(1).x = 9
-        else:
-            with pytest.raises(TypeError):
-                del Child(1).x
-
-            with pytest.raises(FrozenInstanceError, match="cannot assign to field 'x'"):
-                Child(1).x = 9
+        with pytest.raises(FrozenInstanceError, match="cannot assign to field 'x'"):
+            Child(1).x = 9
 
 
 def test_a_fieldless_frozen_base_promises_nothing_to_a_mutable_class():
@@ -404,6 +393,67 @@ def test_a_mutable_body_delattr_may_delegate_to_super_like_stock_dataclasses():
             _ = instance.x
 
 
+def test_a_mutable_struct_with_one_body_hook_keeps_the_other_operation_like_stock_dataclasses():
+    @dataclass
+    class StockOnlySet:
+        x: int
+
+        def __setattr__(self, name: str, value: object) -> None:
+            super().__setattr__(name, value)
+
+    class OnlySet(Struct, frozen=False):
+        x: int
+
+        def __setattr__(self, name: str, value: object) -> None:
+            super().__setattr__(name, value)
+
+    @dataclass
+    class StockOnlyDelete:
+        x: int
+
+        def __delattr__(self, name: str) -> None:
+            super().__delattr__(name)
+
+    class OnlyDelete(Struct, frozen=False):
+        x: int
+
+        def __delattr__(self, name: str) -> None:
+            super().__delattr__(name)
+
+    for Class in (StockOnlySet, OnlySet, StockOnlyDelete, OnlyDelete):
+        instance = Class(1)
+        instance.x = 5
+
+        assert instance.x == 5
+
+        del instance.x
+
+        with pytest.raises(AttributeError):
+            _ = instance.x
+
+
+def test_a_body_setattr_delegates_to_super_whatever_base_comes_first():
+    class GenericFirst(Generic[T], Struct, frozen=False):  # noqa: PYI059
+        x: int = 0
+
+        def __setattr__(self, name: str, value: object) -> None:
+            super().__setattr__(name, value)
+
+    class ContainerFirst(OrderedDict, Struct, frozen=False):
+        x: int = 0
+
+        def __setattr__(self, name: str, value: object) -> None:
+            super().__setattr__(name, value)
+
+    for Class in (GenericFirst, ContainerFirst):
+        instance = Class()
+        instance.x = 5
+        del instance.x
+
+        with pytest.raises(AttributeError):
+            _ = instance.x
+
+
 def test_a_frozen_body_setattr_delegating_to_super_is_still_refused():
     class Delegating(Struct):
         x: int = 0
@@ -433,12 +483,8 @@ def test_a_frozen_structs_body_delattr_keeps_answering():
             deleted.append(name)
 
     for Child in (Single, Strengthened):
-        if sys.version_info >= (3, 13) or Child is Single:
-            with pytest.raises(AttributeError):
-                Child(1).x = 9
-        else:
-            with pytest.raises(TypeError):
-                Child(1).x = 9
+        with pytest.raises(AttributeError):
+            Child(1).x = 9
 
         del Child(1).x
 

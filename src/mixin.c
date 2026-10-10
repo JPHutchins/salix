@@ -11,7 +11,13 @@
 #include "result.h"
 #include "types.h"
 
-static int Struct_set_attribute(PyObject * self, PyObject * name, PyObject * value);
+static int assign_attribute(PyObject * self, PyObject * name, PyObject * value);
+static PyObject * Struct_set_attribute(
+	PyObject * self,
+	PyObject * const * arguments,
+	Py_ssize_t count
+);
+static PyObject * Struct_delete_attribute(PyObject * self, PyObject * name);
 PyObject * Struct_get_signature(PyObject * self, void * closure);
 static PyObject * Struct_get_field_names(PyObject * self, void * closure);
 static PyObject * Struct_get_defaults(PyObject * self, void * closure);
@@ -31,7 +37,6 @@ PyTypeObject StructMixin_Type = {
 	.tp_doc = "The mixin carrying struct behavior; use Struct to build one.",
 	.tp_basicsize = sizeof(PyObject),
 	.tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
-	.tp_setattro = Struct_set_attribute,
 	.tp_repr = Struct_repr,
 	.tp_hash = Struct_hash,
 	.tp_richcompare = Struct_rich_compare,
@@ -40,6 +45,13 @@ PyTypeObject StructMixin_Type = {
 };
 
 static PyMethodDef Struct_methods[] = {
+	{
+		"__setattr__",
+		(PyCFunction)(void (*)(void)) Struct_set_attribute,
+		METH_FASTCALL,
+		NULL,
+	},
+	{"__delattr__", Struct_delete_attribute, METH_O, NULL},
 	{"__copy__", Struct_copy, METH_NOARGS, NULL},
 	{"__deepcopy__", Struct_deepcopy, METH_O, NULL},
 	{"__reduce_ex__", Struct_reduce_ex, METH_O, NULL},
@@ -454,11 +466,67 @@ static PyObject * frozen_instance_error(StructType const * const type) {
 	return type->struct_state->frozen_instance_error;
 }
 
-static int Struct_set_attribute(
+static PyObject * Struct_set_attribute(
 	PyObject * const self,
-	PyObject * const name,
-	PyObject * const value
+	PyObject * const * const arguments,
+	Py_ssize_t const count
 ) {
+	if (count != 2) {
+		PyErr_Format(PyExc_TypeError, "expected 2 arguments, got %zd", count);
+
+		return NULL;
+	}
+
+	return assign_attribute(self, arguments[0], arguments[1]) == 0 ? Py_NewRef(Py_None) : NULL;
+}
+
+static PyObject * Struct_delete_attribute(PyObject * const self, PyObject * const name) {
+	return assign_attribute(self, name, NULL) == 0 ? Py_NewRef(Py_None) : NULL;
+}
+
+enum setter_source setter_source_of(PyTypeObject const * const type, char const * const name) {
+	PY_OWNED(object_dict, struct_type_dict(&PyBaseObject_Type));
+	PY_OWNED(struct_dict, struct_type_dict(&StructMixin_Type));
+	PyObject * const object_setter = (
+		object_dict != NULL ? dict_get_string(object_dict, name) :
+		NULL
+	);
+	PyObject * const struct_setter = (
+		struct_dict != NULL ? dict_get_string(struct_dict, name) :
+		NULL
+	);
+
+	if (object_setter == NULL || struct_setter == NULL) {
+		if (!PyErr_Occurred()) {
+			PyErr_Format(PyExc_SystemError, "salix internal error: no %s to resolve against", name);
+		}
+
+		return SETTER_SOURCE_ERROR;
+	}
+
+	PyObject * const mro = type->tp_mro;
+
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); i += 1) {
+		PY_OWNED(entry_dict, struct_type_dict((PyTypeObject *) PyTuple_GET_ITEM(mro, i)));
+		PyObject * const found = entry_dict != NULL ? dict_get_string(entry_dict, name) : NULL;
+
+		if (PyErr_Occurred()) {
+			return SETTER_SOURCE_ERROR;
+		}
+
+		if (found != NULL) {
+			return (
+				found == object_setter ? SETTER_SOURCE_OBJECT :
+				found == struct_setter ? SETTER_SOURCE_STRUCT :
+				SETTER_SOURCE_OTHER
+			);
+		}
+	}
+
+	return SETTER_SOURCE_OBJECT;
+}
+
+static int assign_attribute(PyObject * const self, PyObject * const name, PyObject * const value) {
 	if (!is_struct(self) || !struct_type_of(self)->struct_options.frozen) {
 		return PyObject_GenericSetAttr(self, name, value);
 	}

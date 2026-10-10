@@ -522,11 +522,24 @@ static bool any_base_satisfies(PyObject * const bases, bool (*carries)(PyTypeObj
 	return false;
 }
 
+static bool diverts(PyTypeObject const * const base, char const * const name) {
+	switch (setter_source_of(base, name)) {
+		case SETTER_SOURCE_ERROR:
+			PyErr_Clear();
+
+			return true;
+		case SETTER_SOURCE_OBJECT:
+		case SETTER_SOURCE_STRUCT:
+			return false;
+		case SETTER_SOURCE_OTHER:
+			return true;
+	}
+
+	Py_UNREACHABLE();
+}
+
 static bool carries_diverting_setattro(PyTypeObject const * const base) {
-	return (
-		base->tp_setattro != StructMixin_Type.tp_setattro &&
-		base->tp_setattro != PyBaseObject_Type.tp_setattro
-	);
+	return diverts(base, "__setattr__") || diverts(base, "__delattr__");
 }
 
 bool any_base_diverts_setattro(PyObject * const bases) {
