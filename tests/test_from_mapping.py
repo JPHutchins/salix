@@ -1,8 +1,13 @@
+import collections
+import dataclasses
+import gc
+import re
+import weakref
 from collections.abc import Mapping
 
 import pytest
 
-from salix import Struct, from_mapping
+from salix import Struct, from_mapping, set_field
 
 
 class Point(Struct):
@@ -245,3 +250,85 @@ def test_the_field_bind_path_bypasses_a_metaclass_call():
 def test_an_own_init_class_refuses_a_non_string_key_like_the_constructor():
     with pytest.raises(TypeError, match="keywords must be strings"):
         from_mapping(WithInit, {1: "one"})  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("co_base", "owner"),
+    [(dict, "dict"), (collections.OrderedDict, "collections.OrderedDict"), (set, "set")],
+    ids=["dict", "OrderedDict", "set"],
+)
+def test_from_mapping_refuses_a_struct_whose_init_comes_from_a_builtin_container(co_base, owner):
+    class Over(co_base, Struct, frozen=False):
+        a: int = 0
+
+    with pytest.raises(TypeError, match=rf"takes its __init__ from {re.escape(owner)}, a built-in that salix does not pass"):
+        from_mapping(Over, {"a": 7})
+
+
+def test_from_mapping_through_a_cooperative_python_init_binds_the_field():
+    class Cooperative:
+        def __init__(self, *, a: int = 0) -> None:
+            set_field(self, "a", a)
+
+    class Over(Cooperative, Struct, frozen=False):
+        a: int = 0
+
+    assert from_mapping(Over, {"a": 7}).a == 7
+
+
+def test_an_init_var_struct_over_a_container_is_refused_because_from_mapping_calls_the_class():
+    class WithInitVar(dict, Struct, frozen=False):
+        a: int = 0
+        flag: dataclasses.InitVar[int] = 1
+
+    with pytest.raises(TypeError, match="takes its __init__ from dict,"):
+        from_mapping(WithInitVar, {"a": 7})
+
+
+def test_from_mapping_refuses_a_built_in_init_before_reading_the_values():
+    reads = []
+
+    class Watched(Mapping[str, object]):
+        def __getitem__(self, key: str) -> object:
+            return 7
+
+        def __iter__(self):
+            return iter(["a"])
+
+        def __len__(self) -> int:
+            return 1
+
+        def items(self):
+            reads.append("items")
+            return super().items()
+
+    class Over(dict, Struct, frozen=False):
+        a: int = 0
+
+    with pytest.raises(TypeError, match="takes its __init__ from dict,"):
+        from_mapping(Over, Watched())
+
+    assert reads == []
+
+
+def test_a_base_swapped_out_and_freed_leaves_no_trace_in_the_refusal():
+    class PlainDict(dict):
+        pass
+
+    def build() -> tuple[type, weakref.ref[type]]:
+        class Assigned(dict):
+            __init__ = dict.__init__
+
+        class Over(Assigned, Struct, frozen=False):
+            a: int = 0
+
+        return Over, weakref.ref(Assigned)
+
+    over, assigned = build()
+    over.__bases__ = (PlainDict, Struct)
+    gc.collect()
+
+    assert assigned() is None
+
+    with pytest.raises(TypeError, match="'Over' takes its __init__ from dict,"):
+        from_mapping(over, {"a": 7})

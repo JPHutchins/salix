@@ -36,6 +36,7 @@ enum result bind_keywords(
 enum result bind_named(StructType const * type, PyObject * self, PyObject * name, PyObject * value);
 struct field_lookup named_field(StructType const * type, PyObject * name);
 enum result fill_defaults(StructType const * type, PyObject * self, bool require_all);
+enum result refuse_a_builtin_init(StructType const * type, char const * operation);
 enum result run_post_init(StructType const * type, PyObject * self);
 PyObject * post_init_arguments_for(StructType const * type, PyObject * self);
 enum result run_post_init_with(StructType const * type, PyObject * post_init_arguments);

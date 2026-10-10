@@ -1,9 +1,12 @@
+import collections
 import copy
+import dataclasses
+import re
 import sys
 
 import pytest
 
-from salix import Struct, replace
+from salix import Struct, replace, set_field
 
 
 class Point(Struct):
@@ -337,3 +340,87 @@ def test_a_metaclass_call_returning_a_subclass_instance_is_accepted():
 
     assert type(replaced) is Sub
     assert replaced.x == 0
+
+
+class DictSubclass(dict):
+    pass
+
+
+BUILTIN_INIT_CO_BASES = [
+    (dict, "dict"),
+    (collections.OrderedDict, "collections.OrderedDict"),
+    (set, "set"),
+    (collections.deque, "collections.deque"),
+    (bytearray, "bytearray"),
+    (DictSubclass, "dict"),
+]
+
+
+@pytest.mark.parametrize(("co_base", "owner"), BUILTIN_INIT_CO_BASES, ids=[co_base.__name__ for co_base, _ in BUILTIN_INIT_CO_BASES])
+def test_replace_refuses_a_struct_whose_init_comes_from_a_builtin_container(co_base, owner):
+    class Over(co_base, Struct, frozen=False):
+        a: int = 0
+
+    with pytest.raises(TypeError, match=rf"takes its __init__ from {re.escape(owner)}, a built-in that salix does not pass"):
+        replace(Over(), a=7)
+
+
+def test_replace_over_a_container_with_a_body_init_binds_the_field_like_stock_dataclasses():
+    @dataclasses.dataclass
+    class Stock(collections.OrderedDict):
+        a: int = 0
+
+    class Ours(collections.OrderedDict, Struct, frozen=False):
+        a: int = 0
+
+        def __init__(self, a: int = 0) -> None:
+            super().__init__()
+            set_field(self, "a", a)
+
+    for original in (Stock(a=5), Ours(a=5)):
+        original["k"] = 1
+        replaced = replace(original, a=7) if isinstance(original, Ours) else dataclasses.replace(original, a=7)
+
+        assert (replaced.a, list(replaced.items())) == (7, [])
+
+
+def test_replace_through_a_cooperative_python_init_binds_the_field():
+    class Cooperative:
+        def __init__(self, *, a: int = 0) -> None:
+            set_field(self, "a", a)
+
+    class Over(Cooperative, Struct, frozen=False):
+        a: int = 0
+
+    assert replace(Over(a=3), a=7).a == 7
+
+
+def test_rebinding_init_to_python_lifts_the_built_in_refusal():
+    class Over(dict, Struct, frozen=False):
+        a: int = 0
+
+    def init(self: Over, a: int = 0) -> None:
+        dict.__init__(self)
+        set_field(self, "a", a)
+
+    Over.__init__ = init
+
+    assert replace(Over(), a=7).a == 7
+
+
+def test_a_body_init_assigned_from_a_container_names_the_container():
+    class Assigned(dict, Struct, frozen=False):
+        a: int = 0
+        __init__ = dict.__init__
+
+    with pytest.raises(TypeError, match="'Assigned' takes its __init__ from dict,"):
+        replace(Assigned(), a=7)
+
+
+def test_an_init_var_struct_over_a_container_is_refused_because_replace_calls_the_class():
+    class WithInitVar(dict, Struct, frozen=False):
+        a: int = 0
+        flag: dataclasses.InitVar[int] = 1
+
+    with pytest.raises(TypeError, match="takes its __init__ from dict,"):
+        replace(WithInitVar(), a=7)

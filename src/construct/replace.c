@@ -146,6 +146,14 @@ PyObject * Struct_replace(
 	PyTypeObject * const cls = &type->heap_type.ht_type;
 
 	if (type->struct_own_init) {
+		if (
+			!type->struct_family_owned &&
+			!type->struct_group_family &&
+			refuse_a_builtin_init(type, "replace()") != RESULT_OK
+		) {
+			return NULL;
+		}
+
 		for (Py_ssize_t i = 0; i < change_count; ++i) {
 			if (accept_change_name(type, PyTuple_GET_ITEM(keyword_names, i)) != RESULT_OK) {
 				return NULL;
