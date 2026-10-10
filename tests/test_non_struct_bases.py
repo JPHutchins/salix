@@ -1,3 +1,7 @@
+import array
+import collections
+import dataclasses
+
 import pytest
 
 from salix import Struct
@@ -521,3 +525,107 @@ def test_a_body_that_writes_object_equality_has_still_written_one():
     assert B.__hash__ is None
     assert (B(1, 0) == B(1, 0)) is False
     assert (B(1, 0) != B(1, 0)) is True
+
+
+@pytest.mark.parametrize("co_base", [frozenset, array.array, float, complex], ids=lambda co_base: co_base.__name__)
+def test_a_co_base_that_sets_up_its_instances_in_new_is_refused(co_base):
+    with pytest.raises(TypeError, match=f"a struct cannot extend {co_base.__name__}"):
+
+        class Over(co_base, Struct):
+            a: int = 0
+
+
+@pytest.mark.parametrize(
+    ("co_base", "add"),
+    [
+        (dict, lambda instance: instance.__setitem__("k", 1)),
+        (list, lambda instance: instance.append(1)),
+        (set, lambda instance: instance.add(1)),
+        (bytearray, lambda instance: instance.extend(b"k")),
+        (collections.OrderedDict, lambda instance: instance.__setitem__("k", 1)),
+        (collections.deque, lambda instance: instance.append(1)),
+    ],
+    ids=lambda value: getattr(value, "__name__", ""),
+)
+def test_a_co_base_with_its_own_init_still_constructs(co_base, add):
+    class Over(co_base, Struct, frozen=False):
+        a: int = 0
+
+    instance = Over()
+    add(instance)
+
+    assert (len(instance), instance.a) == (1, 0)
+
+
+def test_a_body_new_is_refused_rather_than_skipped():
+    with pytest.raises(TypeError, match=r"WithNew\.__new__ cannot be used on a struct without an __init__ of its own"):
+
+        class WithNew(Struct):
+            x: int
+
+            def __new__(cls, *args: object, **kwargs: object) -> object:
+                return super().__new__(cls)
+
+
+def test_a_python_base_new_runs_for_a_struct_with_its_own_init_like_stock_dataclasses():
+    class Marking:
+        def __new__(cls, *args: object, **kwargs: object) -> object:
+            instance = super().__new__(cls)
+            instance.marker = "set in __new__"
+            return instance
+
+    @dataclasses.dataclass
+    class Stock(Marking):
+        x: int = 0
+
+    class Ours(Marking, Struct, frozen=False):
+        x: int = 0
+
+        def __init__(self, x: int = 0) -> None:
+            self.x = x
+
+    for Class in (Stock, Ours):
+        instance = Class(3)
+
+        assert (instance.x, instance.marker) == (3, "set in __new__")
+
+
+def test_a_python_base_new_is_refused_for_a_struct_without_its_own_init():
+    class Marking:
+        def __new__(cls, *args: object, **kwargs: object) -> object:
+            return super().__new__(cls)
+
+    with pytest.raises(TypeError, match=r"Marking\.__new__ cannot be used on a struct without an __init__ of its own"):
+
+        class Ours(Marking, Struct, frozen=False):
+            x: int = 0
+
+
+def test_object_new_assigned_in_the_body_is_object_s_and_builds():
+    class Aliased(Struct, frozen=False):
+        x: int = 0
+        __new__ = object.__new__
+
+    assert Aliased(3).x == 3
+
+
+def test_object_new_assigned_over_a_co_base_that_sets_up_in_new_is_refused():
+    with pytest.raises(TypeError, match="a struct cannot extend frozenset"):
+
+        class Aliased(frozenset, Struct):
+            a: int = 0
+            __new__ = object.__new__
+
+
+def test_a_foreign_c_new_that_cpython_never_installs_builds():
+    class Borrowed(Struct, frozen=False):
+        x: int = 0
+        __new__ = dict.__new__
+
+    assert Borrowed(3).x == 3
+
+
+@pytest.mark.parametrize("dispatched", [staticmethod(object.__new__), "xyz".upper], ids=["staticmethod", "bound builtin"])
+def test_a_new_cpython_dispatches_is_refused_under_the_class_s_own_name(dispatched):
+    with pytest.raises(TypeError, match=r"Dispatching\.__new__ cannot be used on a struct without an __init__ of its own"):
+        type(Struct)("Dispatching", (Struct,), {"__annotations__": {"x": int}, "x": 0, "__new__": dispatched})

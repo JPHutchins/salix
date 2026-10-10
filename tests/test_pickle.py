@@ -498,10 +498,6 @@ def test_a_c_defined_co_base_refuses_duplication_like_a_stock_subclass():
             duplicate(BuilderCoBase())
 
 
-class FloatCoBase(float, Struct, frozen=False):
-    a: int = 0
-
-
 class FrozenSetCoBase(set, Struct):
     a: int = 0
 
@@ -510,12 +506,11 @@ class FrozenOrderedCoBase(OrderedDict, Struct):
     a: int = 0
 
 
-@pytest.mark.parametrize("duplicate", [copy.copy, copy.deepcopy, round_trip], ids=["copy", "deepcopy", "pickle"])
-def test_a_value_co_base_duplicates_what_construction_built(duplicate):
-    original = FloatCoBase(2.5)
-    duplicated = duplicate(original)
+def test_a_value_co_base_whose_new_construction_skips_is_refused():
+    with pytest.raises(TypeError, match="a struct cannot extend float"):
 
-    assert (float(duplicated), duplicated.a) == (float(original), original.a)
+        class FloatCoBase(float, Struct, frozen=False):
+            a: int = 0
 
 
 @pytest.mark.xfail(

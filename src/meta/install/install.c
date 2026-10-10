@@ -146,24 +146,110 @@ static bool author_new_in_chain(PyTypeObject * const cls) {
 	return false;
 }
 
-static bool resolves_new_to_none(PyTypeObject * const cls) {
-	PyObject * const mro = cls->tp_mro;
+struct new_definer {
+	enum {
+		NEW_DEFINER_ERROR,
+		NEW_DEFINER_NONE,
+		NEW_DEFINER_ALLOCATOR,
+		NEW_DEFINER_AUTHORED,
+	} tag;
+	PyTypeObject * owner;
+};
 
-	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); i += 1) {
-		PY_OWNED(entry_dict, struct_type_dict((PyTypeObject *) PyTuple_GET_ITEM(mro, i)));
+static struct new_definer nearest_new(PyTypeObject * const cls) {
+	PyObject * const mro = cls->tp_mro;
+	PyTypeObject * nearest = NULL;
+	bool nearest_is_none = false;
+
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro) && !nearest_is_none; i += 1) {
+		PyTypeObject * const owner = (PyTypeObject *) PyTuple_GET_ITEM(mro, i);
+		PY_OWNED(entry_dict, struct_type_dict(owner));
+
+		if (entry_dict == NULL && PyErr_Occurred()) {
+			return (struct new_definer){.tag = NEW_DEFINER_ERROR};
+		}
+
 		PyObject * const entry = (
 			entry_dict != NULL ? dict_get_string(entry_dict, "__new__") :
 			NULL
 		);
 
-		if (entry != NULL) {
-			return entry == Py_None;
+		if (entry == NULL && PyErr_Occurred()) {
+			return (struct new_definer){.tag = NEW_DEFINER_ERROR};
 		}
 
-		PyErr_Clear();
+		if (entry == NULL) {
+			continue;
+		}
+
+		if (nearest == NULL) {
+			nearest = owner;
+			nearest_is_none = entry == Py_None;
+		}
+
+		if (
+			PyCFunction_Check(entry) &&
+			PyCFunction_GET_SELF(entry) == (PyObject *) owner &&
+			owner->tp_new == cls->tp_new
+		) {
+			return (struct new_definer){.tag = NEW_DEFINER_ALLOCATOR, .owner = owner};
+		}
 	}
 
-	return false;
+	return (struct new_definer){
+		.tag = nearest_is_none ? NEW_DEFINER_NONE : NEW_DEFINER_AUTHORED,
+		.owner = nearest != NULL ? nearest : cls,
+	};
+}
+
+static enum result refuse_a_skipped_new(
+	StructType const * const struct_class,
+	struct new_definer const definer,
+	bool const own_init
+) {
+	PyTypeObject * const cls = (PyTypeObject *) &struct_class->heap_type.ht_type;
+	bool const skipped = (
+		!own_init &&
+		!is_exception_struct(cls) &&
+		cls->tp_new != NULL &&
+		cls->tp_new != PyBaseObject_Type.tp_new
+	);
+
+	switch (definer.tag) {
+		case NEW_DEFINER_ERROR:
+			return RESULT_ERROR;
+		case NEW_DEFINER_NONE:
+			return RESULT_OK;
+		case NEW_DEFINER_ALLOCATOR:
+			if (!skipped) {
+				return RESULT_OK;
+			}
+
+			PyErr_Format(
+				PyExc_TypeError,
+				"a struct cannot extend %.200s: it sets up its instances in __new__, "
+				"which the struct constructor does not call",
+				definer.owner->tp_name
+			);
+
+			return RESULT_ERROR;
+		case NEW_DEFINER_AUTHORED:
+			if (!skipped) {
+				return RESULT_OK;
+			}
+
+			PyErr_Format(
+				PyExc_TypeError,
+				"%.200s.__new__ cannot be used on a struct without an __init__ of its own: "
+				"the struct constructor never calls it; define __init__, set fields in "
+				"__post_init__, or build instances in a classmethod",
+				definer.owner->tp_name
+			);
+
+			return RESULT_ERROR;
+	}
+
+	Py_UNREACHABLE();
 }
 
 enum result install_constructor(
@@ -174,7 +260,13 @@ enum result install_constructor(
 	bool const own_init = defines_own_init(struct_class, namespace);
 	struct_class->struct_own_init = own_init;
 
-	bool const cannot_create = resolves_new_to_none(&struct_class->heap_type.ht_type);
+	struct new_definer const definer = nearest_new(&struct_class->heap_type.ht_type);
+
+	if (refuse_a_skipped_new(struct_class, definer, own_init) != RESULT_OK) {
+		return RESULT_ERROR;
+	}
+
+	bool const cannot_create = definer.tag == NEW_DEFINER_NONE;
 
 	struct_class->struct_cannot_create = cannot_create;
 

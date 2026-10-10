@@ -1028,11 +1028,12 @@ def test_a_co_base_earlier_in_the_mro_decides_against_a_none_new_ancestor() -> N
     class Inheriting(Refusing):
         pass
 
-    class Interleaved(Constructing, Inheriting):
-        pass
-
     assert isinstance(PlainInterleaved(), PlainInterleaved)
-    assert Interleaved(1).x == 1
+
+    with pytest.raises(TypeError, match=r"Constructing\.__new__ cannot be used on a struct"):
+
+        class Interleaved(Constructing, Inheriting):
+            pass
 
 
 def test_a_none_new_on_a_secondary_base_refuses() -> None:
