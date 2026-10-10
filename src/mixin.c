@@ -485,14 +485,15 @@ static PyObject * Struct_delete_attribute(PyObject * const self, PyObject * cons
 }
 
 enum setter_source setter_source_of(PyTypeObject const * const type, char const * const name) {
-	PY_OWNED(object_dict, struct_type_dict(&PyBaseObject_Type));
-	PY_OWNED(struct_dict, struct_type_dict(&StructMixin_Type));
+	PY_OWNED(key, PyUnicode_InternFromString(name));
+	PY_OWNED(object_dict, key != NULL ? struct_type_dict(&PyBaseObject_Type) : NULL);
+	PY_OWNED(struct_dict, key != NULL ? struct_type_dict(&StructMixin_Type) : NULL);
 	PyObject * const object_setter = (
-		object_dict != NULL ? dict_get_string(object_dict, name) :
+		object_dict != NULL ? PyDict_GetItemWithError(object_dict, key) :
 		NULL
 	);
 	PyObject * const struct_setter = (
-		struct_dict != NULL ? dict_get_string(struct_dict, name) :
+		struct_dict != NULL ? PyDict_GetItemWithError(struct_dict, key) :
 		NULL
 	);
 
@@ -508,7 +509,10 @@ enum setter_source setter_source_of(PyTypeObject const * const type, char const 
 
 	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); i += 1) {
 		PY_OWNED(entry_dict, struct_type_dict((PyTypeObject *) PyTuple_GET_ITEM(mro, i)));
-		PyObject * const found = entry_dict != NULL ? dict_get_string(entry_dict, name) : NULL;
+		PyObject * const found = (
+			entry_dict != NULL ? PyDict_GetItemWithError(entry_dict, key) :
+			NULL
+		);
 
 		if (PyErr_Occurred()) {
 			return SETTER_SOURCE_ERROR;
