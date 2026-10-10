@@ -26,6 +26,18 @@ Where the shim and salix differ from stock dataclasses. CPython's own
    the class dict (not set_field-backed); declared fields assign correctly
    through it, undeclared ones cannot exist.
 
+4. **A ClassVar or a field name cannot be rebound or deleted on the class**
+   (the #134 and #255 rulings). In `test_class_var` and
+   `test_class_var_frozen`, `C.z += 1` raises `TypeError: cannot set 'z'
+   attribute of struct class 'C': it is a ClassVar, and a class variable is
+   a constant` (measured 2026-10-10). Assigning `__bases__` is refused for
+   the same reason. Two consequences remain outside salix's reach:
+   assigning to a plain (non-struct) mixin that already sits ahead of a
+   struct base, as in `Mixin.y = 5`, still shadows that base's field or
+   ClassVar; and `type.__setattr__(struct_class, ...)` is refused for every
+   name, because CPython refuses it on any class whose metaclass sets its
+   own C-level `tp_setattro`.
+
 ## shim-level
 
 - Decorator-level `init=False` raises `NotImplementedError` (field-level

@@ -27,56 +27,79 @@ static int struct_base_count(PyObject * const bases) {
 	return count;
 }
 
-static PyObject * nearest_class_entry(PyTypeObject * const type, PyObject * const name) {
-	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(type->tp_mro); i += 1) {
-		PY_OWNED(entry_dict, struct_type_dict((PyTypeObject *) PyTuple_GET_ITEM(type->tp_mro, i)));
+static enum result refuse_a_rebound_name(
+	PyTypeObject * const created,
+	PyObject * const name,
+	char const * const reached,
+	char const * const remedy
+) {
+	PyErr_Format(
+		PyExc_TypeError,
+		"%.200s.%U does not reach its %s: a base ahead of the class that declares it, this "
+		"class's body, or an __init_subclass__ or __set_name__ hook, rebinds, shadows or "
+		"deletes the name; %s",
+		created->tp_name,
+		name,
+		reached,
+		remedy
+	);
 
-		if (entry_dict == NULL) {
-			return NULL;
+	return RESULT_ERROR;
+}
+
+enum result refuse_rebound_class_names(StructType * const struct_class) {
+	PyTypeObject * const created = (PyTypeObject *) struct_class;
+	PyObject * const field_names = struct_class->struct_field_names;
+	PyObject * const class_var_positions = struct_class->struct_class_var_positions;
+
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(field_names); i += 1) {
+		PyObject * const field_name = PyTuple_GET_ITEM(field_names, i);
+		__attribute__((cleanup(class_entry_clear))) struct class_entry entry = class_entry_of(
+			created,
+			field_name
+		);
+
+		if (entry.tag == CLASS_ENTRY_ERROR) {
+			return RESULT_ERROR;
 		}
 
-		PY_MOVABLE(value, dict_value_ref(entry_dict, name));
-
-		if (value != NULL || PyErr_Occurred()) {
-			return py_move(&value);
+		if (entry.tag != CLASS_ENTRY_FIELD) {
+			return refuse_a_rebound_name(
+				created,
+				field_name,
+				"field's slot",
+				"declare the field's default in the class body"
+			);
 		}
 	}
 
-	return NULL;
-}
+	for (
+		Py_ssize_t i = 0;
+		class_var_positions != NULL && i < PyTuple_GET_SIZE(class_var_positions);
+		i += 1
+	) {
+		PyObject * const position = PyTuple_GET_ITEM(class_var_positions, i);
+		PyObject * const class_var_name = PyTuple_GET_ITEM(position, 1);
+		__attribute__((cleanup(class_entry_clear))) struct class_entry entry = class_entry_of(
+			created,
+			class_var_name
+		);
 
-enum result refuse_replaced_field_slots(
-	PyTypeObject * const created,
-	PyObject * const field_names
-) {
-	for (Py_ssize_t i = 0; i < PyList_GET_SIZE(field_names); i += 1) {
-		PyObject * const field_name = PyList_GET_ITEM(field_names, i);
-		PY_OWNED(entry, nearest_class_entry(created, field_name));
-
-		if (entry == NULL && PyErr_Occurred()) {
+		if (entry.tag == CLASS_ENTRY_ERROR) {
 			return RESULT_ERROR;
 		}
 
-		bool const reaches_its_slot = (
-			entry != NULL &&
-			PyObject_TypeCheck(entry, &PyMemberDescr_Type) &&
-			PyType_IsSubtype(created, PyDescr_TYPE(entry)) &&
-			PyUnicode_Compare(PyDescr_NAME(entry), field_name) == 0
-		);
-
-		if (!reaches_its_slot) {
-			PyErr_Format(
-				PyExc_TypeError,
-				"%.200s.%U was rebound or deleted while the class was being created, "
-				"by __init_subclass__ or a __set_name__ hook, so instances would no "
-				"longer read field '%U' from its slot; give the field's default in the "
-				"class body instead",
-				created->tp_name,
-				field_name,
-				field_name
+		if (
+			entry.tag != CLASS_ENTRY_CLASS_VAR ||
+			(entry.owner == created && entry.value != PyTuple_GET_ITEM(position, 2))
+		) {
+			return refuse_a_rebound_name(
+				created,
+				class_var_name,
+				"ClassVar's value",
+				"to give this class its own constant, redeclare the name with a ClassVar "
+				"annotation and its value"
 			);
-
-			return RESULT_ERROR;
 		}
 	}
 

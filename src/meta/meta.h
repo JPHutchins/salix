@@ -48,6 +48,15 @@ struct member_lookup find_member(
 	PyObject * name
 );
 
+struct class_entry {
+	enum { CLASS_ENTRY_ERROR, CLASS_ENTRY_FREE, CLASS_ENTRY_FIELD, CLASS_ENTRY_CLASS_VAR } tag;
+	PyTypeObject * owner;
+	PyObject * value;
+};
+
+struct class_entry class_entry_of(PyTypeObject * type, PyObject * name);
+void class_entry_clear(struct class_entry * entry);
+
 struct equality_source {
 	enum { EQUALITY_RESOLVED, EQUALITY_FAILED } tag;
 	bool from_a_body;

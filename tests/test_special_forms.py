@@ -306,30 +306,22 @@ def test_a_field_over_an_inherited_class_var_takes_the_class_var_position():
     assert (Sub(0, 1).y, Sub(0, 1).z, Sub(0, 1).w) == (0, 1, 4)
 
 
-def test_a_redeclaration_without_a_value_reads_the_class_var_as_reassigned():
+def test_a_class_var_cannot_be_reassigned_on_a_struct_class():
     @dataclass
     class StockBase:
-        a: int = 0
         x: ClassVar[int] = 1
-        b: int = 2
 
     class Base(Struct):
-        a: int = 0
         x: ClassVar[int] = 1
-        b: int = 2
 
     StockBase.x = 9
-    Base.x = 9
 
-    @dataclass
-    class StockSub(StockBase):
-        x: int
+    with pytest.raises(
+        TypeError, match=r"cannot set 'x' attribute of struct class 'Base': it is a ClassVar"
+    ):
+        Base.x = 9
 
-    class Sub(Base):
-        x: int
-
-    assert Sub._struct_fields_ == tuple(field.name for field in fields(StockSub)) == ("a", "x", "b")
-    assert (Sub().a, Sub().x, Sub().b) == (StockSub().a, StockSub().x, StockSub().b) == (0, 9, 2)
+    assert (StockBase.x, Base.x) == (9, 1)
 
 
 def test_a_redeclaration_without_a_value_reads_a_mixin_that_shadows_the_class_var():
@@ -355,40 +347,6 @@ def test_a_redeclaration_without_a_value_reads_a_mixin_that_shadows_the_class_va
     assert Sub().x == StockSub().x == 5
 
 
-def test_an_init_var_redeclared_without_a_value_reads_the_class_var_as_reassigned():
-    seen: list[int] = []
-
-    @dataclass
-    class StockBase:
-        a: int = 0
-        x: ClassVar[int] = 1
-
-    class Base(Struct):
-        a: int = 0
-        x: ClassVar[int] = 1
-
-    StockBase.x = 9
-    Base.x = 9
-
-    @dataclass
-    class StockSub(StockBase):
-        x: InitVar[int]
-
-        def __post_init__(self, x: int) -> None:
-            seen.append(x)
-
-    class Sub(Base):
-        x: InitVar[int]
-
-        def __post_init__(self, x: int) -> None:
-            seen.append(x)
-
-    StockSub()
-    Sub()
-
-    assert seen == [9, 9]
-
-
 def test_a_redeclaration_without_a_value_copies_the_class_var_value_at_class_creation():
     class Base(Struct):
         x: ClassVar[list[int]] = [1]
@@ -401,7 +359,7 @@ def test_a_redeclaration_without_a_value_copies_the_class_var_value_at_class_cre
     assert Sub().x == [1]
 
 
-def test_a_redeclaration_built_through_a_metatype_handoff_reads_the_class_var_as_reassigned():
+def test_a_class_var_of_a_struct_with_a_derived_metatype_cannot_be_reassigned():
     class Delegating(type(Struct)):
         def __new__(
             metacls: type,
@@ -416,12 +374,13 @@ def test_a_redeclaration_built_through_a_metatype_handoff_reads_the_class_var_as
         a: int = 0
         x: ClassVar[int] = 1
 
-    Base.x = 9
+    with pytest.raises(TypeError, match=r"cannot set 'x' attribute of struct class 'Base'"):
+        Base.x = 9
 
     Built = type(Struct)("Built", (Base,), {"__annotations__": {"x": int}})
 
     assert type(Built) is Delegating
-    assert Built().x == 9
+    assert Built().x == 1
 
 
 def test_a_class_var_only_secondary_base_keeps_its_class_var_position():
@@ -584,49 +543,34 @@ def test_class_var_only_bases_merge_their_positions_in_stock_order(
     assert (Two().p, Two().q) == (StockTwo().p, StockTwo().q) == (10, 20)
 
 
-def test_a_redeclaration_over_a_deleted_class_var_is_required():
+def test_a_class_var_cannot_be_deleted_from_a_struct_class():
     @dataclass
     class StockBase:
         x: ClassVar[int] = 1
-        a: int = 0
 
     class Base(Struct):
         x: ClassVar[int] = 1
-        a: int = 0
 
     del StockBase.x
-    del Base.x
 
-    @dataclass
-    class StockSub(StockBase):
-        x: int
+    with pytest.raises(
+        TypeError, match=r"cannot delete 'x' attribute of struct class 'Base': it is a ClassVar"
+    ):
+        del Base.x
 
-    class Sub(Base):
-        x: int
-
-    assert Sub._struct_fields_ == tuple(field.name for field in fields(StockSub)) == ("x", "a")
-    assert Sub._struct_defaults_ == (0,)
-    assert (Sub(7).x, StockSub(7).x) == (7, 7)
-
-    with pytest.raises(TypeError):
-        StockSub()
-
-    with pytest.raises(TypeError):
-        Sub()
+    assert not hasattr(StockBase, "x")
+    assert Base.x == 1
 
 
-def test_a_redeclaration_over_a_deleted_class_var_after_a_default_is_refused():
+def test_a_redeclaration_over_a_member_descriptor_class_var_after_a_default_is_refused():
     @dataclass
     class StockBase:
         a: int = 0
-        x: ClassVar[int] = 1
+        x: ClassVar[object] = Slotted.__dict__["s"]
 
     class Base(Struct):
         a: int = 0
-        x: ClassVar[int] = 1
-
-    del StockBase.x
-    del Base.x
+        x: ClassVar[object] = Slotted.__dict__["s"]
 
     with pytest.raises(TypeError, match="non-default argument 'x'"):
 
@@ -640,24 +584,21 @@ def test_a_redeclaration_over_a_deleted_class_var_after_a_default_is_refused():
             x: int
 
 
-def test_a_redeclaration_over_a_deleted_class_var_after_an_init_var_default_is_refused():
+def test_a_redeclaration_over_a_member_descriptor_class_var_after_an_init_var_default_is_refused():
     @dataclass
     class StockBase:
         flag: InitVar[int] = 3
-        x: ClassVar[int] = 1
+        x: ClassVar[object] = Slotted.__dict__["s"]
 
         def __post_init__(self, flag: int) -> None:
             pass
 
     class Base(Struct):
         flag: InitVar[int] = 3
-        x: ClassVar[int] = 1
+        x: ClassVar[object] = Slotted.__dict__["s"]
 
         def __post_init__(self, flag: int) -> None:
             pass
-
-    del StockBase.x
-    del Base.x
 
     with pytest.raises(TypeError, match="non-default argument 'x'"):
 
@@ -671,16 +612,13 @@ def test_a_redeclaration_over_a_deleted_class_var_after_an_init_var_default_is_r
             x: int
 
 
-def test_a_redeclaration_over_a_deleted_class_var_ahead_of_a_required_field_is_required():
+def test_a_redeclaration_over_a_member_descriptor_class_var_ahead_of_a_required_field_is_required():
     @dataclass
     class StockBase:
-        x: ClassVar[int] = 5
+        x: ClassVar[object] = Slotted.__dict__["s"]
 
     class Base(Struct):
-        x: ClassVar[int] = 5
-
-    del StockBase.x
-    del Base.x
+        x: ClassVar[object] = Slotted.__dict__["s"]
 
     @dataclass
     class StockSub(StockBase):
@@ -693,21 +631,18 @@ def test_a_redeclaration_over_a_deleted_class_var_ahead_of_a_required_field_is_r
 
     assert Sub._struct_fields_ == tuple(field.name for field in fields(StockSub)) == ("x", "y")
     assert Sub._struct_defaults_ == ()
-    assert (Sub(1, 2).x, Sub(1, 2).y) == (StockSub(1, 2).x, StockSub(1, 2).y) == (1, 2)
+    assert (Sub(1, 2).x, Sub(1, 2).y) == (1, 2)
 
 
-def test_a_redeclaration_over_a_deleted_class_var_ahead_of_a_required_init_var_is_required():
+def test_a_redeclaration_over_a_member_descriptor_class_var_ahead_of_a_required_init_var_is_required():
     seen: list[int] = []
 
     @dataclass
     class StockBase:
-        x: ClassVar[int] = 5
+        x: ClassVar[object] = Slotted.__dict__["s"]
 
     class Base(Struct):
-        x: ClassVar[int] = 5
-
-    del StockBase.x
-    del Base.x
+        x: ClassVar[object] = Slotted.__dict__["s"]
 
     @dataclass
     class StockSub(StockBase):
@@ -724,8 +659,9 @@ def test_a_redeclaration_over_a_deleted_class_var_ahead_of_a_required_init_var_i
         def __post_init__(self, flag: int) -> None:
             seen.append(flag)
 
-    assert Sub(1, 2).x == StockSub(1, 2).x == 1
-    assert seen == [2, 2]
+    assert [field.name for field in fields(StockSub)] == list(Sub._struct_fields_) == ["x"]
+    assert Sub(1, 2).x == 1
+    assert seen == [2]
 
 
 def test_a_redeclaration_copies_each_default_once_at_class_creation():
@@ -770,15 +706,12 @@ class Slotted:
 def test_a_redeclaration_reads_a_descriptor_class_var_through_its_get():
     @dataclass
     class StockBase:
-        x: ClassVar[int] = 1
+        x: ClassVar[int] = Answering()
         a: int = 0
 
     class Base(Struct):
-        x: ClassVar[int] = 1
+        x: ClassVar[int] = Answering()
         a: int = 0
-
-    StockBase.x = Answering()
-    Base.x = Answering()
 
     @dataclass
     class StockSub(StockBase):
@@ -791,21 +724,14 @@ def test_a_redeclaration_reads_a_descriptor_class_var_through_its_get():
 
 
 def test_a_descriptor_class_var_that_raises_fails_the_redeclaring_class():
-    @dataclass
-    class StockBase:
-        x: ClassVar[int] = 1
-
-    class Base(Struct):
-        x: ClassVar[int] = 1
-
-    StockBase.x = Refusing()
-    Base.x = Refusing()
-
     with pytest.raises(RuntimeError, match="descriptor read"):
 
         @dataclass
-        class StockSub(StockBase):
-            x: int
+        class StockBase:
+            x: ClassVar[int] = Refusing()
+
+    class Base(Struct):
+        x: ClassVar[int] = Refusing()
 
     with pytest.raises(RuntimeError, match="descriptor read"):
 
@@ -816,15 +742,12 @@ def test_a_descriptor_class_var_that_raises_fails_the_redeclaring_class():
 def test_a_member_descriptor_class_var_leaves_the_redeclaration_required():
     @dataclass
     class StockBase:
-        x: ClassVar[int] = 1
+        x: ClassVar[object] = Slotted.__dict__["s"]
         a: int = 0
 
     class Base(Struct):
-        x: ClassVar[int] = 1
+        x: ClassVar[object] = Slotted.__dict__["s"]
         a: int = 0
-
-    StockBase.x = Slotted.__dict__["s"]
-    Base.x = Slotted.__dict__["s"]
 
     @dataclass
     class StockSub(StockBase):
@@ -841,18 +764,15 @@ def test_a_member_descriptor_class_var_leaves_the_redeclaration_required():
         Sub()
 
 
-def test_an_init_var_over_a_deleted_class_var_is_required():
+def test_an_init_var_over_a_member_descriptor_class_var_is_required():
     seen: list[int] = []
 
     @dataclass
     class StockBase:
-        x: ClassVar[int] = 1
+        x: ClassVar[object] = Slotted.__dict__["s"]
 
     class Base(Struct):
-        x: ClassVar[int] = 1
-
-    del StockBase.x
-    del Base.x
+        x: ClassVar[object] = Slotted.__dict__["s"]
 
     @dataclass
     class StockSub(StockBase):

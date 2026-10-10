@@ -17,6 +17,7 @@ static PyObject * StructMeta_get_annotations(PyObject * self, void * closure);
 static PyObject * StructMeta_get_metadata(PyObject * self, void * closure);
 static PyGetSetDef StructMeta_getset[10];
 static PyObject * StructMeta_call(PyObject * self, PyObject * args, PyObject * keywords);
+static int StructMeta_setattro(PyObject * self, PyObject * name, PyObject * value);
 PyTypeObject StructMeta_Type = {
 	PyVarObject_HEAD_INIT(NULL, 0)
 	.tp_name = "salix._StructMeta",
@@ -35,6 +36,7 @@ PyTypeObject StructMeta_Type = {
 	.tp_traverse = StructMeta_traverse,
 	.tp_clear = StructMeta_clear,
 	.tp_call = StructMeta_call,
+	.tp_setattro = StructMeta_setattro,
 	.tp_vectorcall_offset = offsetof(PyTypeObject, tp_vectorcall),
 	.tp_getset = StructMeta_getset,
 };
@@ -401,6 +403,142 @@ void meta_tests(void) {
 }
 
 #endif
+
+static bool carries_class_var(PyTypeObject * const owner, PyObject * const name) {
+	PyObject * const class_var_positions = (
+		is_struct_class((PyObject *) owner) ? ((StructType *) owner)->struct_class_var_positions :
+		NULL
+	);
+
+	for (
+		Py_ssize_t i = 0;
+		class_var_positions != NULL && i < PyTuple_GET_SIZE(class_var_positions);
+		i += 1
+	) {
+		if (
+			PyUnicode_Compare(
+				name,
+				PyTuple_GET_ITEM(PyTuple_GET_ITEM(class_var_positions, i), 1)
+			) == 0
+		) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+static bool names_a_field_slot(
+	PyTypeObject * const type,
+	PyObject * const name,
+	PyObject * const value
+) {
+	return (
+		PyObject_TypeCheck(value, &PyMemberDescr_Type) &&
+		is_struct_class((PyObject *) PyDescr_TYPE(value)) &&
+		PyType_IsSubtype(type, PyDescr_TYPE(value)) &&
+		PyUnicode_Compare(PyDescr_NAME(value), name) == 0
+	);
+}
+
+struct class_entry class_entry_of(PyTypeObject * const type, PyObject * const name) {
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(type->tp_mro); i += 1) {
+		PyTypeObject * const owner = (PyTypeObject *) PyTuple_GET_ITEM(type->tp_mro, i);
+		PY_OWNED(owner_dict, struct_type_dict(owner));
+
+		if (owner_dict == NULL) {
+			return (struct class_entry){.tag = CLASS_ENTRY_ERROR};
+		}
+
+		PY_MOVABLE(value, dict_value_ref(owner_dict, name));
+
+		if (value == NULL && PyErr_Occurred()) {
+			return (struct class_entry){.tag = CLASS_ENTRY_ERROR};
+		}
+
+		if (value != NULL) {
+			return (struct class_entry){
+				.tag = (
+					names_a_field_slot(type, name, value) ? CLASS_ENTRY_FIELD :
+					carries_class_var(owner, name) ? CLASS_ENTRY_CLASS_VAR :
+					CLASS_ENTRY_FREE
+				),
+				.owner = owner,
+				.value = py_move(&value),
+			};
+		}
+	}
+
+	return (struct class_entry){.tag = CLASS_ENTRY_FREE};
+}
+
+void class_entry_clear(struct class_entry * const entry) {
+	Py_CLEAR(entry->value);
+}
+
+static int refuse_class_write(
+	PyObject * const self,
+	PyObject * const name,
+	PyObject * const value,
+	char const * const reason
+) {
+	PyErr_Format(
+		PyExc_TypeError,
+		"cannot %s '%U' attribute of struct class '%.200s': %s",
+		value == NULL ? "delete" : "set",
+		name,
+		((PyTypeObject *) self)->tp_name,
+		reason
+	);
+
+	return -1;
+}
+
+static int StructMeta_setattro(
+	PyObject * const self,
+	PyObject * const name,
+	PyObject * const value
+) {
+	if (!PyUnicode_Check(name)) {
+		return PyType_Type.tp_setattro(self, name, value);
+	}
+
+	if (PyUnicode_CompareWithASCIIString(name, "__bases__") == 0) {
+		return refuse_class_write(
+			self,
+			name,
+			value,
+			"its fields and ClassVars were planned from its bases"
+		);
+	}
+
+	__attribute__((cleanup(class_entry_clear))) struct class_entry entry = class_entry_of(
+		(PyTypeObject *) self,
+		name
+	);
+
+	switch (entry.tag) {
+		case CLASS_ENTRY_ERROR:
+			return -1;
+		case CLASS_ENTRY_FREE:
+			return PyType_Type.tp_setattro(self, name, value);
+		case CLASS_ENTRY_FIELD:
+		case CLASS_ENTRY_CLASS_VAR:
+			break;
+	}
+
+	if (value != NULL && value == entry.value) {
+		return PyType_Type.tp_setattro(self, name, value);
+	}
+
+	return refuse_class_write(
+		self,
+		name,
+		value,
+		entry.tag == CLASS_ENTRY_FIELD ? "it is a field, and the class attribute is the field's slot" :
+		"it is a ClassVar, and a class variable is a constant"
+	);
+}
 
 static void StructMeta_dealloc(PyObject * const self) {
 	PyObject_GC_UnTrack(self);

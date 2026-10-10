@@ -30,7 +30,7 @@ enum result settle_mro_bindings(
 
 enum result verify_settle_names_readable(PyObject * original_namespace);
 
-enum result refuse_replaced_field_slots(PyTypeObject * created, PyObject * field_names);
+enum result refuse_rebound_class_names(StructType * struct_class);
 
 enum result settle_rebind_one(
 	StructType * struct_class,

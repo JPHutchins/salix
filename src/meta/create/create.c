@@ -309,12 +309,7 @@ PyObject * build_struct_class(
 			if (
 				defines_hash < 0 ||
 				defines_setattr < 0 ||
-				(
-					refuse_replaced_field_slots(
-						&struct_class->heap_type.ht_type,
-						plan.all_names
-					) != RESULT_OK
-				)
+				refuse_rebound_class_names(struct_class) != RESULT_OK
 			) {
 				Py_CLEAR(struct_class);
 			} else {
