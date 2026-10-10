@@ -1,5 +1,6 @@
 import dataclasses
 import functools
+import re
 import struct as struct_module
 import sys
 import weakref
@@ -1168,7 +1169,7 @@ def rebinding_hook(name: str, value: object) -> type:
 
 class TestFieldsReboundDuringClassCreation:
     def test_an_init_subclass_rebinding_a_new_field_is_refused(self) -> None:
-        with pytest.raises(TypeError, match=r"Sub\.y does not reach its field's slot"):
+        with pytest.raises(TypeError, match=r"cannot set 'y' attribute of struct class 'Sub': it is a field"):
 
             class Sub(rebinding_hook("y", 7)):
                 y: int
@@ -1181,7 +1182,7 @@ class TestFieldsReboundDuringClassCreation:
                 super().__init_subclass__(**keywords)
                 cls.y = 7
 
-        with pytest.raises(TypeError, match=r"Inheriting\.y does not reach its field's slot"):
+        with pytest.raises(TypeError, match=r"cannot set 'y' attribute of struct class 'Inheriting'"):
 
             class Inheriting(Base):
                 z: int = 0
@@ -1192,7 +1193,7 @@ class TestFieldsReboundDuringClassCreation:
                 super().__init_subclass__(**keywords)
                 del cls.y
 
-        with pytest.raises(TypeError, match=r"Sub\.y does not reach its field's slot"):
+        with pytest.raises(TypeError, match=r"cannot delete 'y' attribute of struct class 'Sub'"):
 
             class Sub(Base):
                 y: int
@@ -1202,11 +1203,16 @@ class TestFieldsReboundDuringClassCreation:
             def __set_name__(self, owner: type, name: str) -> None:
                 owner.y = 9
 
-        with pytest.raises(TypeError, match=r"Sub\.y does not reach its field's slot"):
+        with pytest.raises((TypeError, RuntimeError)) as raised:
 
             class Sub(Struct):
                 y: int
                 marker = Clobber()
+
+        assert re.search(
+            r"cannot set 'y' attribute of struct class 'Sub'",
+            str(raised.value.__cause__ or raised.value),
+        )
 
     def test_a_redeclaration_over_a_class_var_rebound_by_a_hook_is_refused(self) -> None:
         class Base(Struct):
@@ -1216,7 +1222,7 @@ class TestFieldsReboundDuringClassCreation:
                 super().__init_subclass__(**keywords)
                 cls.x = 7
 
-        with pytest.raises(TypeError, match=r"Sub\.x does not reach its field's slot"):
+        with pytest.raises(TypeError, match=r"cannot set 'x' attribute of struct class 'Sub': it is a field"):
 
             class Sub(Base):
                 x: int
@@ -1227,7 +1233,7 @@ class TestFieldsReboundDuringClassCreation:
                 super().__init_subclass__(**keywords)
                 cls.y = vars(cls)["z"]
 
-        with pytest.raises(TypeError, match=r"Sub\.y does not reach its field's slot"):
+        with pytest.raises(TypeError, match=r"cannot set 'y' attribute of struct class 'Sub'"):
 
             class Sub(Base):
                 y: int
@@ -1242,7 +1248,7 @@ class TestFieldsReboundDuringClassCreation:
                 super().__init_subclass__(**keywords)
                 cls.y = vars(Unrelated)["y"]
 
-        with pytest.raises(TypeError, match=r"Sub\.y does not reach its field's slot"):
+        with pytest.raises(TypeError, match=r"cannot set 'y' attribute of struct class 'Sub'"):
 
             class Sub(Base):
                 y: int
@@ -1267,7 +1273,7 @@ class TestFieldsReboundDuringClassCreation:
                 super().__init_subclass__(**keywords)
                 cls.limit = 9
 
-        with pytest.raises(TypeError, match=r"Sub\.limit does not reach its ClassVar's value"):
+        with pytest.raises(TypeError, match=r"cannot set 'limit' attribute of struct class 'Sub': it is a ClassVar"):
 
             class Sub(Base):
                 y: int
@@ -1283,6 +1289,45 @@ class TestFieldsReboundDuringClassCreation:
 
             class Shadowed(Mixin, Base):
                 y: int
+
+    def test_a_mixin_shadowing_a_class_var_with_an_equal_cached_value_is_refused(self) -> None:
+        class Mixin:
+            limit = 5
+
+        class Base(Struct):
+            limit: ClassVar[int] = 5
+
+        assert Mixin.__dict__["limit"] is Base.__dict__["limit"]
+
+        with pytest.raises(TypeError, match=r"Shadowed\.limit does not reach its ClassVar's value"):
+
+            class Shadowed(Mixin, Base):
+                y: int
+
+    def test_a_body_binding_over_an_inherited_class_var_is_refused(self) -> None:
+        class Base(Struct):
+            x: ClassVar[int] = 5
+
+        with pytest.raises(
+            TypeError,
+            match=r"Plain\.x does not reach its ClassVar's value: .*this class's body.*"
+            r"redeclare the name with a ClassVar annotation",
+        ):
+
+            class Plain(Base):
+                x = 9
+
+    def test_an_annotated_class_var_redeclaration_is_the_subclass_s_own_constant(self) -> None:
+        class Base(Struct):
+            x: ClassVar[int] = 5
+
+        class Sub(Base):
+            x: ClassVar[int] = 9
+
+        with pytest.raises(TypeError, match=r"cannot set 'x' attribute of struct class 'Sub'"):
+            Sub.x = 10
+
+        assert (Base.x, Sub.x) == (5, 9)
 
     def test_a_hook_rebinding_a_field_to_its_own_descriptor_builds(self) -> None:
         class Base(Struct):
@@ -1397,6 +1442,32 @@ class TestFieldAndClassVarNamesAfterClassCreation:
 
         with pytest.raises(TypeError, match="can't apply this __delattr__"):
             type.__delattr__(Later, "y")
+
+    def test_type_setattr_is_refused_for_every_name(self) -> None:
+        class Later(Struct):
+            y: int
+
+        with pytest.raises(TypeError, match="can't apply this __setattr__"):
+            type.__setattr__(Later, "tag", 1)
+
+    def test_rebasing_a_struct_class_is_refused(self) -> None:
+        class Mix:
+            y = 99
+
+        class Base(Struct):
+            y: int = 0
+
+        class Sub(Base):
+            z: int = 0
+
+        with pytest.raises(
+            TypeError,
+            match=r"cannot set '__bases__' attribute of struct class 'Sub': "
+            r"its fields and ClassVars were planned from its bases",
+        ):
+            Sub.__bases__ = (Mix, Base)
+
+        assert Sub(y=1).y == 1
 
     def test_other_class_attributes_stay_assignable(self) -> None:
         class Later(Struct):

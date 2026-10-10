@@ -27,36 +27,21 @@ static int struct_base_count(PyObject * const bases) {
 	return count;
 }
 
-static PyObject * nearest_class_entry(PyTypeObject * const type, PyObject * const name) {
-	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(type->tp_mro); i += 1) {
-		PY_OWNED(entry_dict, struct_type_dict((PyTypeObject *) PyTuple_GET_ITEM(type->tp_mro, i)));
-
-		if (entry_dict == NULL) {
-			return NULL;
-		}
-
-		PY_MOVABLE(value, dict_value_ref(entry_dict, name));
-
-		if (value != NULL || PyErr_Occurred()) {
-			return py_move(&value);
-		}
-	}
-
-	return NULL;
-}
-
 static enum result refuse_a_rebound_name(
 	PyTypeObject * const created,
 	PyObject * const name,
-	char const * const reached
+	char const * const reached,
+	char const * const remedy
 ) {
 	PyErr_Format(
 		PyExc_TypeError,
-		"%.200s.%U does not reach its %s: a base ahead of the class that declares it, "
-		"or an __init_subclass__ or __set_name__ hook, rebinds, shadows or deletes the name",
+		"%.200s.%U does not reach its %s: a base ahead of the class that declares it, this "
+		"class's body, or an __init_subclass__ or __set_name__ hook, rebinds, shadows or "
+		"deletes the name; %s",
 		created->tp_name,
 		name,
-		reached
+		reached,
+		remedy
 	);
 
 	return RESULT_ERROR;
@@ -69,21 +54,22 @@ enum result refuse_rebound_class_names(StructType * const struct_class) {
 
 	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(field_names); i += 1) {
 		PyObject * const field_name = PyTuple_GET_ITEM(field_names, i);
-		PY_OWNED(entry, nearest_class_entry(created, field_name));
+		__attribute__((cleanup(class_entry_clear))) struct class_entry entry = class_entry_of(
+			created,
+			field_name
+		);
 
-		if (entry == NULL && PyErr_Occurred()) {
+		if (entry.tag == CLASS_ENTRY_ERROR) {
 			return RESULT_ERROR;
 		}
 
-		bool const reaches_its_slot = (
-			entry != NULL &&
-			PyObject_TypeCheck(entry, &PyMemberDescr_Type) &&
-			PyType_IsSubtype(created, PyDescr_TYPE(entry)) &&
-			PyUnicode_Compare(PyDescr_NAME(entry), field_name) == 0
-		);
-
-		if (!reaches_its_slot) {
-			return refuse_a_rebound_name(created, field_name, "field's slot");
+		if (entry.tag != CLASS_ENTRY_FIELD) {
+			return refuse_a_rebound_name(
+				created,
+				field_name,
+				"field's slot",
+				"declare the field's default in the class body"
+			);
 		}
 	}
 
@@ -94,14 +80,26 @@ enum result refuse_rebound_class_names(StructType * const struct_class) {
 	) {
 		PyObject * const position = PyTuple_GET_ITEM(class_var_positions, i);
 		PyObject * const class_var_name = PyTuple_GET_ITEM(position, 1);
-		PY_OWNED(entry, nearest_class_entry(created, class_var_name));
+		__attribute__((cleanup(class_entry_clear))) struct class_entry entry = class_entry_of(
+			created,
+			class_var_name
+		);
 
-		if (entry == NULL && PyErr_Occurred()) {
+		if (entry.tag == CLASS_ENTRY_ERROR) {
 			return RESULT_ERROR;
 		}
 
-		if (entry != PyTuple_GET_ITEM(position, 2)) {
-			return refuse_a_rebound_name(created, class_var_name, "ClassVar's value");
+		if (
+			entry.tag != CLASS_ENTRY_CLASS_VAR ||
+			(entry.owner == created && entry.value != PyTuple_GET_ITEM(position, 2))
+		) {
+			return refuse_a_rebound_name(
+				created,
+				class_var_name,
+				"ClassVar's value",
+				"to give this class its own constant, redeclare the name with a ClassVar "
+				"annotation and its value"
+			);
 		}
 	}
 

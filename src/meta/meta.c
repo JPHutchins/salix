@@ -404,37 +404,94 @@ void meta_tests(void) {
 
 #endif
 
-enum class_name_kind { CLASS_NAME_FREE, CLASS_NAME_FIELD, CLASS_NAME_CLASS_VAR };
-
-static enum class_name_kind class_name_kind_of(
-	StructType const * const type,
-	PyObject * const name
-) {
-	PyObject * const field_names = type->struct_field_names;
-	PyObject * const class_var_positions = type->struct_class_var_positions;
-
-	for (Py_ssize_t i = 0; field_names != NULL && i < PyTuple_GET_SIZE(field_names); i += 1) {
-		if (PyUnicode_Compare(name, PyTuple_GET_ITEM(field_names, i)) == 0) {
-			return CLASS_NAME_FIELD;
-		}
-	}
+static bool carries_class_var(PyTypeObject * const owner, PyObject * const name) {
+	PyObject * const class_var_positions = (
+		is_struct_class((PyObject *) owner) ? ((StructType *) owner)->struct_class_var_positions :
+		NULL
+	);
 
 	for (
 		Py_ssize_t i = 0;
 		class_var_positions != NULL && i < PyTuple_GET_SIZE(class_var_positions);
 		i += 1
 	) {
-		PyObject * const class_var_name = PyTuple_GET_ITEM(
-			PyTuple_GET_ITEM(class_var_positions, i),
-			1
-		);
-
-		if (PyUnicode_Compare(name, class_var_name) == 0) {
-			return CLASS_NAME_CLASS_VAR;
+		if (
+			PyUnicode_Compare(
+				name,
+				PyTuple_GET_ITEM(PyTuple_GET_ITEM(class_var_positions, i), 1)
+			) == 0
+		) {
+			return true;
 		}
 	}
 
-	return CLASS_NAME_FREE;
+	return false;
+}
+
+static bool names_a_field_slot(
+	PyTypeObject * const type,
+	PyObject * const name,
+	PyObject * const value
+) {
+	return (
+		PyObject_TypeCheck(value, &PyMemberDescr_Type) &&
+		is_struct_class((PyObject *) PyDescr_TYPE(value)) &&
+		PyType_IsSubtype(type, PyDescr_TYPE(value)) &&
+		PyUnicode_Compare(PyDescr_NAME(value), name) == 0
+	);
+}
+
+struct class_entry class_entry_of(PyTypeObject * const type, PyObject * const name) {
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(type->tp_mro); i += 1) {
+		PyTypeObject * const owner = (PyTypeObject *) PyTuple_GET_ITEM(type->tp_mro, i);
+		PY_OWNED(owner_dict, struct_type_dict(owner));
+
+		if (owner_dict == NULL) {
+			return (struct class_entry){.tag = CLASS_ENTRY_ERROR};
+		}
+
+		PY_MOVABLE(value, dict_value_ref(owner_dict, name));
+
+		if (value == NULL && PyErr_Occurred()) {
+			return (struct class_entry){.tag = CLASS_ENTRY_ERROR};
+		}
+
+		if (value != NULL) {
+			return (struct class_entry){
+				.tag = (
+					names_a_field_slot(type, name, value) ? CLASS_ENTRY_FIELD :
+					carries_class_var(owner, name) ? CLASS_ENTRY_CLASS_VAR :
+					CLASS_ENTRY_FREE
+				),
+				.owner = owner,
+				.value = py_move(&value),
+			};
+		}
+	}
+
+	return (struct class_entry){.tag = CLASS_ENTRY_FREE};
+}
+
+void class_entry_clear(struct class_entry * const entry) {
+	Py_CLEAR(entry->value);
+}
+
+static int refuse_class_write(
+	PyObject * const self,
+	PyObject * const name,
+	PyObject * const value,
+	char const * const reason
+) {
+	PyErr_Format(
+		PyExc_TypeError,
+		"cannot %s '%U' attribute of struct class '%.200s': %s",
+		value == NULL ? "delete" : "set",
+		name,
+		((PyTypeObject *) self)->tp_name,
+		reason
+	);
+
+	return -1;
 }
 
 static int StructMeta_setattro(
@@ -442,30 +499,45 @@ static int StructMeta_setattro(
 	PyObject * const name,
 	PyObject * const value
 ) {
-	enum class_name_kind const kind = (
-		PyUnicode_Check(name) ? class_name_kind_of((StructType const *) self, name) :
-		CLASS_NAME_FREE
+	if (!PyUnicode_Check(name)) {
+		return PyType_Type.tp_setattro(self, name, value);
+	}
+
+	if (PyUnicode_CompareWithASCIIString(name, "__bases__") == 0) {
+		return refuse_class_write(
+			self,
+			name,
+			value,
+			"its fields and ClassVars were planned from its bases"
+		);
+	}
+
+	__attribute__((cleanup(class_entry_clear))) struct class_entry entry = class_entry_of(
+		(PyTypeObject *) self,
+		name
 	);
 
-	switch (kind) {
-		case CLASS_NAME_FREE:
+	switch (entry.tag) {
+		case CLASS_ENTRY_ERROR:
+			return -1;
+		case CLASS_ENTRY_FREE:
 			return PyType_Type.tp_setattro(self, name, value);
-		case CLASS_NAME_FIELD:
-		case CLASS_NAME_CLASS_VAR:
+		case CLASS_ENTRY_FIELD:
+		case CLASS_ENTRY_CLASS_VAR:
 			break;
 	}
 
-	PyErr_Format(
-		PyExc_TypeError,
-		"cannot %s '%U' attribute of struct class '%.200s': %s",
-		value == NULL ? "delete" : "set",
+	if (value != NULL && value == entry.value) {
+		return PyType_Type.tp_setattro(self, name, value);
+	}
+
+	return refuse_class_write(
+		self,
 		name,
-		((PyTypeObject *) self)->tp_name,
-		kind == CLASS_NAME_FIELD ? "it is a field, and the class attribute is the field's slot" :
+		value,
+		entry.tag == CLASS_ENTRY_FIELD ? "it is a field, and the class attribute is the field's slot" :
 		"it is a ClassVar, and a class variable is a constant"
 	);
-
-	return -1;
 }
 
 static void StructMeta_dealloc(PyObject * const self) {

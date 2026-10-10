@@ -1,8 +1,6 @@
 import collections
 import dataclasses
-import gc
 import re
-import weakref
 from collections.abc import Mapping
 
 import pytest
@@ -311,24 +309,3 @@ def test_from_mapping_refuses_a_built_in_init_before_reading_the_values():
     assert reads == []
 
 
-def test_a_base_swapped_out_and_freed_leaves_no_trace_in_the_refusal():
-    class PlainDict(dict):
-        pass
-
-    def build() -> tuple[type, weakref.ref[type]]:
-        class Assigned(dict):
-            __init__ = dict.__init__
-
-        class Over(Assigned, Struct, frozen=False):
-            a: int = 0
-
-        return Over, weakref.ref(Assigned)
-
-    over, assigned = build()
-    over.__bases__ = (PlainDict, Struct)
-    gc.collect()
-
-    assert assigned() is None
-
-    with pytest.raises(TypeError, match="'Over' takes its __init__ from dict,"):
-        from_mapping(over, {"a": 7})
