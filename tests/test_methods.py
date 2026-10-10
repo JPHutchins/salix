@@ -1157,8 +1157,8 @@ class TestTheFunctoolsSpellingsAreRefused:
             )
 
 
-def rebinding_hook(name: str, value: object, frozen: bool = True) -> type:
-    class Rebinding(Struct, frozen=frozen):
+def rebinding_hook(name: str, value: object) -> type:
+    class Rebinding(Struct):
         def __init_subclass__(cls, **keywords: object) -> None:
             super().__init_subclass__(**keywords)
             setattr(cls, name, value)
@@ -1167,11 +1167,10 @@ def rebinding_hook(name: str, value: object, frozen: bool = True) -> type:
 
 
 class TestFieldsReboundDuringClassCreation:
-    @pytest.mark.parametrize("frozen", [False, True])
-    def test_an_init_subclass_rebinding_a_new_field_is_refused(self, frozen: bool) -> None:
-        with pytest.raises(TypeError, match=r"Sub\.y was rebound or deleted.*field 'y'"):
+    def test_an_init_subclass_rebinding_a_new_field_is_refused(self) -> None:
+        with pytest.raises(TypeError, match=r"Sub\.y does not reach its field's slot"):
 
-            class Sub(rebinding_hook("y", 7, frozen), frozen=frozen):
+            class Sub(rebinding_hook("y", 7)):
                 y: int
 
     def test_an_init_subclass_rebinding_an_inherited_field_is_refused(self) -> None:
@@ -1182,7 +1181,7 @@ class TestFieldsReboundDuringClassCreation:
                 super().__init_subclass__(**keywords)
                 cls.y = 7
 
-        with pytest.raises(TypeError, match=r"Inheriting\.y was rebound or deleted"):
+        with pytest.raises(TypeError, match=r"Inheriting\.y does not reach its field's slot"):
 
             class Inheriting(Base):
                 z: int = 0
@@ -1193,7 +1192,7 @@ class TestFieldsReboundDuringClassCreation:
                 super().__init_subclass__(**keywords)
                 del cls.y
 
-        with pytest.raises(TypeError, match=r"Sub\.y was rebound or deleted"):
+        with pytest.raises(TypeError, match=r"Sub\.y does not reach its field's slot"):
 
             class Sub(Base):
                 y: int
@@ -1203,7 +1202,7 @@ class TestFieldsReboundDuringClassCreation:
             def __set_name__(self, owner: type, name: str) -> None:
                 owner.y = 9
 
-        with pytest.raises(TypeError, match=r"Sub\.y was rebound or deleted"):
+        with pytest.raises(TypeError, match=r"Sub\.y does not reach its field's slot"):
 
             class Sub(Struct):
                 y: int
@@ -1217,7 +1216,7 @@ class TestFieldsReboundDuringClassCreation:
                 super().__init_subclass__(**keywords)
                 cls.x = 7
 
-        with pytest.raises(TypeError, match=r"Sub\.x was rebound or deleted"):
+        with pytest.raises(TypeError, match=r"Sub\.x does not reach its field's slot"):
 
             class Sub(Base):
                 x: int
@@ -1228,7 +1227,7 @@ class TestFieldsReboundDuringClassCreation:
                 super().__init_subclass__(**keywords)
                 cls.y = vars(cls)["z"]
 
-        with pytest.raises(TypeError, match=r"Sub\.y was rebound or deleted"):
+        with pytest.raises(TypeError, match=r"Sub\.y does not reach its field's slot"):
 
             class Sub(Base):
                 y: int
@@ -1243,9 +1242,46 @@ class TestFieldsReboundDuringClassCreation:
                 super().__init_subclass__(**keywords)
                 cls.y = vars(Unrelated)["y"]
 
-        with pytest.raises(TypeError, match=r"Sub\.y was rebound or deleted"):
+        with pytest.raises(TypeError, match=r"Sub\.y does not reach its field's slot"):
 
             class Sub(Base):
+                y: int
+
+    def test_a_mixin_attribute_shadowing_an_inherited_field_is_refused(self) -> None:
+        class Mixin:
+            y = 7
+
+        class Base(Struct):
+            y: int = 0
+
+        with pytest.raises(TypeError, match=r"Shadowed\.y does not reach its field's slot"):
+
+            class Shadowed(Mixin, Base):
+                z: int = 0
+
+    def test_an_init_subclass_rebinding_an_inherited_class_var_is_refused(self) -> None:
+        class Base(Struct):
+            limit: ClassVar[int] = 5
+
+            def __init_subclass__(cls, **keywords: object) -> None:
+                super().__init_subclass__(**keywords)
+                cls.limit = 9
+
+        with pytest.raises(TypeError, match=r"Sub\.limit does not reach its ClassVar's value"):
+
+            class Sub(Base):
+                y: int
+
+    def test_a_mixin_attribute_shadowing_an_inherited_class_var_is_refused(self) -> None:
+        class Mixin:
+            limit = 7
+
+        class Base(Struct):
+            limit: ClassVar[int] = 5
+
+        with pytest.raises(TypeError, match=r"Shadowed\.limit does not reach its ClassVar's value"):
+
+            class Shadowed(Mixin, Base):
                 y: int
 
     def test_a_hook_rebinding_a_field_to_its_own_descriptor_builds(self) -> None:
