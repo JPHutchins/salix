@@ -268,6 +268,34 @@ static PyTypeObject SwallowingType = {
 	.tp_setattro = swallowing_setattro,
 };
 
+static Py_ssize_t method_setter_calls = 0;
+
+static PyObject * method_set_attribute(PyObject * self, PyObject * arguments) {
+	method_setter_calls += 1;
+
+	Py_RETURN_NONE;
+}
+
+static PyObject * method_delete_attribute(PyObject * self, PyObject * name) {
+	method_setter_calls += 1;
+
+	Py_RETURN_NONE;
+}
+
+static PyMethodDef method_setter_methods[] = {
+	{"__setattr__", method_set_attribute, METH_VARARGS, NULL},
+	{"__delattr__", method_delete_attribute, METH_O, NULL},
+	{.ml_name = NULL},
+};
+
+static PyTypeObject MethodSetterType = {
+	PyVarObject_HEAD_INIT(NULL, 0)
+	.tp_name = "tests.MethodSetter",
+	.tp_basicsize = sizeof(PyObject),
+	.tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
+	.tp_methods = method_setter_methods,
+};
+
 static PyObject * struct_class_with_field(
 	PyObject * bases,
 	PyObject * keywords,
@@ -409,6 +437,55 @@ static void test_a_raw_tp_setattro_co_base_ahead_of_a_fieldless_frozen_base_stay
 	TEST_ASSERT_EQUAL_INT(calls_before, swallow_calls);
 }
 
+static void test_a_method_setter_base_with_the_generic_slot_stays_refused(void) {
+	TEST_ASSERT_EQUAL_INT(0, PyType_Ready(&MethodSetterType));
+	TEST_ASSERT_EQUAL_PTR(PyBaseObject_Type.tp_setattro, MethodSetterType.tp_setattro);
+	TEST_ASSERT_EQUAL_INT(1, dict_has_string(MethodSetterType.tp_dict, "__setattr__"));
+
+	PY_OWNED(salix, PyImport_ImportModule("salix"));
+	TEST_ASSERT_NOT_NULL(salix);
+
+	PY_OWNED(struct_base, PyObject_GetAttrString(salix, "Struct"));
+	TEST_ASSERT_NOT_NULL(struct_base);
+
+	PY_OWNED(struct_bases, PyTuple_Pack(1, struct_base));
+	PY_OWNED(fieldless_frozen, struct_class_empty(struct_bases, NULL));
+	PY_OWNED(fielded_frozen, struct_class_with_field(struct_bases, NULL, false));
+	TEST_ASSERT_NOT_NULL(fieldless_frozen);
+	TEST_ASSERT_NOT_NULL(fielded_frozen);
+
+	PY_OWNED(nine, PyLong_FromLong(9));
+	PY_OWNED(field_name, PyUnicode_FromString("x"));
+	PyObject * const frozen_bases[] = {fieldless_frozen, fielded_frozen};
+
+	for (size_t i = 0; i < sizeof frozen_bases / sizeof frozen_bases[0]; i += 1) {
+		PY_OWNED(bases, PyTuple_Pack(2, (PyObject *) &MethodSetterType, frozen_bases[i]));
+		TEST_ASSERT_FALSE(any_base_diverts_setattro(bases));
+
+		frozen_column_repair_owner = NULL;
+		PY_OWNED(child, struct_class_with_field(bases, NULL, false));
+		TEST_ASSERT_NOT_NULL(child);
+		TEST_ASSERT_EQUAL_PTR(child, frozen_column_repair_owner);
+		TEST_ASSERT_EQUAL_INT(
+			SETTER_SOURCE_STRUCT,
+			setter_sources_of((PyTypeObject *) child).assigns
+		);
+		TEST_ASSERT_EQUAL_INT(
+			SETTER_SOURCE_STRUCT,
+			setter_sources_of((PyTypeObject *) child).deletes
+		);
+
+		Py_ssize_t const calls_before = method_setter_calls;
+		PY_OWNED(instance, PyObject_CallFunction(child, "i", 1));
+		TEST_ASSERT_NOT_NULL(instance);
+		TEST_ASSERT_EQUAL_INT(-1, PyObject_SetAttr(instance, field_name, nine));
+		PyErr_Clear();
+		TEST_ASSERT_EQUAL_INT(-1, PyObject_DelAttr(instance, field_name));
+		PyErr_Clear();
+		TEST_ASSERT_EQUAL_INT(calls_before, method_setter_calls);
+	}
+}
+
 static void test_a_later_bases_slot_forces_the_record(void) {
 	PY_OWNED(salix, PyImport_ImportModule("salix"));
 	TEST_ASSERT_NOT_NULL(salix);
@@ -480,6 +557,7 @@ void mro_tests(void) {
 
 	RUN_TEST(test_a_raw_tp_setattro_co_base_does_not_divert_the_struct_slot);
 	RUN_TEST(test_a_raw_tp_setattro_co_base_ahead_of_a_fieldless_frozen_base_stays_refused);
+	RUN_TEST(test_a_method_setter_base_with_the_generic_slot_stays_refused);
 	RUN_TEST(test_a_later_bases_slot_forces_the_record);
 	RUN_TEST(test_only_struct_bases_are_counted);
 	RUN_TEST(test_the_repair_runs_only_past_one_struct_base);
