@@ -45,12 +45,30 @@ static PyObject * nearest_class_entry(PyTypeObject * const type, PyObject * cons
 	return NULL;
 }
 
-enum result refuse_replaced_field_slots(
+static enum result refuse_a_rebound_name(
 	PyTypeObject * const created,
-	PyObject * const field_names
+	PyObject * const name,
+	char const * const reached
 ) {
-	for (Py_ssize_t i = 0; i < PyList_GET_SIZE(field_names); i += 1) {
-		PyObject * const field_name = PyList_GET_ITEM(field_names, i);
+	PyErr_Format(
+		PyExc_TypeError,
+		"%.200s.%U does not reach its %s: a base ahead of the class that declares it, "
+		"or an __init_subclass__ or __set_name__ hook, rebinds, shadows or deletes the name",
+		created->tp_name,
+		name,
+		reached
+	);
+
+	return RESULT_ERROR;
+}
+
+enum result refuse_rebound_class_names(StructType * const struct_class) {
+	PyTypeObject * const created = (PyTypeObject *) struct_class;
+	PyObject * const field_names = struct_class->struct_field_names;
+	PyObject * const class_var_positions = struct_class->struct_class_var_positions;
+
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(field_names); i += 1) {
+		PyObject * const field_name = PyTuple_GET_ITEM(field_names, i);
 		PY_OWNED(entry, nearest_class_entry(created, field_name));
 
 		if (entry == NULL && PyErr_Occurred()) {
@@ -65,18 +83,25 @@ enum result refuse_replaced_field_slots(
 		);
 
 		if (!reaches_its_slot) {
-			PyErr_Format(
-				PyExc_TypeError,
-				"%.200s.%U was rebound or deleted while the class was being created, "
-				"by __init_subclass__ or a __set_name__ hook, so instances would no "
-				"longer read field '%U' from its slot; give the field's default in the "
-				"class body instead",
-				created->tp_name,
-				field_name,
-				field_name
-			);
+			return refuse_a_rebound_name(created, field_name, "field's slot");
+		}
+	}
 
+	for (
+		Py_ssize_t i = 0;
+		class_var_positions != NULL && i < PyTuple_GET_SIZE(class_var_positions);
+		i += 1
+	) {
+		PyObject * const position = PyTuple_GET_ITEM(class_var_positions, i);
+		PyObject * const class_var_name = PyTuple_GET_ITEM(position, 1);
+		PY_OWNED(entry, nearest_class_entry(created, class_var_name));
+
+		if (entry == NULL && PyErr_Occurred()) {
 			return RESULT_ERROR;
+		}
+
+		if (entry != PyTuple_GET_ITEM(position, 2)) {
+			return refuse_a_rebound_name(created, class_var_name, "ClassVar's value");
 		}
 	}
 
