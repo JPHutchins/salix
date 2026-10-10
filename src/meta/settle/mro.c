@@ -27,6 +27,62 @@ static int struct_base_count(PyObject * const bases) {
 	return count;
 }
 
+static PyObject * nearest_class_entry(PyTypeObject * const type, PyObject * const name) {
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(type->tp_mro); i += 1) {
+		PY_OWNED(entry_dict, struct_type_dict((PyTypeObject *) PyTuple_GET_ITEM(type->tp_mro, i)));
+
+		if (entry_dict == NULL) {
+			return NULL;
+		}
+
+		PY_MOVABLE(value, dict_value_ref(entry_dict, name));
+
+		if (value != NULL || PyErr_Occurred()) {
+			return py_move(&value);
+		}
+	}
+
+	return NULL;
+}
+
+enum result refuse_replaced_field_slots(
+	PyTypeObject * const created,
+	PyObject * const field_names
+) {
+	for (Py_ssize_t i = 0; i < PyList_GET_SIZE(field_names); i += 1) {
+		PyObject * const field_name = PyList_GET_ITEM(field_names, i);
+		PY_OWNED(entry, nearest_class_entry(created, field_name));
+
+		if (entry == NULL && PyErr_Occurred()) {
+			return RESULT_ERROR;
+		}
+
+		bool const reaches_its_slot = (
+			entry != NULL &&
+			PyObject_TypeCheck(entry, &PyMemberDescr_Type) &&
+			PyType_IsSubtype(created, PyDescr_TYPE(entry)) &&
+			PyUnicode_Compare(PyDescr_NAME(entry), field_name) == 0
+		);
+
+		if (!reaches_its_slot) {
+			PyErr_Format(
+				PyExc_TypeError,
+				"%.200s.%U was rebound or deleted while the class was being created, "
+				"by __init_subclass__ or a __set_name__ hook, so instances would no "
+				"longer read field '%U' from its slot; give the field's default in the "
+				"class body instead",
+				created->tp_name,
+				field_name,
+				field_name
+			);
+
+			return RESULT_ERROR;
+		}
+	}
+
+	return RESULT_OK;
+}
+
 enum result settle_mro_bindings(
 	StructType * const struct_class,
 	PyObject * const bases,
