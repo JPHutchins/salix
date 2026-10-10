@@ -72,6 +72,7 @@ static struct field_plan plan_from_parameters(
 	PyObject * new_names,
 	PyObject * default_by_name
 );
+static enum result plan_defaults(struct field_plan * plan);
 
 char const * const reserved_metadata_names[] = {
 	"_struct_fields_",
@@ -214,7 +215,11 @@ struct field_plan field_plan_build(
 	plan_built.mro_default_names = PyList_AsTuple(mro_default_names);
 	plan_built.default_by_name = Py_NewRef(default_by_name);
 
-	if (plan_built.declared_names == NULL || plan_built.mro_default_names == NULL) {
+	if (
+		plan_built.declared_names == NULL ||
+		plan_built.mro_default_names == NULL ||
+		(PyList_GET_SIZE(mro_default_names) == 0 && plan_defaults(&plan_built) != RESULT_OK)
+	) {
 		field_plan_clear(&plan_built);
 	}
 
@@ -269,6 +274,14 @@ static PyObject * class_default_of(PyTypeObject * const created, PyObject * cons
 	descrgetfunc const bind = Py_TYPE(found)->tp_descr_get;
 	PY_MOVABLE(value, bind != NULL ? bind(found, NULL, (PyObject *) created) : py_move(&found));
 
+	if (value == NULL && !PyErr_Occurred()) {
+		PyErr_Format(
+			PyExc_SystemError,
+			"%.200s.__get__ returned NULL without setting an exception",
+			Py_TYPE(found)->tp_name
+		);
+	}
+
 	return value != NULL && PyObject_TypeCheck(value, &PyMemberDescr_Type) ? NULL : py_move(&value);
 }
 
@@ -292,6 +305,10 @@ enum result field_plan_resolve_mro_defaults(
 		}
 	}
 
+	return plan_defaults(plan);
+}
+
+static enum result plan_defaults(struct field_plan * const plan) {
 	PY_OWNED(init_var_name_list, PySequence_List(plan->init_var_names));
 	PY_OWNED(init_var_flag_list, PySequence_List(plan->init_var_flags));
 
@@ -324,8 +341,8 @@ enum result field_plan_resolve_mro_defaults(
 		return RESULT_ERROR;
 	}
 
-	Py_SETREF(plan->defaults, py_move(&defaults));
-	Py_SETREF(plan->init_var_defaults, py_move(&init_var_defaults));
+	plan->defaults = py_move(&defaults);
+	plan->init_var_defaults = py_move(&init_var_defaults);
 
 	return RESULT_OK;
 }
@@ -467,18 +484,11 @@ static PyObject * without_removed(PyObject * const values, PyObject * const init
 
 static struct field_plan plan_from_kept_parameters(
 	struct parameter_lists const * const parameters,
-	PyObject * const new_names,
-	PyObject * const default_by_name
+	PyObject * const new_names
 ) {
 	int const has_init_vars = PySequence_Contains(parameters->init_var_flags, Py_True);
 
-	if (
-		has_init_vars < 0 ||
-		(
-			has_init_vars == 1 &&
-			refuse_misordered_parameters(parameters, default_by_name) != RESULT_OK
-		)
-	) {
+	if (has_init_vars < 0) {
 		return (struct field_plan){0};
 	}
 
@@ -491,7 +501,6 @@ static struct field_plan plan_from_kept_parameters(
 		kind_filtered(parameters->names, parameters->init_var_flags, true, has_init_vars)
 	);
 	struct field_plan plan = {
-		.defaults = all_names != NULL ? build_defaults(all_names, default_by_name) : NULL,
 		.annotations = kind_filtered_tuple(
 			parameters->annotations,
 			parameters->init_var_flags,
@@ -510,10 +519,6 @@ static struct field_plan plan_from_kept_parameters(
 			PyTuple_New(0)
 		),
 		.init_var_names = init_var_name_list != NULL ? PyList_AsTuple(init_var_name_list) : NULL,
-		.init_var_defaults = (
-			init_var_name_list != NULL ? build_defaults(init_var_name_list, default_by_name) :
-			NULL
-		),
 		.init_var_annotations = kind_filtered_tuple(
 			parameters->annotations,
 			parameters->init_var_flags,
@@ -524,12 +529,10 @@ static struct field_plan plan_from_kept_parameters(
 
 	if (
 		all_names == NULL ||
-		plan.defaults == NULL ||
 		plan.annotations == NULL ||
 		plan.metadata == NULL ||
 		plan.init_var_flags == NULL ||
 		plan.init_var_names == NULL ||
-		plan.init_var_defaults == NULL ||
 		plan.init_var_annotations == NULL
 	) {
 		field_plan_clear(&plan);
@@ -582,8 +585,7 @@ static struct field_plan plan_from_parameters(
 				.annotations = kept_annotations,
 				.metadata = kept_metadata,
 			},
-			new_names,
-			default_by_name
+			new_names
 		);
 
 		if (plan.all_names == NULL) {
@@ -599,7 +601,7 @@ static struct field_plan plan_from_parameters(
 		return plan;
 	}
 
-	return plan_from_kept_parameters(parameters, new_names, default_by_name);
+	return plan_from_kept_parameters(parameters, new_names);
 }
 
 static PyObject * checked_annotations(PyObject * const namespace) {
@@ -1540,12 +1542,85 @@ static void test_a_required_field_after_a_default_is_rejected(void) {
 	Py_DECREF(all_names);
 }
 
+static PyObject * silent_descriptor_get(PyObject * self, PyObject * instance, PyObject * owner) {
+	return NULL;
+}
+
+static PyTypeObject SilentDescriptorType = {
+	PyVarObject_HEAD_INIT(NULL, 0)
+	.tp_name = "tests.SilentDescriptor",
+	.tp_basicsize = sizeof(PyObject),
+	.tp_flags = Py_TPFLAGS_DEFAULT,
+	.tp_new = PyType_GenericNew,
+	.tp_descr_get = silent_descriptor_get,
+};
+
+static PyObject * struct_class_of(
+	PyObject * const struct_base,
+	char const * const name,
+	PyObject * const bases,
+	PyObject * const namespace
+) {
+	PY_OWNED(class_name, PyUnicode_FromString(name));
+	PY_OWNED(arguments, class_name != NULL ? PyTuple_Pack(3, class_name, bases, namespace) : NULL);
+
+	return (
+		arguments != NULL ? PyObject_Call((PyObject *) Py_TYPE(struct_base), arguments, NULL) :
+		NULL
+	);
+}
+
+static void test_a_class_var_whose_get_returns_null_without_an_error_fails_the_redeclaration(void) {
+	TEST_ASSERT_EQUAL_INT(0, PyType_Ready(&SilentDescriptorType));
+
+	PY_OWNED(salix, PyImport_ImportModule("salix"));
+	PY_OWNED(typing, PyImport_ImportModule("typing"));
+	TEST_ASSERT_NOT_NULL(salix);
+	TEST_ASSERT_NOT_NULL(typing);
+
+	PY_OWNED(struct_base, PyObject_GetAttrString(salix, "Struct"));
+	PY_OWNED(class_var, PyObject_GetAttrString(typing, "ClassVar"));
+	TEST_ASSERT_NOT_NULL(struct_base);
+	TEST_ASSERT_NOT_NULL(class_var);
+
+	PY_OWNED(class_var_of_object, PyObject_GetItem(class_var, (PyObject *) &PyBaseObject_Type));
+	PY_OWNED(silent, PyObject_CallNoArgs((PyObject *) &SilentDescriptorType));
+	TEST_ASSERT_NOT_NULL(class_var_of_object);
+	TEST_ASSERT_NOT_NULL(silent);
+
+	PY_OWNED(base_annotations, Py_BuildValue("{sO}", "x", class_var_of_object));
+	TEST_ASSERT_NOT_NULL(base_annotations);
+	PY_OWNED(
+		base_namespace,
+		Py_BuildValue("{sOsO}", "__annotations__", base_annotations, "x", silent)
+	);
+	PY_OWNED(struct_bases, PyTuple_Pack(1, struct_base));
+	TEST_ASSERT_NOT_NULL(base_namespace);
+	TEST_ASSERT_NOT_NULL(struct_bases);
+
+	PY_OWNED(base, struct_class_of(struct_base, "Base", struct_bases, base_namespace));
+	TEST_ASSERT_NOT_NULL(base);
+
+	PY_OWNED(sub_annotations, Py_BuildValue("{sO}", "x", (PyObject *) &PyLong_Type));
+	TEST_ASSERT_NOT_NULL(sub_annotations);
+	PY_OWNED(sub_namespace, Py_BuildValue("{sO}", "__annotations__", sub_annotations));
+	PY_OWNED(sub_bases, PyTuple_Pack(1, base));
+	TEST_ASSERT_NOT_NULL(sub_namespace);
+	TEST_ASSERT_NOT_NULL(sub_bases);
+
+	PY_OWNED(sub, struct_class_of(struct_base, "Sub", sub_bases, sub_namespace));
+	TEST_ASSERT_NULL(sub);
+	TEST_ASSERT_TRUE(PyErr_ExceptionMatches(PyExc_SystemError));
+	PyErr_Clear();
+}
+
 void fields_tests(void) {
 	Unity.TestFile = __FILE__;
 
 	RUN_TEST(test_no_defaults_produces_an_empty_tuple);
 	RUN_TEST(test_only_the_trailing_run_becomes_defaults);
 	RUN_TEST(test_a_required_field_after_a_default_is_rejected);
+	RUN_TEST(test_a_class_var_whose_get_returns_null_without_an_error_fails_the_redeclaration);
 }
 
 #endif
