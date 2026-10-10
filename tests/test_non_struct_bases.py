@@ -607,3 +607,25 @@ def test_object_new_assigned_in_the_body_is_object_s_and_builds():
         __new__ = object.__new__
 
     assert Aliased(3).x == 3
+
+
+def test_object_new_assigned_over_a_co_base_that_sets_up_in_new_is_refused():
+    with pytest.raises(TypeError, match="a struct cannot extend frozenset"):
+
+        class Aliased(frozenset, Struct):
+            a: int = 0
+            __new__ = object.__new__
+
+
+def test_a_foreign_c_new_that_cpython_never_installs_builds():
+    class Borrowed(Struct, frozen=False):
+        x: int = 0
+        __new__ = dict.__new__
+
+    assert Borrowed(3).x == 3
+
+
+@pytest.mark.parametrize("dispatched", [staticmethod(object.__new__), "xyz".upper], ids=["staticmethod", "bound builtin"])
+def test_a_new_cpython_dispatches_is_refused_under_the_class_s_own_name(dispatched):
+    with pytest.raises(TypeError, match=r"Dispatching\.__new__ cannot be used on a struct without an __init__ of its own"):
+        type(Struct)("Dispatching", (Struct,), {"__annotations__": {"x": int}, "x": 0, "__new__": dispatched})

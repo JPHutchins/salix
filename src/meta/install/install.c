@@ -149,51 +149,57 @@ static bool author_new_in_chain(PyTypeObject * const cls) {
 struct new_definer {
 	enum {
 		NEW_DEFINER_ERROR,
-		NEW_DEFINER_OBJECT,
 		NEW_DEFINER_NONE,
-		NEW_DEFINER_PYTHON,
-		NEW_DEFINER_C,
+		NEW_DEFINER_ALLOCATOR,
+		NEW_DEFINER_AUTHORED,
 	} tag;
 	PyTypeObject * owner;
 };
 
 static struct new_definer nearest_new(PyTypeObject * const cls) {
 	PyObject * const mro = cls->tp_mro;
+	PyTypeObject * nearest = NULL;
+	bool nearest_is_none = false;
 
-	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); i += 1) {
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro) && !nearest_is_none; i += 1) {
 		PyTypeObject * const owner = (PyTypeObject *) PyTuple_GET_ITEM(mro, i);
 		PY_OWNED(entry_dict, struct_type_dict(owner));
 
-		if (entry_dict == NULL) {
+		if (entry_dict == NULL && PyErr_Occurred()) {
 			return (struct new_definer){.tag = NEW_DEFINER_ERROR};
 		}
 
-		PyObject * const entry = dict_get_string(entry_dict, "__new__");
+		PyObject * const entry = (
+			entry_dict != NULL ? dict_get_string(entry_dict, "__new__") :
+			NULL
+		);
 
 		if (entry == NULL && PyErr_Occurred()) {
 			return (struct new_definer){.tag = NEW_DEFINER_ERROR};
 		}
 
-		if (entry != NULL) {
-			PyObject * const bound = PyCFunction_Check(entry) ? PyCFunction_GET_SELF(entry) : NULL;
-			PyTypeObject * const allocator = (
-				bound != NULL && PyType_Check(bound) ? (PyTypeObject *) bound :
-				owner
-			);
+		if (entry == NULL) {
+			continue;
+		}
 
-			return (struct new_definer){
-				.tag = (
-					entry == Py_None ? NEW_DEFINER_NONE :
-					allocator == &PyBaseObject_Type ? NEW_DEFINER_OBJECT :
-					PyCFunction_Check(entry) ? NEW_DEFINER_C :
-					NEW_DEFINER_PYTHON
-				),
-				.owner = allocator,
-			};
+		if (nearest == NULL) {
+			nearest = owner;
+			nearest_is_none = entry == Py_None;
+		}
+
+		if (
+			PyCFunction_Check(entry) &&
+			PyCFunction_GET_SELF(entry) == (PyObject *) owner &&
+			owner->tp_new == cls->tp_new
+		) {
+			return (struct new_definer){.tag = NEW_DEFINER_ALLOCATOR, .owner = owner};
 		}
 	}
 
-	return (struct new_definer){.tag = NEW_DEFINER_OBJECT, .owner = &PyBaseObject_Type};
+	return (struct new_definer){
+		.tag = nearest_is_none ? NEW_DEFINER_NONE : NEW_DEFINER_AUTHORED,
+		.owner = nearest != NULL ? nearest : cls,
+	};
 }
 
 static enum result refuse_a_skipped_new(
@@ -201,39 +207,49 @@ static enum result refuse_a_skipped_new(
 	struct new_definer const definer,
 	bool const own_init
 ) {
+	PyTypeObject * const cls = (PyTypeObject *) &struct_class->heap_type.ht_type;
+	bool const skipped = (
+		!own_init &&
+		!is_exception_struct(cls) &&
+		cls->tp_new != NULL &&
+		cls->tp_new != PyBaseObject_Type.tp_new
+	);
+
 	switch (definer.tag) {
 		case NEW_DEFINER_ERROR:
 			return RESULT_ERROR;
-		case NEW_DEFINER_OBJECT:
 		case NEW_DEFINER_NONE:
 			return RESULT_OK;
-		case NEW_DEFINER_PYTHON:
-		case NEW_DEFINER_C:
-			break;
+		case NEW_DEFINER_ALLOCATOR:
+			if (!skipped) {
+				return RESULT_OK;
+			}
+
+			PyErr_Format(
+				PyExc_TypeError,
+				"a struct cannot extend %.200s: it sets up its instances in __new__, "
+				"which the struct constructor does not call",
+				definer.owner->tp_name
+			);
+
+			return RESULT_ERROR;
+		case NEW_DEFINER_AUTHORED:
+			if (!skipped) {
+				return RESULT_OK;
+			}
+
+			PyErr_Format(
+				PyExc_TypeError,
+				"%.200s.__new__ cannot be used on a struct without an __init__ of its own: "
+				"the struct constructor never calls it; define __init__, set fields in "
+				"__post_init__, or build instances in a classmethod",
+				definer.owner->tp_name
+			);
+
+			return RESULT_ERROR;
 	}
 
-	if (own_init || is_exception_struct((PyTypeObject *) &struct_class->heap_type.ht_type)) {
-		return RESULT_OK;
-	}
-
-	if (definer.tag == NEW_DEFINER_PYTHON) {
-		PyErr_Format(
-			PyExc_TypeError,
-			"%.200s.__new__ cannot be used on a struct without an __init__ of its own: "
-			"the struct constructor never calls it; define __init__, set fields in "
-			"__post_init__, or build instances in a classmethod",
-			definer.owner->tp_name
-		);
-	} else {
-		PyErr_Format(
-			PyExc_TypeError,
-			"a struct cannot extend %.200s: it sets up its instances in __new__, "
-			"which the struct constructor does not call",
-			definer.owner->tp_name
-		);
-	}
-
-	return RESULT_ERROR;
+	Py_UNREACHABLE();
 }
 
 enum result install_constructor(
