@@ -11,7 +11,12 @@ enum setter_source {
 	SETTER_SOURCE_OTHER,
 };
 
-enum setter_source setter_source_of(PyTypeObject const * type, char const * name);
+struct setter_sources {
+	enum setter_source assigns;
+	enum setter_source deletes;
+};
+
+struct setter_sources setter_sources_of(PyTypeObject const * type);
 
 PyObject * Struct_get_signature(PyObject * self, void * closure);
 int Struct_set_signature(PyObject * self, PyObject * value, void * closure);

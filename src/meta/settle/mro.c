@@ -37,14 +37,13 @@ enum result settle_mro_bindings(
 	PyTypeObject * const type = (PyTypeObject *) struct_class;
 
 	if (options.frozen) {
-		enum setter_source const assigns = setter_source_of(type, "__setattr__");
-		enum setter_source const deletes = setter_source_of(type, "__delattr__");
+		struct setter_sources const sources = setter_sources_of(type);
 
-		if (assigns == SETTER_SOURCE_ERROR || deletes == SETTER_SOURCE_ERROR) {
+		if (sources.assigns == SETTER_SOURCE_ERROR || sources.deletes == SETTER_SOURCE_ERROR) {
 			return RESULT_ERROR;
 		}
 
-		if (assigns != SETTER_SOURCE_STRUCT || deletes != SETTER_SOURCE_STRUCT) {
+		if (sources.assigns != SETTER_SOURCE_STRUCT || sources.deletes != SETTER_SOURCE_STRUCT) {
 #ifdef TESTING
 			frozen_column_repair_owner = type;
 #endif
@@ -334,7 +333,7 @@ static void test_a_raw_tp_setattro_co_base_does_not_divert_the_struct_slot(void)
 	TEST_ASSERT_EQUAL_PTR(NULL, frozen_column_repair_owner);
 	TEST_ASSERT_EQUAL_INT(
 		SETTER_SOURCE_STRUCT,
-		setter_source_of((PyTypeObject *) frozen_child, "__setattr__")
+		setter_sources_of((PyTypeObject *) frozen_child).assigns
 	);
 	TEST_ASSERT_EQUAL_INT(
 		1,
@@ -396,10 +395,7 @@ static void test_a_raw_tp_setattro_co_base_ahead_of_a_fieldless_frozen_base_stay
 	PY_OWNED(child, struct_class_with_field(bases, NULL, false));
 	TEST_ASSERT_NOT_NULL(child);
 	TEST_ASSERT_EQUAL_PTR(&SwallowingType, ((PyTypeObject *) child)->tp_base);
-	TEST_ASSERT_EQUAL_INT(
-		SETTER_SOURCE_STRUCT,
-		setter_source_of((PyTypeObject *) child, "__setattr__")
-	);
+	TEST_ASSERT_EQUAL_INT(SETTER_SOURCE_STRUCT, setter_sources_of((PyTypeObject *) child).assigns);
 
 	Py_ssize_t const calls_before = swallow_calls;
 	PY_OWNED(instance, PyObject_CallFunction(child, "i", 1));

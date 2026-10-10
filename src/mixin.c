@@ -484,50 +484,108 @@ static PyObject * Struct_delete_attribute(PyObject * const self, PyObject * cons
 	return assign_attribute(self, name, NULL) == 0 ? Py_NewRef(Py_None) : NULL;
 }
 
-enum setter_source setter_source_of(PyTypeObject const * const type, char const * const name) {
-	PY_OWNED(key, PyUnicode_InternFromString(name));
-	PY_OWNED(object_dict, key != NULL ? struct_type_dict(&PyBaseObject_Type) : NULL);
-	PY_OWNED(struct_dict, key != NULL ? struct_type_dict(&StructMixin_Type) : NULL);
-	PyObject * const object_setter = (
-		object_dict != NULL ? PyDict_GetItemWithError(object_dict, key) :
-		NULL
+static enum setter_source classify_setter(
+	PyObject * const found,
+	PyObject * const object_setter,
+	PyObject * const struct_setter
+) {
+	return (
+		found == object_setter ? SETTER_SOURCE_OBJECT :
+		found == struct_setter ? SETTER_SOURCE_STRUCT :
+		SETTER_SOURCE_OTHER
 	);
-	PyObject * const struct_setter = (
-		struct_dict != NULL ? PyDict_GetItemWithError(struct_dict, key) :
-		NULL
-	);
+}
 
-	if (object_setter == NULL || struct_setter == NULL) {
-		if (!PyErr_Occurred()) {
-			PyErr_Format(PyExc_SystemError, "salix internal error: no %s to resolve against", name);
-		}
-
-		return SETTER_SOURCE_ERROR;
-	}
-
+struct setter_sources setter_sources_of(PyTypeObject const * const type) {
+	struct setter_sources const failed = {SETTER_SOURCE_ERROR, SETTER_SOURCE_ERROR};
 	PyObject * const mro = type->tp_mro;
 
-	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); i += 1) {
+	if (mro == NULL) {
+		enum setter_source const slot = (
+			type->tp_setattro == NULL || type->tp_setattro == PyBaseObject_Type.tp_setattro ? SETTER_SOURCE_OBJECT :
+			SETTER_SOURCE_OTHER
+		);
+
+		return (struct setter_sources){slot, slot};
+	}
+
+	PY_OWNED(assign_key, PyUnicode_InternFromString("__setattr__"));
+	PY_OWNED(delete_key, PyUnicode_InternFromString("__delattr__"));
+	PY_OWNED(object_dict, struct_type_dict(&PyBaseObject_Type));
+	PY_OWNED(struct_dict, struct_type_dict(&StructMixin_Type));
+
+	if (assign_key == NULL || delete_key == NULL || object_dict == NULL || struct_dict == NULL) {
+		if (!PyErr_Occurred()) {
+			PyErr_SetString(
+				PyExc_SystemError,
+				"salix internal error: no setters to resolve against"
+			);
+		}
+
+		return failed;
+	}
+
+	PyObject * const object_assign = PyDict_GetItemWithError(object_dict, assign_key);
+	PyObject * const object_delete = PyDict_GetItemWithError(object_dict, delete_key);
+	PyObject * const struct_assign = PyDict_GetItemWithError(struct_dict, assign_key);
+	PyObject * const struct_delete = PyDict_GetItemWithError(struct_dict, delete_key);
+
+	if (
+		object_assign == NULL ||
+		object_delete == NULL ||
+		struct_assign == NULL ||
+		struct_delete == NULL
+	) {
+		if (!PyErr_Occurred()) {
+			PyErr_SetString(
+				PyExc_SystemError,
+				"salix internal error: no setters to resolve against"
+			);
+		}
+
+		return failed;
+	}
+
+	struct setter_sources resolved = {SETTER_SOURCE_OBJECT, SETTER_SOURCE_OBJECT};
+	bool assigns_found = false;
+	bool deletes_found = false;
+
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro) && !(assigns_found && deletes_found); i += 1) {
 		PY_OWNED(entry_dict, struct_type_dict((PyTypeObject *) PyTuple_GET_ITEM(mro, i)));
-		PyObject * const found = (
-			entry_dict != NULL ? PyDict_GetItemWithError(entry_dict, key) :
-			NULL
+
+		if (entry_dict == NULL) {
+			if (PyErr_Occurred()) {
+				return failed;
+			}
+
+			continue;
+		}
+
+		PyObject * const assigns = (
+			assigns_found ? NULL :
+			PyDict_GetItemWithError(entry_dict, assign_key)
+		);
+		PyObject * const deletes = (
+			deletes_found || PyErr_Occurred() ? NULL :
+			PyDict_GetItemWithError(entry_dict, delete_key)
 		);
 
 		if (PyErr_Occurred()) {
-			return SETTER_SOURCE_ERROR;
+			return failed;
 		}
 
-		if (found != NULL) {
-			return (
-				found == object_setter ? SETTER_SOURCE_OBJECT :
-				found == struct_setter ? SETTER_SOURCE_STRUCT :
-				SETTER_SOURCE_OTHER
-			);
+		if (assigns != NULL) {
+			resolved.assigns = classify_setter(assigns, object_assign, struct_assign);
+			assigns_found = true;
+		}
+
+		if (deletes != NULL) {
+			resolved.deletes = classify_setter(deletes, object_delete, struct_delete);
+			deletes_found = true;
 		}
 	}
 
-	return SETTER_SOURCE_OBJECT;
+	return resolved;
 }
 
 static int assign_attribute(PyObject * const self, PyObject * const name, PyObject * const value) {

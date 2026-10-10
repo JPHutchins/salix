@@ -522,24 +522,20 @@ static bool any_base_satisfies(PyObject * const bases, bool (*carries)(PyTypeObj
 	return false;
 }
 
-static bool diverts(PyTypeObject const * const base, char const * const name) {
-	switch (setter_source_of(base, name)) {
-		case SETTER_SOURCE_ERROR:
-			PyErr_Clear();
-
-			return true;
-		case SETTER_SOURCE_OBJECT:
-		case SETTER_SOURCE_STRUCT:
-			return false;
-		case SETTER_SOURCE_OTHER:
-			return true;
+static bool carries_diverting_setattro(PyTypeObject const * const base) {
+	if (base->tp_setattro == PyBaseObject_Type.tp_setattro) {
+		return false;
 	}
 
-	Py_UNREACHABLE();
-}
+	struct setter_sources const sources = setter_sources_of(base);
 
-static bool carries_diverting_setattro(PyTypeObject const * const base) {
-	return diverts(base, "__setattr__") || diverts(base, "__delattr__");
+	if (sources.assigns == SETTER_SOURCE_ERROR || sources.deletes == SETTER_SOURCE_ERROR) {
+		PyErr_Clear();
+
+		return true;
+	}
+
+	return sources.assigns == SETTER_SOURCE_OTHER || sources.deletes == SETTER_SOURCE_OTHER;
 }
 
 bool any_base_diverts_setattro(PyObject * const bases) {
