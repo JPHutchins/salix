@@ -549,7 +549,11 @@ def test_a_frozen_struct_refuses_state_once_its_co_base_reduce_has_called_the_cl
         with pytest.raises(TypeError, match="cannot restore state into a live frozen"):
             duplicate(make())
     else:
-        assert duplicate(make()).a == 0
+        original = make()
+        duplicated = duplicate(original)
+        co_base = type(original).__bases__[0]
+
+        assert (duplicated.a, co_base(duplicated)) == (0, co_base(original))
 
 
 @pytest.mark.parametrize(
