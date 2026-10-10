@@ -1286,3 +1286,97 @@ class TestFieldsReboundDuringClassCreation:
 
         with pytest.raises(AttributeError, match="'y' is read-only"):
             Sub(y=1)
+
+
+class TestFieldAndClassVarNamesAfterClassCreation:
+    def test_assigning_a_field_name_on_the_class_is_refused(self) -> None:
+        class Later(Struct):
+            y: int
+
+        with pytest.raises(
+            TypeError, match=r"cannot set 'y' attribute of struct class 'Later': it is a field"
+        ):
+            Later.y = 7
+
+        assert Later(y=1).y == 1
+
+    def test_deleting_a_field_name_from_the_class_is_refused(self) -> None:
+        class Later(Struct):
+            y: int
+
+        with pytest.raises(TypeError, match=r"cannot delete 'y' attribute of struct class 'Later'"):
+            del Later.y
+
+        assert Later(y=1).y == 1
+
+    def test_assigning_an_inherited_field_or_class_var_on_a_subclass_is_refused(self) -> None:
+        class Base(Struct):
+            limit: ClassVar[int] = 5
+            y: int = 0
+
+        class Sub(Base):
+            z: int = 0
+
+        with pytest.raises(TypeError, match=r"cannot set 'y' attribute of struct class 'Sub'"):
+            Sub.y = 7
+
+        with pytest.raises(TypeError, match=r"cannot set 'limit' attribute of struct class 'Sub'"):
+            Sub.limit = 9
+
+        assert (Sub(y=1).y, Sub.limit) == (1, 5)
+
+    def test_a_metaclass_new_assigning_a_field_after_creation_is_refused(self) -> None:
+        class Rebinding(type(Struct)):
+            def __new__(
+                metacls: type,
+                name: str,
+                bases: tuple[type, ...],
+                namespace: dict[str, object],
+                **keywords: object,
+            ) -> type:
+                built = super().__new__(metacls, name, bases, namespace, **keywords)
+                built.y = 7
+                return built
+
+        with pytest.raises(TypeError, match=r"cannot set 'y' attribute of struct class 'Sub'"):
+            Rebinding("Sub", (Struct,), {"__annotations__": {"y": int}})
+
+    def test_a_metaclass_init_assigning_a_field_is_refused(self) -> None:
+        class Initialising(type(Struct)):
+            def __init__(
+                cls, name: str, bases: tuple[type, ...], namespace: dict[str, object]
+            ) -> None:
+                super().__init__(name, bases, namespace)
+                cls.y = 8
+
+        with pytest.raises(TypeError, match=r"cannot set 'y' attribute of struct class 'Sub'"):
+            Initialising("Sub", (Struct,), {"__annotations__": {"y": int}})
+
+    def test_type_setattr_cannot_bypass_the_refusal(self) -> None:
+        class Later(Struct):
+            y: int
+
+        with pytest.raises(TypeError, match="can't apply this __setattr__"):
+            type.__setattr__(Later, "y", 7)
+
+        with pytest.raises(TypeError, match="can't apply this __delattr__"):
+            type.__delattr__(Later, "y")
+
+    def test_other_class_attributes_stay_assignable(self) -> None:
+        class Later(Struct):
+            y: int
+            tag = "plain"
+
+            def describe(self) -> str:
+                return "method"
+
+        Later.tag = "changed"
+        Later.added = 1
+        Later.describe = lambda self: "patched"
+        del Later.added
+
+        assert (Later.tag, hasattr(Later, "added"), Later(y=1).describe()) == (
+            "changed",
+            False,
+            "patched",
+        )

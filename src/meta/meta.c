@@ -17,6 +17,7 @@ static PyObject * StructMeta_get_annotations(PyObject * self, void * closure);
 static PyObject * StructMeta_get_metadata(PyObject * self, void * closure);
 static PyGetSetDef StructMeta_getset[10];
 static PyObject * StructMeta_call(PyObject * self, PyObject * args, PyObject * keywords);
+static int StructMeta_setattro(PyObject * self, PyObject * name, PyObject * value);
 PyTypeObject StructMeta_Type = {
 	PyVarObject_HEAD_INIT(NULL, 0)
 	.tp_name = "salix._StructMeta",
@@ -35,6 +36,7 @@ PyTypeObject StructMeta_Type = {
 	.tp_traverse = StructMeta_traverse,
 	.tp_clear = StructMeta_clear,
 	.tp_call = StructMeta_call,
+	.tp_setattro = StructMeta_setattro,
 	.tp_vectorcall_offset = offsetof(PyTypeObject, tp_vectorcall),
 	.tp_getset = StructMeta_getset,
 };
@@ -401,6 +403,70 @@ void meta_tests(void) {
 }
 
 #endif
+
+enum class_name_kind { CLASS_NAME_FREE, CLASS_NAME_FIELD, CLASS_NAME_CLASS_VAR };
+
+static enum class_name_kind class_name_kind_of(
+	StructType const * const type,
+	PyObject * const name
+) {
+	PyObject * const field_names = type->struct_field_names;
+	PyObject * const class_var_positions = type->struct_class_var_positions;
+
+	for (Py_ssize_t i = 0; field_names != NULL && i < PyTuple_GET_SIZE(field_names); i += 1) {
+		if (PyUnicode_Compare(name, PyTuple_GET_ITEM(field_names, i)) == 0) {
+			return CLASS_NAME_FIELD;
+		}
+	}
+
+	for (
+		Py_ssize_t i = 0;
+		class_var_positions != NULL && i < PyTuple_GET_SIZE(class_var_positions);
+		i += 1
+	) {
+		PyObject * const class_var_name = PyTuple_GET_ITEM(
+			PyTuple_GET_ITEM(class_var_positions, i),
+			1
+		);
+
+		if (PyUnicode_Compare(name, class_var_name) == 0) {
+			return CLASS_NAME_CLASS_VAR;
+		}
+	}
+
+	return CLASS_NAME_FREE;
+}
+
+static int StructMeta_setattro(
+	PyObject * const self,
+	PyObject * const name,
+	PyObject * const value
+) {
+	enum class_name_kind const kind = (
+		PyUnicode_Check(name) ? class_name_kind_of((StructType const *) self, name) :
+		CLASS_NAME_FREE
+	);
+
+	switch (kind) {
+		case CLASS_NAME_FREE:
+			return PyType_Type.tp_setattro(self, name, value);
+		case CLASS_NAME_FIELD:
+		case CLASS_NAME_CLASS_VAR:
+			break;
+	}
+
+	PyErr_Format(
+		PyExc_TypeError,
+		"cannot %s '%U' attribute of struct class '%.200s': %s",
+		value == NULL ? "delete" : "set",
+		name,
+		((PyTypeObject *) self)->tp_name,
+		kind == CLASS_NAME_FIELD ? "it is a field, and the class attribute is the field's slot" :
+		"it is a ClassVar, and a class variable is a constant"
+	);
+
+	return -1;
+}
 
 static void StructMeta_dealloc(PyObject * const self) {
 	PyObject_GC_UnTrack(self);
