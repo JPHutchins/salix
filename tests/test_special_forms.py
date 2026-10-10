@@ -671,6 +671,88 @@ def test_a_redeclaration_over_a_deleted_class_var_after_an_init_var_default_is_r
             x: int
 
 
+def test_a_redeclaration_over_a_deleted_class_var_ahead_of_a_required_field_is_required():
+    @dataclass
+    class StockBase:
+        x: ClassVar[int] = 5
+
+    class Base(Struct):
+        x: ClassVar[int] = 5
+
+    del StockBase.x
+    del Base.x
+
+    @dataclass
+    class StockSub(StockBase):
+        x: int
+        y: int
+
+    class Sub(Base):
+        x: int
+        y: int
+
+    assert Sub._struct_fields_ == tuple(field.name for field in fields(StockSub)) == ("x", "y")
+    assert Sub._struct_defaults_ == ()
+    assert (Sub(1, 2).x, Sub(1, 2).y) == (StockSub(1, 2).x, StockSub(1, 2).y) == (1, 2)
+
+
+def test_a_redeclaration_over_a_deleted_class_var_ahead_of_a_required_init_var_is_required():
+    seen: list[int] = []
+
+    @dataclass
+    class StockBase:
+        x: ClassVar[int] = 5
+
+    class Base(Struct):
+        x: ClassVar[int] = 5
+
+    del StockBase.x
+    del Base.x
+
+    @dataclass
+    class StockSub(StockBase):
+        x: int
+        flag: InitVar[int]
+
+        def __post_init__(self, flag: int) -> None:
+            seen.append(flag)
+
+    class Sub(Base):
+        x: int
+        flag: InitVar[int]
+
+        def __post_init__(self, flag: int) -> None:
+            seen.append(flag)
+
+    assert Sub(1, 2).x == StockSub(1, 2).x == 1
+    assert seen == [2, 2]
+
+
+def test_a_redeclaration_copies_each_default_once_at_class_creation():
+    copies: list[object] = []
+
+    class Counted(list[int]):
+        def __deepcopy__(self, memo: dict[int, object]) -> "Counted":
+            copies.append(self)
+            return Counted(self)
+
+    class Base(Struct):
+        x: ClassVar[int] = 5
+
+    class Plain(Base):
+        w: Counted = Counted([1])
+
+    assert len(copies) == 1
+
+    class Sub(Base):
+        x: int
+        w: Counted = Counted([1])
+
+    assert len(copies) == 2
+    assert Sub(7).x == 7
+    assert Sub().x == 5
+
+
 class Answering:
     def __get__(self, instance: object, owner: type) -> int:
         return 42
