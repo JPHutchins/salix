@@ -1,6 +1,8 @@
 import collections
 import dataclasses
+import gc
 import re
+import weakref
 from collections.abc import Mapping
 
 import pytest
@@ -281,3 +283,52 @@ def test_an_init_var_struct_over_a_container_is_refused_because_from_mapping_cal
 
     with pytest.raises(TypeError, match="takes its __init__ from dict,"):
         from_mapping(WithInitVar, {"a": 7})
+
+
+def test_from_mapping_refuses_a_built_in_init_before_reading_the_values():
+    reads = []
+
+    class Watched(Mapping[str, object]):
+        def __getitem__(self, key: str) -> object:
+            return 7
+
+        def __iter__(self):
+            return iter(["a"])
+
+        def __len__(self) -> int:
+            return 1
+
+        def items(self):
+            reads.append("items")
+            return super().items()
+
+    class Over(dict, Struct, frozen=False):
+        a: int = 0
+
+    with pytest.raises(TypeError, match="takes its __init__ from dict,"):
+        from_mapping(Over, Watched())
+
+    assert reads == []
+
+
+def test_a_base_swapped_out_and_freed_leaves_no_trace_in_the_refusal():
+    class PlainDict(dict):
+        pass
+
+    def build() -> tuple[type, weakref.ref[type]]:
+        class Assigned(dict):
+            __init__ = dict.__init__
+
+        class Over(Assigned, Struct, frozen=False):
+            a: int = 0
+
+        return Over, weakref.ref(Assigned)
+
+    over, assigned = build()
+    over.__bases__ = (PlainDict, Struct)
+    gc.collect()
+
+    assert assigned() is None
+
+    with pytest.raises(TypeError, match="'Over' takes its __init__ from dict,"):
+        from_mapping(over, {"a": 7})
