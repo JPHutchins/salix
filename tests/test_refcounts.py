@@ -5,7 +5,7 @@ import sysconfig
 
 import pytest
 
-from salix import Struct, from_mapping, replace, set_field
+from salix import Struct, fields, from_mapping, replace, set_field
 
 pytestmark = pytest.mark.skipif(
     bool(sysconfig.get_config_var("Py_GIL_DISABLED")),
@@ -495,5 +495,29 @@ def test_from_mapping_takes_one_reference_per_field_and_releases_them_with_the_i
     assert sys.getrefcount(sentinel) == before + 2
 
     del pair
+
+    assert sys.getrefcount(sentinel) == before
+
+
+def test_fields_holds_a_default_once_however_often_it_is_read():
+    sentinel = Sentinel()
+    built = type(Struct)("Held", (Struct,), {"__annotations__": {"value": object}, "value": sentinel})
+    fields(built)
+    before = sys.getrefcount(sentinel)
+
+    for _ in range(100):
+        fields(built)
+
+    assert sys.getrefcount(sentinel) == before
+
+
+def test_a_replaced_field_releases_what_it_took():
+    sentinel = Sentinel()
+    before = sys.getrefcount(sentinel)
+    changed = fields(Pair)[0].__replace__(default=sentinel, type=sentinel)
+
+    assert sys.getrefcount(sentinel) == before + 2
+
+    del changed
 
     assert sys.getrefcount(sentinel) == before

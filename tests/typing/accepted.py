@@ -3,7 +3,7 @@ from typing import Any, ClassVar, Generic, Literal, Protocol, TypeVar
 
 from typing_extensions import assert_type
 
-from salix import Struct, from_mapping, replace, set_field
+from salix import MISSING, Field, Struct, fields, from_mapping, replace, set_field
 
 
 class Point(Struct):
@@ -153,6 +153,15 @@ def replace_returns_the_concrete_struct_type() -> None:
 def from_mapping_returns_the_concrete_struct_type() -> None:
     assert_type(from_mapping(Point, {"x": 1, "y": "two"}), Point)
     from_mapping(Point, {"x": object()})
+
+
+def fields_reads_records_from_a_class_or_an_instance() -> None:
+    assert_type(fields(Point), tuple[Field, ...])
+    assert_type(fields(Point(1, "two")), tuple[Field, ...])
+    assert_type(fields(Point)[0].name, str)
+    assert_type(fields(Point)[0].annotated_metadata, tuple[Any, ...])
+    assert_type(fields(Point)[0].__replace__(name="renamed"), Field)
+    assert_type(fields(Point)[0].default is MISSING, bool)
 
 
 def __copy___returns_the_concrete_struct_type() -> None:

@@ -5,7 +5,7 @@ import threading
 
 import pytest
 
-from salix import Struct, replace, set_field
+from salix import Struct, fields, replace, set_field
 
 pytestmark = pytest.mark.skipif(
     not sysconfig.get_config_var("Py_GIL_DISABLED"), reason="not a free-threaded build"
@@ -80,6 +80,29 @@ def test_concurrent_subclass_creation():
             assert subclass.__match_args__ == ("x", "y", "z")
 
     run_on_every_thread(work)
+
+
+def first_reads_of_fields(fresh: type) -> list[tuple[object, ...]]:
+    barrier = threading.Barrier(THREADS)
+    seen: list[tuple[object, ...]] = []
+
+    def work():
+        barrier.wait()
+        seen.append(fields(fresh))
+
+    run_on_every_thread(work)
+
+    return seen
+
+
+def test_concurrent_first_reads_of_fields_hand_out_one_tuple():
+    for i in range(ITERATIONS // 100):
+        seen = first_reads_of_fields(
+            type(Point)("Fresh", (Point,), {"__annotations__": {"z": int}, "z": i})
+        )
+
+        assert len(seen) == THREADS
+        assert all(records is seen[0] for records in seen)
 
 
 def test_concurrent_writes_to_a_shared_mutable_struct():

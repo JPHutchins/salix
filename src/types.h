@@ -10,9 +10,9 @@
 #if PY_VERSION_HEX < 0x030C0000
 #	include <structmember.h>
 
-enum { SLOT_MEMBER_TYPE = T_OBJECT_EX };
+enum { SLOT_MEMBER_TYPE = T_OBJECT_EX, READ_ONLY_MEMBER = READONLY };
 #else
-enum { SLOT_MEMBER_TYPE = Py_T_OBJECT_EX };
+enum { SLOT_MEMBER_TYPE = Py_T_OBJECT_EX, READ_ONLY_MEMBER = Py_READONLY };
 #endif
 
 enum parameter_kind : unsigned char {
@@ -33,6 +33,7 @@ typedef struct StructType {
 	PyObject * struct_post_init;
 	PyObject * struct_singleton;
 	PyObject * struct_signature;
+	PyObject * struct_field_records;
 	PyObject * struct_init_var_names;
 	PyObject * struct_init_var_defaults;
 	PyObject * struct_init_var_annotations;

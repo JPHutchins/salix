@@ -131,6 +131,33 @@ resolved arrives as an object too, and is accepted, while any other
 evaluation error still fails the class. Every row is pinned in
 `tests/test_classvar_paths.py`.
 
+## Fields
+
+`fields()` reads a struct's fields back as `Field` records, under the
+attribute names of `dataclasses.Field`, and imports nothing to do it:
+
+```python
+>>> from typing import Annotated
+>>> from salix import MISSING, Struct, fields
+
+>>> class Option(Struct):
+...     name: Annotated[str, "what to call it"]
+...     count: int = 1
+
+>>> [(field.name, field.type, field.default) for field in fields(Option)]
+[('name', <class 'str'>, MISSING), ('count', <class 'int'>, 1)]
+
+>>> fields(Option)[0].annotated_metadata
+('what to call it',)
+
+```
+
+`MISSING` is salix's own sentinel, not `dataclasses.MISSING`. A struct field
+takes no `field()` options, so `default_factory` is `MISSING`, `metadata` is
+empty, and the flags hold their stock defaults; the `Annotated` extras are
+`annotated_metadata`. A `Field` is read-only, and its `__replace__` derives a
+changed one. `ClassVar` and `InitVar` names are not fields.
+
 ## Caching a computed value
 
 `functools.cached_property` caches into an instance `__dict__`; a struct has
