@@ -31,6 +31,7 @@ BUILD: Final = BuildConfig(
         "src/fields/fields.c",
         "src/fields/forms.c",
         "src/hash.c",
+        "src/introspection.c",
         "src/meta/meta.c",
         "src/meta/bases.c",
         "src/meta/namespace/namespace.c",

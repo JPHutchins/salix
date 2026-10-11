@@ -9,6 +9,7 @@
 #define SALIX_STRINGIZE(version) SALIX_STRINGIZE_INNER(version)
 
 #include "construct.h"
+#include "introspection.h"
 #include "meta/settle/settle.h"
 #include "meta.h"
 #include "mixin.h"
@@ -54,6 +55,12 @@ static PyMethodDef struct_functions[] = {
 		.ml_flags = METH_VARARGS,
 		.ml_doc = "from_mapping(cls, values) -- construct a struct from a mapping of field values.",
 	},
+	{
+		.ml_name = "fields",
+		.ml_meth = Struct_fields,
+		.ml_flags = METH_O,
+		.ml_doc = "fields(class_or_instance) -- the struct's fields, as Field records.",
+	},
 	{.ml_name = NULL},
 };
 
@@ -90,6 +97,8 @@ static void struct_free(void * const module) {
 	}
 
 	Py_CLEAR(state->frozen_instance_error);
+	Py_CLEAR(state->missing);
+	Py_CLEAR(state->empty_metadata);
 	defaults_free();
 
 	Py_CLEAR(state->handoff_attempt);
@@ -225,7 +234,8 @@ static int struct_exec(PyObject * const module) {
 	if (
 		state == NULL ||
 		settle_cache_fill(state) != RESULT_OK ||
-		pickle_cache_fill(state) != RESULT_OK
+		pickle_cache_fill(state) != RESULT_OK ||
+		introspection_install(module, state) != RESULT_OK
 	) {
 		return RESULT_ERROR;
 	}

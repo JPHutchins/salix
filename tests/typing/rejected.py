@@ -1,6 +1,6 @@
 from dataclasses import InitVar
 
-from salix import Struct, set_field
+from salix import Struct, fields, set_field
 
 
 class Point(Struct):
@@ -141,3 +141,11 @@ class AFieldMayNotTakeOneOfTheMetadataNames(Struct):
     _struct_defaults_: int  # type: ignore[assignment,misc]
     __struct_fields__: int  # type: ignore[assignment,misc]
     __struct_defaults__: int  # type: ignore[assignment,misc]
+
+
+def fields_refuses_a_value_that_is_not_a_struct() -> None:
+    fields(1)  # type: ignore[arg-type]
+
+
+def a_field_record_is_read_only() -> None:
+    fields(Point)[0].name = "renamed"  # type: ignore[misc]

@@ -98,6 +98,8 @@ struct salix_state {
 	PyObject * handoff_declined;
 	PyObject * handoff_new;
 	PyObject * frozen_instance_error;
+	PyObject * missing;
+	PyObject * empty_metadata;
 };
 
 PyModuleDef * salix_module_def(void);
