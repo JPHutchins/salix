@@ -1,8 +1,9 @@
 import copy
+import copyreg
 import pickle
 import sys
 from collections import OrderedDict
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import InitVar
 
 import pytest
@@ -114,7 +115,61 @@ def all_unset_mutable() -> Mutable:
     ids=["frozen", "none-value", "nested", "init-var", "mutable", "all-unset"],
 )
 def test_a_plain_struct_reduces_exactly_as_object_does(instance: Struct) -> None:
-    assert instance.__reduce_ex__(4) == object.__reduce_ex__(instance, 4)
+    reduced = instance.__reduce_ex__(4)
+
+    assert "__slotnames__" not in vars(type(instance))
+    assert reduced == object.__reduce_ex__(instance, 4)
+
+    del type(instance).__slotnames__
+
+
+def reduced_or_refused(reduce: Callable[[int], object]) -> object:
+    try:
+        return reduce(4)
+    except TypeError as error:
+        return str(error)
+
+
+@pytest.mark.parametrize("slotnames", [["x"], ["x", "y"], ["y", "x"]], ids=["partial", "both", "reversed"])
+def test_an_assigned_slotnames_reduces_as_object_does(slotnames: list[str]) -> None:
+    class Assigned(Struct):
+        x: int
+        y: int = 2
+
+    Assigned.__slotnames__ = slotnames
+    instance = Assigned(1)
+
+    assert reduced_or_refused(instance.__reduce_ex__) == reduced_or_refused(
+        lambda protocol: object.__reduce_ex__(instance, protocol)
+    )
+
+
+def test_a_state_key_that_only_compares_equal_to_a_field_name_is_refused() -> None:
+    class EqualToX:
+        def __hash__(self) -> int:
+            return hash("x")
+
+        def __eq__(self, other: object) -> bool:
+            return other == "x"
+
+    restored = Frozen.__new__(Frozen)
+
+    with pytest.raises(TypeError, match="not a str"):
+        restored.__setstate__((None, {EqualToX(): 42}))
+
+
+def test_a_replaced_copyreg_newobj_is_what_both_reductions_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Local(Struct):
+        x: int
+
+    def replacement(cls: type, *arguments: object) -> object:
+        return cls.__new__(cls, *arguments)
+
+    instance = Local(1)
+    monkeypatch.setattr(copyreg, "__newobj__", replacement)
+
+    assert instance.__reduce_ex__(4)[0] is replacement
+    assert object.__reduce_ex__(instance, 4)[0] is replacement
 
 
 def test_a_getstate_hook_still_shapes_the_reduced_state() -> None:

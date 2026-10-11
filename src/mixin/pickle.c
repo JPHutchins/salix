@@ -14,6 +14,8 @@ static PyObject * pickle_cached_build(enum pickle_cached const kind) {
 		[PICKLE_REDUCE_NAME] = "__reduce__",
 		[PICKLE_SETSTATE_NAME] = "__setstate__",
 		[PICKLE_GETSTATE_NAME] = "__getstate__",
+		[PICKLE_SLOTNAMES_NAME] = "__slotnames__",
+		[PICKLE_NEWOBJ_NAME] = "__newobj__",
 	};
 
 	return (
@@ -49,8 +51,19 @@ struct definition {
 	PyTypeObject * owner;
 };
 
-static struct definition nearest_definition(PyTypeObject * const cls, PyObject * const key) {
-	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(cls->tp_mro); i += 1) {
+static enum result nearest_definitions(
+	PyTypeObject * const cls,
+	Py_ssize_t const count,
+	PyObject * const keys[static count],
+	struct definition found[static count]
+) {
+	Py_ssize_t missing = count;
+
+	for (Py_ssize_t k = 0; k < count; k += 1) {
+		found[k] = (struct definition){.tag = DEFINITION_MISSING};
+	}
+
+	for (Py_ssize_t i = 0; missing > 0 && i < PyTuple_GET_SIZE(cls->tp_mro); i += 1) {
 		PyTypeObject * const entry = (PyTypeObject *) PyTuple_GET_ITEM(cls->tp_mro, i);
 
 		if (entry == &StructMixin_Type) {
@@ -60,21 +73,36 @@ static struct definition nearest_definition(PyTypeObject * const cls, PyObject *
 		PY_OWNED(entry_dict, struct_type_dict(entry));
 
 		if (entry_dict == NULL) {
-			return (struct definition){.tag = DEFINITION_ERROR};
+			return RESULT_ERROR;
 		}
 
-		int const present = PyDict_Contains(entry_dict, key);
+		for (Py_ssize_t k = 0; k < count; k += 1) {
+			int const present = (
+				found[k].tag == DEFINITION_FOUND ? 0 :
+				PyDict_Contains(entry_dict, keys[k])
+			);
 
-		if (present < 0) {
-			return (struct definition){.tag = DEFINITION_ERROR};
-		}
+			if (present < 0) {
+				return RESULT_ERROR;
+			}
 
-		if (present == 1) {
-			return (struct definition){.tag = DEFINITION_FOUND, .owner = entry};
+			if (present == 1) {
+				found[k] = (struct definition){.tag = DEFINITION_FOUND, .owner = entry};
+				missing -= 1;
+			}
 		}
 	}
 
-	return (struct definition){.tag = DEFINITION_MISSING};
+	return RESULT_OK;
+}
+
+static struct definition nearest_definition(PyTypeObject * const cls, PyObject * const key) {
+	struct definition found[1];
+
+	return (
+		nearest_definitions(cls, 1, (PyObject *[]){key}, found) == RESULT_OK ? found[0] :
+		(struct definition){.tag = DEFINITION_ERROR}
+	);
 }
 
 static int defined_by_user_code(PyTypeObject * const cls, char const * const name) {
@@ -138,15 +166,7 @@ int copies_through_reduce(StructType * const type) {
 	return 0;
 }
 
-static int overrides_reduce(PyObject * const self) {
-	PY_OWNED(key, pickle_cached(self, PICKLE_REDUCE_NAME));
-
-	if (key == NULL) {
-		return -1;
-	}
-
-	struct definition const found = nearest_definition(Py_TYPE(self), key);
-
+static int beyond_object(struct definition const found) {
 	switch (found.tag) {
 		case DEFINITION_ERROR:
 			return -1;
@@ -159,6 +179,12 @@ static int overrides_reduce(PyObject * const self) {
 	return found.owner != &PyBaseObject_Type;
 }
 
+static int defined_beyond_object(PyObject * const self, enum pickle_cached const hook) {
+	PY_OWNED(key, pickle_cached(self, hook));
+
+	return key != NULL ? beyond_object(nearest_definition(Py_TYPE(self), key)) : -1;
+}
+
 static PyObject * object_reduce_ex(PyObject * const self, PyObject * const protocol) {
 	PY_OWNED(method, pickle_cached(self, PICKLE_OBJECT_REDUCE_EX));
 	PyObject * const arguments[] = {self, protocol};
@@ -167,7 +193,7 @@ static PyObject * object_reduce_ex(PyObject * const self, PyObject * const proto
 }
 
 static PyObject * reduce_fallback(PyObject * const self) {
-	int const overridden = overrides_reduce(self);
+	int const overridden = defined_beyond_object(self, PICKLE_REDUCE_NAME);
 
 	if (overridden < 0) {
 		return NULL;
@@ -202,92 +228,45 @@ PyObject * copy_reduction(PyObject * const self, PyObject * const copier) {
 	return protocol != NULL ? PyObject_CallOneArg(reductor, protocol) : NULL;
 }
 
-struct reduction_hooks {
-	enum { REDUCTION_HOOKS_FOUND, REDUCTION_HOOKS_ERROR } tag;
-	bool overrides_reduce;
-	bool user_getstate;
-};
-
-static struct reduction_hooks reduction_hooks_of(PyObject * const self) {
-	PyTypeObject * const cls = Py_TYPE(self);
-	PY_OWNED(reduce_key, pickle_cached(self, PICKLE_REDUCE_NAME));
-	PY_OWNED(getstate_key, pickle_cached(self, PICKLE_GETSTATE_NAME));
-
-	if (reduce_key == NULL || getstate_key == NULL) {
-		return (struct reduction_hooks){.tag = REDUCTION_HOOKS_ERROR};
-	}
-
-	PyTypeObject * reduce_owner = NULL;
-	PyTypeObject * getstate_owner = NULL;
-
-	for (
-		Py_ssize_t i = 0;
-		i < PyTuple_GET_SIZE(cls->tp_mro) && (reduce_owner == NULL || getstate_owner == NULL);
-		i += 1
-	) {
-		PyTypeObject * const entry = (PyTypeObject *) PyTuple_GET_ITEM(cls->tp_mro, i);
-
-		if (entry == &StructMixin_Type) {
-			continue;
-		}
-
-		PY_OWNED(entry_dict, struct_type_dict(entry));
-		int const reduce_present = (
-			entry_dict == NULL ? -1 :
-			reduce_owner != NULL ? 0 :
-			PyDict_Contains(entry_dict, reduce_key)
-		);
-		int const getstate_present = (
-			reduce_present < 0 ? -1 :
-			getstate_owner != NULL ? 0 :
-			PyDict_Contains(entry_dict, getstate_key)
-		);
-
-		if (getstate_present < 0) {
-			return (struct reduction_hooks){.tag = REDUCTION_HOOKS_ERROR};
-		}
-
-		reduce_owner = reduce_present == 1 ? entry : reduce_owner;
-		getstate_owner = getstate_present == 1 ? entry : getstate_owner;
-	}
-
-	return (struct reduction_hooks){
-		.tag = REDUCTION_HOOKS_FOUND,
-		.overrides_reduce = reduce_owner != NULL && reduce_owner != &PyBaseObject_Type,
-		.user_getstate = (
-			getstate_owner != NULL &&
-			(getstate_owner->tp_flags & Py_TPFLAGS_HEAPTYPE) != 0
-		),
-	};
-}
-
-static bool pickles_plainly(StructType * const type, bool const user_getstate) {
+static int pickles_plainly(StructType * const type, int const getstate_overridden) {
 	PyTypeObject * const cls = &type->heap_type.ht_type;
 
-	return (
-		!user_getstate &&
-		cls->tp_dictoffset == 0 &&
-		type->struct_member_count == 0 &&
-		!foreign_storage(type) &&
-		!PyType_FastSubclass(cls, Py_TPFLAGS_BASE_EXC_SUBCLASS)
+	if (
+		getstate_overridden != 0 ||
+		cls->tp_dictoffset != 0 ||
+		type->struct_member_count != 0 ||
+		foreign_storage(type) ||
+		PyType_FastSubclass(cls, Py_TPFLAGS_BASE_EXC_SUBCLASS)
+	) {
+		return getstate_overridden < 0 ? -1 : 0;
+	}
+
+	PY_OWNED(own_dict, struct_type_dict(cls));
+	int const slotnames_cached = (
+		own_dict != NULL ? PyDict_Contains(
+			own_dict,
+			type->struct_state->pickle_cache[PICKLE_SLOTNAMES_NAME]
+		) :
+		-1
 	);
+
+	return slotnames_cached < 0 ? -1 : slotnames_cached == 0;
 }
 
-static PyObject * copyreg_newobj(struct salix_state * const state) {
+static PyObject * copyreg_module_of(struct salix_state * const state) {
 	PyObject * cached = NULL;
 
 	STRUCT_BEGIN_CRITICAL_SECTION(state->pickle_cache[PICKLE_REDUCE_EX_NAME]);
-	cached = Py_XNewRef(state->copyreg_newobj);
+	cached = Py_XNewRef(state->copyreg_module);
 	STRUCT_END_CRITICAL_SECTION();
 
 	if (cached != NULL) {
 		return cached;
 	}
 
-	PY_OWNED(copyreg, PyImport_ImportModule("copyreg"));
-	PY_OWNED(resolved, copyreg != NULL ? PyObject_GetAttrString(copyreg, "__newobj__") : NULL);
+	PY_OWNED(imported, PyImport_ImportModule("copyreg"));
 
-	if (resolved == NULL) {
+	if (imported == NULL) {
 		return NULL;
 	}
 
@@ -295,11 +274,11 @@ static PyObject * copyreg_newobj(struct salix_state * const state) {
 
 	STRUCT_BEGIN_CRITICAL_SECTION(state->pickle_cache[PICKLE_REDUCE_EX_NAME]);
 
-	if (state->copyreg_newobj == NULL) {
-		state->copyreg_newobj = Py_NewRef(resolved);
+	if (state->copyreg_module == NULL) {
+		state->copyreg_module = Py_NewRef(imported);
 	}
 
-	stored = Py_NewRef(state->copyreg_newobj);
+	stored = Py_NewRef(state->copyreg_module);
 	STRUCT_END_CRITICAL_SECTION();
 
 	return stored;
@@ -330,7 +309,15 @@ static PyObject * set_slots_of(StructType const * const type, PyObject * const s
 
 static PyObject * plain_reduction(PyObject * const self) {
 	StructType const * const type = struct_type_of(self);
-	PY_OWNED(newobj, copyreg_newobj(type->struct_state));
+	PY_OWNED(copyreg, copyreg_module_of(type->struct_state));
+	PY_OWNED(
+		newobj,
+		copyreg != NULL ? PyObject_GetAttr(
+			copyreg,
+			type->struct_state->pickle_cache[PICKLE_NEWOBJ_NAME]
+		) :
+		NULL
+	);
 	PY_OWNED(slots, newobj != NULL ? set_slots_of(type, self) : NULL);
 
 	if (slots == NULL) {
@@ -369,13 +356,28 @@ PyObject * Struct_reduce_ex(PyObject * const self, PyObject * const protocol) {
 		return PyObject_CallOneArg(deferred, protocol);
 	}
 
-	struct reduction_hooks const hooks = reduction_hooks_of(self);
+	PY_OWNED(reduce_key, pickle_cached(self, PICKLE_REDUCE_NAME));
+	PY_OWNED(getstate_key, pickle_cached(self, PICKLE_GETSTATE_NAME));
+	struct definition hooks[2];
 
-	if (hooks.tag == REDUCTION_HOOKS_ERROR) {
+	if (
+		reduce_key == NULL ||
+		getstate_key == NULL ||
+		(
+			nearest_definitions(
+				Py_TYPE(self),
+				2,
+				(PyObject *[]){reduce_key, getstate_key},
+				hooks
+			) != RESULT_OK
+		)
+	) {
 		return NULL;
 	}
 
-	if (hooks.overrides_reduce || !is_struct(self)) {
+	int const reduce_overridden = beyond_object(hooks[0]);
+
+	if (reduce_overridden == 1 || !is_struct(self)) {
 		return object_reduce_ex(self, protocol);
 	}
 
@@ -396,8 +398,11 @@ PyObject * Struct_reduce_ex(PyObject * const self, PyObject * const protocol) {
 		return NULL;
 	}
 
+	int const plain = pickles_plainly(type, beyond_object(hooks[1]));
+
 	return (
-		pickles_plainly(type, hooks.user_getstate) ? plain_reduction(self) :
+		plain < 0 ? NULL :
+		plain == 1 ? plain_reduction(self) :
 		object_reduce_ex(self, protocol)
 	);
 }
@@ -554,10 +559,27 @@ static enum result restore_slots(
 	return RESULT_OK;
 }
 
+static bool every_key_is_exactly_str(PyObject * const slots) {
+	Py_ssize_t position = 0;
+	PyObject * name;
+	PyObject * value;
+	bool exact = true;
+
+	while (exact && PyDict_Next(slots, &position, &name, &value)) {
+		exact = PyUnicode_CheckExact(name);
+	}
+
+	return exact;
+}
+
 static int names_only_fields(StructType const * const type, PyObject * const slots) {
+	if (slots == NULL || !every_key_is_exactly_str(slots)) {
+		return 0;
+	}
+
 	Py_ssize_t matched = 0;
 
-	for (Py_ssize_t i = 0; slots != NULL && i < type->struct_field_count; i += 1) {
+	for (Py_ssize_t i = 0; i < type->struct_field_count; i += 1) {
 		int const present = PyDict_Contains(slots, PyTuple_GET_ITEM(type->struct_field_names, i));
 
 		if (present < 0) {
@@ -567,7 +589,7 @@ static int names_only_fields(StructType const * const type, PyObject * const slo
 		matched += present;
 	}
 
-	return slots != NULL && matched == PyDict_GET_SIZE(slots);
+	return matched == PyDict_GET_SIZE(slots);
 }
 
 static enum result restore_fields(

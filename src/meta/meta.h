@@ -87,6 +87,8 @@ enum pickle_cached {
 	PICKLE_REDUCE_NAME,
 	PICKLE_SETSTATE_NAME,
 	PICKLE_GETSTATE_NAME,
+	PICKLE_SLOTNAMES_NAME,
+	PICKLE_NEWOBJ_NAME,
 	PICKLE_OBJECT_REDUCE_EX,
 	PICKLE_CACHED_COUNT,
 };
@@ -99,7 +101,7 @@ struct salix_state {
 	PyObject * handoff_declined;
 	PyObject * handoff_new;
 	PyObject * frozen_instance_error;
-	PyObject * copyreg_newobj;
+	PyObject * copyreg_module;
 	PyObject * missing;
 	PyObject * empty_metadata;
 };
