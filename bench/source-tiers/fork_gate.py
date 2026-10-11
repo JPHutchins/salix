@@ -27,10 +27,14 @@ importers = {{}}
 class Recorder(importlib.abc.MetaPathFinder):
     def find_spec(self, name, path, target=None):
         if name in replaced and name not in importers:
+            chain = []
             frame = sys._getframe(1)
-            while frame is not None and frame.f_globals.get("__name__", "").startswith(("importlib", "_frozen_importlib")):
+            while frame is not None:
+                module = frame.f_globals.get("__name__", "?")
+                if not module.startswith(("importlib", "_frozen_importlib")) and (not chain or chain[-1] != module):
+                    chain.append(module)
                 frame = frame.f_back
-            importers[name] = frame.f_globals.get("__name__", "?") if frame is not None else "?"
+            importers[name] = chain
         return None
 
 
@@ -70,7 +74,7 @@ def declared_replacements(pyproject: Path) -> list[str]:
 
 def runtime_importers(
     python: str, python_path: str, library: str, workload: str, arguments: list[str]
-) -> dict[str, str]:
+) -> dict[str, list[str]]:
     probe = PROBE.format(
         replaced=REPLACED_MODULES, library=library, workload=workload, arguments=arguments
     )
@@ -82,8 +86,19 @@ def runtime_importers(
         check=True,
     )
     line = next(line for line in completed.stdout.splitlines() if line.startswith("FORK-GATE "))
-    loaded: dict[str, str] = json.loads(line.removeprefix("FORK-GATE "))
+    loaded: dict[str, list[str]] = json.loads(line.removeprefix("FORK-GATE "))
     return loaded
+
+
+def responsible_module(chain: list[str]) -> str:
+    return next(
+        (module for module in chain if module.split(".")[0] not in sys.stdlib_module_names),
+        "?",
+    )
+
+
+def belongs_to(module: str, library: str) -> bool:
+    return module == library or module.startswith(f"{library}.")
 
 
 def main() -> int:
@@ -92,20 +107,17 @@ def main() -> int:
     hits = source_hits(Path(package))
     declared = declared_replacements(Path(pyproject))
     importers = runtime_importers(python, python_path, library, workload, arguments)
-    own = {
-        module: importer
-        for module, importer in importers.items()
-        if importer == library or importer.startswith(f"{library}.")
-    }
-    third_party = {module: importer for module, importer in importers.items() if module not in own}
+    responsible = {module: responsible_module(chain) for module, chain in importers.items()}
+    own = {module: chain for module, chain in importers.items() if belongs_to(responsible[module], library)}
+    third_party = {module: chain for module, chain in importers.items() if module not in own}
     for hit in hits:
         print(f"SOURCE {hit.path}:{hit.line}: {hit.text}")
     for requirement in declared:
         print(f"DEPENDENCY {requirement}")
-    for module, importer in own.items():
-        print(f"IMPORTED BY THE FORK {module} <- {importer}")
-    for module, importer in third_party.items():
-        print(f"IMPORTED BY A THIRD PARTY {module} <- {importer}")
+    for module, chain in own.items():
+        print(f"IMPORTED BY THE FORK {module} <- {' <- '.join(chain)}")
+    for module, chain in third_party.items():
+        print(f"IMPORTED BY THIRD PARTY {responsible[module]}: {module} <- {' <- '.join(chain)}")
     valid = not hits and not declared and not own
     print(f"GATE {'PASS' if valid else 'FAIL'}: {len(hits)} source hits, {len(declared)} dependencies, {len(own)} fork imports")
     return 0 if valid else 1
