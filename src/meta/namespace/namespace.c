@@ -562,11 +562,11 @@ enum result refuse_colliding_methods(
 enum result refuse_unannotated_field_bindings(
 	PyObject * const original_namespace,
 	PyObject * const all_names,
-	PyObject * const declared_names
+	PyObject * const declared_annotations
 ) {
 	for (Py_ssize_t i = 0; i < PyList_GET_SIZE(all_names); ++i) {
 		PyObject * const field_name = PyList_GET_ITEM(all_names, i);
-		int const declared = PySequence_Contains(declared_names, field_name);
+		int const declared = PyDict_Contains(declared_annotations, field_name);
 
 		if (declared < 0) {
 			return RESULT_ERROR;

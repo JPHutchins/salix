@@ -151,7 +151,7 @@ enum result refuse_colliding_methods(
 enum result refuse_unannotated_field_bindings(
 	PyObject * original_namespace,
 	PyObject * all_names,
-	PyObject * declared_names
+	PyObject * declared_annotations
 );
 enum result refuse_mixin_method_fields(PyObject * all_names);
 enum result refuse_slot_name_fields(PyObject * all_names);

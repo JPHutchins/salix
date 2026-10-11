@@ -18,6 +18,7 @@ struct field_plan {
 	PyObject * init_var_defaults;
 	PyObject * init_var_annotations;
 	PyObject * declared_names;
+	PyObject * declared_annotations;
 	PyObject * class_var_positions;
 	PyObject * mro_default_names;
 	PyObject * default_by_name;

@@ -212,6 +212,7 @@ struct field_plan field_plan_build(
 
 	PY_OWNED(declared_list, PyDict_Keys(annotations));
 	plan_built.declared_names = declared_list != NULL ? PyList_AsTuple(declared_list) : NULL;
+	plan_built.declared_annotations = Py_NewRef(annotations);
 	plan_built.mro_default_names = PyList_AsTuple(mro_default_names);
 	plan_built.default_by_name = Py_NewRef(default_by_name);
 
@@ -238,6 +239,7 @@ void field_plan_clear(struct field_plan * const plan) {
 	Py_CLEAR(plan->init_var_defaults);
 	Py_CLEAR(plan->init_var_annotations);
 	Py_CLEAR(plan->declared_names);
+	Py_CLEAR(plan->declared_annotations);
 	Py_CLEAR(plan->class_var_positions);
 	Py_CLEAR(plan->mro_default_names);
 	Py_CLEAR(plan->default_by_name);

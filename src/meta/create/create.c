@@ -194,7 +194,7 @@ PyObject * build_struct_class(
 			refuse_unannotated_field_bindings(
 				original_namespace,
 				plan.all_names,
-				plan.declared_names
+				plan.declared_annotations
 			) != RESULT_OK
 		) ||
 		refuse_mixin_method_fields(plan.all_names) != RESULT_OK ||
