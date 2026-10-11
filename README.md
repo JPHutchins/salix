@@ -36,7 +36,9 @@ sdist builds there is untested.
 
 A struct's fields are the annotated names of its class body, and the
 constructor takes them in that order. Instances are frozen by default: reads,
-value equality, hashing, and a repr come with the class; writes do not.
+value equality, hashing, and a repr come with the class; writes do not, and
+raise `salix.FrozenInstanceError`, an `AttributeError` that is salix's own and
+not `dataclasses.FrozenInstanceError`.
 A body-written `__init__` — inherited or not, and not `object.__init__` —
 replaces the field constructor; writing `object.__init__` back restores the
 generated one, and on a frozen struct the body fills fields with `set_field`

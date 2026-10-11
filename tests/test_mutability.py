@@ -1,11 +1,17 @@
+import dataclasses
+import os
+import pickle
+import subprocess
+import sys
 from collections import OrderedDict
-from dataclasses import FrozenInstanceError, dataclass
+from dataclasses import dataclass
 from typing import Generic, TypeVar
 
 import pytest
 from values import EVERY, identify
 
-from salix import Struct
+import salix
+from salix import FrozenInstanceError, Struct
 
 T = TypeVar("T")
 
@@ -33,13 +39,59 @@ def test_deleting_a_frozen_field_raises_like_stock_dataclasses():
     class StockFrozen:
         x: int
 
-    with pytest.raises(FrozenInstanceError) as stock:
+    with pytest.raises(dataclasses.FrozenInstanceError) as stock:
         del StockFrozen(1).x
 
     with pytest.raises(FrozenInstanceError) as ours:
         del Frozen(1).x
 
     assert str(ours.value) == str(stock.value)
+
+
+def test_the_frozen_refusal_is_salix_s_own_attribute_error():
+    with pytest.raises(AttributeError) as raised:
+        Frozen(1).x = 9
+
+    assert type(raised.value) is FrozenInstanceError
+    assert FrozenInstanceError is not dataclasses.FrozenInstanceError
+    assert FrozenInstanceError.__module__ == "salix"
+
+
+def test_a_frozen_refusal_pickles_back_to_salix_s_class():
+    with pytest.raises(FrozenInstanceError) as raised:
+        Frozen(1).x = 9
+
+    restored = pickle.loads(pickle.dumps(raised.value))
+
+    assert (type(restored), restored.args) == (FrozenInstanceError, raised.value.args)
+
+
+def test_the_first_frozen_write_imports_nothing():
+    package_parent = os.path.dirname(os.path.dirname(salix.__file__))
+    probe = (
+        "import sys\n"
+        f"sys.path.insert(0, {package_parent!r})\n"
+        "import salix\n"
+        "class Point(salix.Struct):\n"
+        "    x: int\n"
+        "point = Point(1)\n"
+        "before = set(sys.modules)\n"
+        "try:\n"
+        "    point.x = 2\n"
+        "except salix.FrozenInstanceError:\n"
+        "    print('refused')\n"
+        "print(sorted(set(sys.modules) - before))\n"
+        "print('dataclasses' in sys.modules)\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-I", "-c", probe],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=True,
+    )
+
+    assert result.stdout.split() == ["refused", "[]", "False"]
 
 
 def test_a_frozen_refusal_never_formats_a_non_str_name():

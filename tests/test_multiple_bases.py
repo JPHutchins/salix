@@ -1,9 +1,8 @@
 import weakref
-from dataclasses import FrozenInstanceError
 
 import pytest
 
-from salix import Struct
+from salix import FrozenInstanceError, Struct
 
 
 class Fieldless(Struct):

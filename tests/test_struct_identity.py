@@ -1,11 +1,10 @@
 import collections.abc
 import weakref
-from dataclasses import FrozenInstanceError
 
 import pytest
 
 import salix
-from salix import Struct
+from salix import FrozenInstanceError, Struct
 
 MIXIN = Struct.__mro__[1]
 META = type(Struct)

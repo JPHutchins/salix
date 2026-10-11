@@ -9,6 +9,7 @@ from collections.abc import Callable, Iterable
 from types import FrameType
 from typing import Any, NamedTuple, NoReturn, TypeVar, cast
 
+import salix
 from salix import Struct
 
 _T = TypeVar("_T")
@@ -1130,3 +1131,4 @@ def install(exclude_prefixes: tuple[str, ...] = (), include_prefixes: tuple[str,
     dataclasses.asdict = cast(Any, asdict)
     dataclasses.replace = cast(Any, replace)
     dataclasses.is_dataclass = cast(Any, is_dataclass)
+    vars(dataclasses)["FrozenInstanceError"] = salix.FrozenInstanceError

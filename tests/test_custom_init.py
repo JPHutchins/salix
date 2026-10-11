@@ -1,9 +1,8 @@
 import pickle
-from dataclasses import FrozenInstanceError
 
 import pytest
 
-from salix import Struct, set_field
+from salix import FrozenInstanceError, Struct, set_field
 
 
 class Generated(Struct):

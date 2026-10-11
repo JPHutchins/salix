@@ -20,6 +20,7 @@
 
 static int struct_exec(PyObject * module);
 static enum result add_struct_base(PyObject * module);
+static enum result add_frozen_instance_error(PyObject * module, struct salix_state * state);
 static PyObject * create_struct_base(PyObject * module);
 static PyObject * handoff_new(PyObject * self, PyObject * args);
 static PyObject * replace(PyObject * module, PyObject * args, PyObject * kwargs);
@@ -235,7 +236,8 @@ static int struct_exec(PyObject * const module) {
 		state == NULL ||
 		settle_cache_fill(state) != RESULT_OK ||
 		pickle_cache_fill(state) != RESULT_OK ||
-		introspection_install(module, state) != RESULT_OK
+		introspection_install(module, state) != RESULT_OK ||
+		add_frozen_instance_error(module, state) != RESULT_OK
 	) {
 		return RESULT_ERROR;
 	}
@@ -249,6 +251,36 @@ static int struct_exec(PyObject * const module) {
 	}
 
 	return add_struct_base(module);
+}
+
+static PyTypeObject FrozenInstanceError_Type = {
+	PyVarObject_HEAD_INIT(NULL, 0)
+	.tp_name = "salix.FrozenInstanceError",
+	.tp_doc = "Raised by a write to, or a delete of, a field of a frozen struct.",
+	.tp_basicsize = sizeof(PyAttributeErrorObject),
+	.tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
+};
+
+static enum result add_frozen_instance_error(
+	PyObject * const module,
+	struct salix_state * const state
+) {
+	FrozenInstanceError_Type.tp_base = (PyTypeObject *) PyExc_AttributeError;
+
+	if (PyType_Ready(&FrozenInstanceError_Type) < 0) {
+		return RESULT_ERROR;
+	}
+
+	Py_XSETREF(state->frozen_instance_error, Py_NewRef((PyObject *) &FrozenInstanceError_Type));
+
+	return (
+		PyModule_AddObjectRef(
+			module,
+			"FrozenInstanceError",
+			state->frozen_instance_error
+		) < 0 ? RESULT_ERROR :
+		RESULT_OK
+	);
 }
 
 static enum result add_struct_base(PyObject * const module) {

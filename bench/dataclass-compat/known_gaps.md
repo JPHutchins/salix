@@ -40,6 +40,11 @@ Where the shim and salix differ from stock dataclasses. CPython's own
 
 ## shim-level
 
+- `install()` rebinds `dataclasses.FrozenInstanceError` to salix's class.
+  Stock dataclasses captures the class into a frozen class's generated
+  `__setattr__` at decoration time. So a frozen dataclass decorated before
+  `install()` still raises stock's class, which then neither pickles nor
+  matches `except dataclasses.FrozenInstanceError`.
 - Decorator-level `init=False` raises `NotImplementedError` (field-level
   `init=False` is shimmed).
 - A `ClassVar` annotated without a value is left out of the class and of
