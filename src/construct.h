@@ -23,6 +23,8 @@ PyObject * Struct_set_field(PyObject * module, PyObject * arguments);
 
 PyObject * Struct_from_mapping(PyObject * module, PyObject * arguments);
 
-PyObject * struct_default_copy(PyObject * declared);
+struct salix_state;
+
+PyObject * struct_default_copy(struct salix_state * state, PyObject * declared);
 
 void defaults_free(void);

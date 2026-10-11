@@ -4,8 +4,9 @@
 #include "../owned.h"
 #include "../result.h"
 #include "../types.h"
+#include "../mixin/mixin.h"
 
-typedef PyObject * (*default_copier)(PyObject * declared);
+typedef PyObject * (*default_copier)(struct salix_state * state, PyObject * declared);
 
 static PyObject * deepcopy_function(void);
 
@@ -17,7 +18,35 @@ static PyObject * copy_declared(PyObject * const declared, PyObject * const seed
 	return PyObject_CallOneArg((PyObject *) Py_TYPE(declared), seed);
 }
 
+static PyObject * deep_copy_or_share(struct salix_state * const state, PyObject * const declared) {
+	PY_OWNED(deepcopy, deepcopy_function());
+
+	if (deepcopy == NULL) {
+		return NULL;
+	}
+
+	PY_MOVABLE(mirrored, state != NULL ? fresh_deepcopy(state, deepcopy, declared) : NULL);
+	PY_MOVABLE(
+		deep_copied,
+		mirrored != NULL || PyErr_Occurred() ? py_move(&mirrored) :
+		PyObject_CallOneArg(deepcopy, declared)
+	);
+
+	if (deep_copied != NULL) {
+		return py_move(&deep_copied);
+	}
+
+	if (!PyErr_ExceptionMatches(PyExc_TypeError)) {
+		return NULL;
+	}
+
+	PyErr_Clear();
+
+	return Py_NewRef(declared);
+}
+
 static PyObject * copy_or_base(
+	struct salix_state * const state,
 	PyObject * const declared,
 	PyObject * (* const base_copy) (PyObject *)
 ) {
@@ -28,25 +57,7 @@ static PyObject * copy_or_base(
 	}
 
 	if (size > 0) {
-		PY_OWNED(deepcopy, deepcopy_function());
-
-		if (deepcopy == NULL) {
-			return NULL;
-		}
-
-		PY_MOVABLE(deep_copied, PyObject_CallOneArg(deepcopy, declared));
-
-		if (deep_copied != NULL) {
-			return py_move(&deep_copied);
-		}
-
-		if (!PyErr_ExceptionMatches(PyExc_TypeError)) {
-			return NULL;
-		}
-
-		PyErr_Clear();
-
-		return Py_NewRef(declared);
+		return deep_copy_or_share(state, declared);
 	}
 
 	PY_MOVABLE(seed, base_copy(declared));
@@ -70,20 +81,23 @@ static PyObject * copy_or_base(
 	return base_copy(declared);
 }
 
-static PyObject * copy_list_or_base(PyObject * const declared) {
-	return copy_or_base(declared, copy_list);
+static PyObject * copy_list_or_base(struct salix_state * const state, PyObject * const declared) {
+	return copy_or_base(state, declared, copy_list);
 }
 
-static PyObject * copy_dict_or_base(PyObject * const declared) {
-	return copy_or_base(declared, PyDict_Copy);
+static PyObject * copy_dict_or_base(struct salix_state * const state, PyObject * const declared) {
+	return copy_or_base(state, declared, PyDict_Copy);
 }
 
-static PyObject * copy_set_or_base(PyObject * const declared) {
-	return copy_or_base(declared, PySet_New);
+static PyObject * copy_set_or_base(struct salix_state * const state, PyObject * const declared) {
+	return copy_or_base(state, declared, PySet_New);
 }
 
-static PyObject * copy_bytearray_or_base(PyObject * const declared) {
-	return copy_or_base(declared, PyByteArray_FromObject);
+static PyObject * copy_bytearray_or_base(
+	struct salix_state * const state,
+	PyObject * const declared
+) {
+	return copy_or_base(state, declared, PyByteArray_FromObject);
 }
 
 static default_copier copies_default(PyTypeObject * const kind) {
@@ -166,11 +180,11 @@ static enum default_probe probe_default(PyObject * const declared) {
 	return DEFAULT_PROBE_DEEPCOPY;
 }
 
-PyObject * struct_default_copy(PyObject * const declared) {
+PyObject * struct_default_copy(struct salix_state * const state, PyObject * const declared) {
 	default_copier const copy = copies_default(Py_TYPE(declared));
 
 	if (copy != NULL) {
-		return copy(declared);
+		return copy(state, declared);
 	}
 
 	switch (probe_default(declared)) {
@@ -182,25 +196,7 @@ PyObject * struct_default_copy(PyObject * const declared) {
 			return NULL;
 	}
 
-	PY_OWNED(deepcopy, deepcopy_function());
-
-	if (deepcopy == NULL) {
-		return NULL;
-	}
-
-	PY_MOVABLE(copied, PyObject_CallOneArg(deepcopy, declared));
-
-	if (copied != NULL) {
-		return py_move(&copied);
-	}
-
-	if (!PyErr_ExceptionMatches(PyExc_TypeError)) {
-		return NULL;
-	}
-
-	PyErr_Clear();
-
-	return Py_NewRef(declared);
+	return deep_copy_or_share(state, declared);
 }
 
 PyObject * Struct_set_field(PyObject * const module, PyObject * const arguments) {

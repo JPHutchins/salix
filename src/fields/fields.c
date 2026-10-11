@@ -1450,7 +1450,7 @@ static PyObject * build_defaults(PyObject * const all_names, PyObject * const de
 			return NULL;
 		}
 
-		PyObject * const stored = struct_default_copy(value);
+		PyObject * const stored = struct_default_copy(NULL, value);
 
 		if (stored == NULL) {
 			Py_DECREF(defaults);

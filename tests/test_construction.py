@@ -1,3 +1,6 @@
+import copy
+import copyreg
+
 import pytest
 from values import COPIED_WHEN_EMPTY, NON_EMPTY
 
@@ -693,3 +696,146 @@ class TestMutableDefaults:
         first.xs.append(1)
 
         assert second.xs == []
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param([1, "two", 3.0, None, b"four"], id="a_list_of_atoms"),
+            pytest.param({"a": 1, 2: "b", None: 3.0}, id="a_dict_of_atoms"),
+            pytest.param({1, "two", 3.0}, id="a_set_of_atoms"),
+            pytest.param([int, Point], id="a_list_of_classes"),
+            pytest.param([1, (2, [3])], id="a_list_holding_a_tuple"),
+            pytest.param({"k": [1]}, id="a_dict_holding_a_list"),
+        ],
+    )
+    def test_a_default_copy_equals_what_copy_deepcopy_returns(self, value):
+        class Holder(Struct):
+            v: object = value
+
+        first, second = Holder(), Holder()
+
+        assert first.v is not second.v
+        assert type(first.v) is type(value)
+        assert first.v == copy.deepcopy(value)
+
+    def test_an_inner_list_of_a_dict_default_is_not_shared(self):
+        class Holder(Struct):
+            v: dict = {"k": [1]}  # noqa: RUF012
+
+        first, second = Holder(), Holder()
+        first.v["k"].append(2)
+
+        assert second.v == {"k": [1]}
+
+    def test_a_set_default_iterates_in_the_order_copy_deepcopy_gives(self):
+        class Holder(Struct):
+            v: set = {0}  # noqa: RUF012
+
+        stored = Holder._struct_defaults_[0]
+        stored |= set(range(40))
+        stored -= set(range(0, 40, 3))
+        stored |= {64, 100, 128}
+
+        assert list(Holder().v) == list(copy.deepcopy(stored))
+
+    @pytest.mark.parametrize("kind", [list, dict], ids=lambda kind: kind.__name__)
+    def test_a_registered_dispatch_copier_copies_the_default(self, kind, monkeypatch):
+        class Holder(Struct):
+            v: object = kind([("a", 1)]) if kind is dict else kind([1])
+
+        monkeypatch.setitem(copy._deepcopy_dispatch, kind, lambda value, memo: kind())
+
+        assert Holder().v == kind()
+
+    def test_a_registered_reductor_copies_a_set_default(self, monkeypatch):
+        class Holder(Struct):
+            v: set = {1, 2}  # noqa: RUF012
+
+        monkeypatch.setitem(copyreg.dispatch_table, set, lambda value: (frozenset, (list(value),)))
+
+        assert type(Holder().v) is frozenset
+
+    def test_a_struct_default_holding_a_list_is_copied_deeply(self):
+        class Inner(Struct):
+            values: list = [1, 2, 3]  # noqa: RUF012
+
+        class Holder(Struct):
+            inner: Inner = Inner()
+
+        first, second = Holder(), Holder()
+
+        assert first.inner == second.inner == Inner()
+        assert first.inner is not second.inner
+        assert first.inner.values is not second.inner.values
+
+    def test_a_struct_default_with_its_own_deepcopy_is_copied_by_it(self):
+        calls: list[object] = []
+
+        class Hooked(Struct):
+            values: list
+
+            def __deepcopy__(self, memo: dict) -> "Hooked":
+                calls.append(self)
+                return Hooked(list(self.values))
+
+        class Holder(Struct):
+            inner: Hooked = Hooked([1])
+
+        calls.clear()
+        Holder()
+
+        assert len(calls) == 1
+
+    def test_a_struct_default_whose_getattribute_sees_the_lookup_is_copied_through_it(self):
+        looked_up: list[str] = []
+
+        class Watched(Struct):
+            values: list
+
+            def __getattribute__(self, name: str) -> object:
+                looked_up.append(name)
+                return object.__getattribute__(self, name)
+
+        class Holder(Struct):
+            inner: Watched = Watched([1])
+
+        looked_up.clear()
+        Holder()
+
+        assert "__deepcopy__" in looked_up
+
+    def test_a_struct_default_with_an_instance_hook_is_copied_by_it(self):
+        class Dicted:
+            pass
+
+        class WithDict(Struct, Dicted):
+            values: list
+
+        class Holder(Struct):
+            inner: WithDict = WithDict([1])
+
+        vars(Holder._struct_defaults_[0])["__deepcopy__"] = lambda memo: "from the instance"
+
+        assert Holder().inner == "from the instance"
+
+    def test_a_struct_default_with_a_registered_copier_is_copied_by_it(self, monkeypatch):
+        class Inner(Struct):
+            values: list
+
+        class Holder(Struct):
+            inner: Inner = Inner([1])
+
+        monkeypatch.setitem(copy._deepcopy_dispatch, Inner, lambda value, memo: "registered")
+
+        assert Holder().inner == "registered"
+
+    def test_a_hashable_mutable_inside_a_set_default_is_not_shared(self):
+        class Token:
+            pass
+
+        class Holder(Struct):
+            v: set = {Token()}  # noqa: RUF012
+
+        first, second = Holder(), Holder()
+
+        assert next(iter(first.v)) is not next(iter(second.v))
