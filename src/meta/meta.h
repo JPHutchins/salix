@@ -104,10 +104,20 @@ enum pickle_cached {
 	PICKLE_CACHED_COUNT,
 };
 
+enum copy_cached {
+	COPY_SHALLOW_HOOK_NAME,
+	COPY_DEEP_HOOK_NAME,
+	COPY_DEEPCOPY_NAME,
+	COPY_DISPATCH_TABLE_NAME,
+	COPY_CACHED_COUNT,
+};
+
 struct salix_state {
 	PyObject * mixin_bindings[SETTLE_BINDING_COUNT];
 	PyObject * object_bindings[SETTLE_BINDING_COUNT];
 	PyObject * pickle_cache[PICKLE_CACHED_COUNT];
+	PyObject * copy_cache[COPY_CACHED_COUNT];
+	PyObject * copy_module;
 	PyObject * handoff_attempt;
 	PyObject * handoff_declined;
 	PyObject * handoff_new;

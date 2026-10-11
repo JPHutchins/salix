@@ -303,7 +303,7 @@ PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) {
 	if (!is_struct(self)) {
 		PY_MOVABLE(
 			delegated,
-			copy_delegate(self, memo, memo, "__deepcopy__", "un(deep)copyable", true)
+			copy_delegate(self, memo, memo, COPY_DEEP_HOOK_NAME, "un(deep)copyable", true)
 		);
 
 		if (delegated == NULL || (delegated != self && PyDict_SetItem(memo, key, delegated) < 0)) {
@@ -326,7 +326,7 @@ PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) {
 	PY_MOVABLE(copier, NULL);
 	PY_MOVABLE(
 		deferred,
-		copy_dispatch_prologue(self, "__deepcopy__", memo, true, &copy_module, &copier)
+		copy_dispatch_prologue(self, COPY_DEEP_HOOK_NAME, memo, true, &copy_module, &copier)
 	);
 
 	if (deferred != NULL) {
@@ -369,7 +369,10 @@ PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) {
 		return py_move(&short_circuit);
 	}
 
-	PY_OWNED(deepcopy, PyObject_GetAttrString(copy_module, "deepcopy"));
+	PY_OWNED(
+		deepcopy,
+		PyObject_GetAttr(copy_module, type->struct_state->copy_cache[COPY_DEEPCOPY_NAME])
+	);
 
 	if (deepcopy == NULL) {
 		return memo_failure(memo, key);
