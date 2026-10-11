@@ -1,9 +1,8 @@
-from dataclasses import FrozenInstanceError
 from typing import Annotated, ClassVar
 
 import pytest
 
-from salix import Struct
+from salix import FrozenInstanceError, Struct
 
 SALIX = ("_struct_fields_", "_struct_defaults_", "_struct_annotations_", "_struct_metadata_")
 MSGSPEC = ("__struct_fields__", "__struct_defaults__", "__struct_annotations__", "__struct_metadata__")

@@ -460,43 +460,6 @@ int Struct_set_signature(PyObject * const self, PyObject * const value, void * c
 	return 0;
 }
 
-static PyObject * frozen_instance_error(StructType const * const type) {
-	PyObject * const cached = type->struct_state->frozen_instance_error;
-
-	if (cached != NULL) {
-		return cached;
-	}
-
-	PY_OWNED(module, PyImport_ImportModule("dataclasses"));
-
-	if (module == NULL) {
-		if (
-			!PyErr_ExceptionMatches(PyExc_ImportError) &&
-			!PyErr_ExceptionMatches(PyExc_AttributeError)
-		) {
-			return NULL;
-		}
-
-		PyErr_Clear();
-
-		return NULL;
-	}
-
-	PY_OWNED(resolved, optional_attribute(module, "FrozenInstanceError"));
-
-	if (resolved == NULL || !PyExceptionClass_Check(resolved)) {
-		return NULL;
-	}
-
-	STRUCT_BEGIN_CRITICAL_SECTION(module);
-		if (type->struct_state->frozen_instance_error == NULL) {
-			type->struct_state->frozen_instance_error = Py_NewRef(resolved);
-		}
-	STRUCT_END_CRITICAL_SECTION();
-
-	return type->struct_state->frozen_instance_error;
-}
-
 static PyObject * Struct_set_attribute(
 	PyObject * const self,
 	PyObject * const * const arguments,
@@ -629,21 +592,13 @@ static int assign_attribute(PyObject * const self, PyObject * const name, PyObje
 	}
 
 	if (PyUnicode_Check(name)) {
-		PyObject * const frozen_error = frozen_instance_error(struct_type_of(self));
+		PyErr_Format(
+			struct_type_of(self)->struct_state->frozen_instance_error,
+			value == NULL ? "cannot delete field %R" : "cannot assign to field %R",
+			name
+		);
 
-		if (frozen_error != NULL) {
-			PyErr_Format(
-				frozen_error,
-				value == NULL ? "cannot delete field %R" : "cannot assign to field %R",
-				name
-			);
-
-			return RESULT_ERROR;
-		}
-
-		if (PyErr_Occurred()) {
-			return RESULT_ERROR;
-		}
+		return RESULT_ERROR;
 	}
 
 	PyErr_Format(
@@ -692,18 +647,16 @@ static PyObject * Struct_get_metadata_as_msgspec(PyObject * const self, void * c
 
 #	include "testing.h"
 
-static void test_the_frozen_error_resolution_caches_the_stock_class(void) {
+static void test_the_frozen_error_is_salix_s_own_attribute_error(void) {
 	PyObject * const instance = testing_frozen_empty_instance();
-	StructType const * const type = struct_type_of(instance);
-	PyObject * const first = frozen_instance_error(type);
-	PyObject * const second = frozen_instance_error(type);
+	PyObject * const frozen_error = struct_type_of(instance)->struct_state->frozen_instance_error;
 
-	TEST_ASSERT_NOT_NULL(first);
-	TEST_ASSERT_TRUE(PyExceptionClass_Check(first));
-	TEST_ASSERT_EQUAL_PTR(first, second);
+	TEST_ASSERT_NOT_NULL(frozen_error);
+	TEST_ASSERT_TRUE(PyExceptionClass_Check(frozen_error));
 	TEST_ASSERT_TRUE(
-		PyType_IsSubtype((PyTypeObject *) first, (PyTypeObject *) PyExc_AttributeError)
+		PyType_IsSubtype((PyTypeObject *) frozen_error, (PyTypeObject *) PyExc_AttributeError)
 	);
+	TEST_ASSERT_EQUAL_STRING("salix.FrozenInstanceError", ((PyTypeObject *) frozen_error)->tp_name);
 
 	Py_DECREF(instance);
 }
@@ -711,7 +664,7 @@ static void test_the_frozen_error_resolution_caches_the_stock_class(void) {
 void mixin_tests(void) {
 	Unity.TestFile = __FILE__;
 
-	RUN_TEST(test_the_frozen_error_resolution_caches_the_stock_class);
+	RUN_TEST(test_the_frozen_error_is_salix_s_own_attribute_error);
 }
 
 #endif

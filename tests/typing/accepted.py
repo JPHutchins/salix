@@ -3,7 +3,16 @@ from typing import Any, ClassVar, Generic, Literal, Protocol, TypeVar
 
 from typing_extensions import assert_type
 
-from salix import MISSING, Field, Struct, fields, from_mapping, replace, set_field
+from salix import (
+    MISSING,
+    Field,
+    FrozenInstanceError,
+    Struct,
+    fields,
+    from_mapping,
+    replace,
+    set_field,
+)
 
 
 class Point(Struct):
@@ -162,6 +171,13 @@ def fields_reads_records_from_a_class_or_an_instance() -> None:
     assert_type(fields(Point)[0].annotated_metadata, tuple[Any, ...])
     assert_type(fields(Point)[0].__replace__(name="renamed"), Field)
     assert_type(fields(Point)[0].default is MISSING, bool)
+
+
+def the_frozen_refusal_is_an_attribute_error() -> None:
+    def handles(refusal: AttributeError) -> str:
+        return str(refusal)
+
+    assert_type(handles(FrozenInstanceError("cannot assign to field 'x'")), str)
 
 
 def __copy___returns_the_concrete_struct_type() -> None:
