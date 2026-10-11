@@ -79,7 +79,7 @@ def test_the_first_frozen_write_imports_nothing():
         "try:\n"
         "    point.x = 2\n"
         "except salix.FrozenInstanceError:\n"
-        "    pass\n"
+        "    print('refused')\n"
         "print(sorted(set(sys.modules) - before))\n"
     )
     result = subprocess.run(
@@ -90,7 +90,7 @@ def test_the_first_frozen_write_imports_nothing():
         check=True,
     )
 
-    assert result.stdout.strip() == "[]"
+    assert result.stdout.split() == ["refused", "[]"]
 
 
 def test_a_frozen_refusal_never_formats_a_non_str_name():

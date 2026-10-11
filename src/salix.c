@@ -256,6 +256,7 @@ static int struct_exec(PyObject * const module) {
 static PyTypeObject FrozenInstanceError_Type = {
 	PyVarObject_HEAD_INIT(NULL, 0)
 	.tp_name = "salix.FrozenInstanceError",
+	.tp_doc = "Raised by a write to, or a delete of, a field of a frozen struct.",
 	.tp_basicsize = sizeof(PyAttributeErrorObject),
 	.tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
 };
