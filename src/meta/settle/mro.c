@@ -47,7 +47,10 @@ static enum result refuse_a_rebound_name(
 	return RESULT_ERROR;
 }
 
-enum result refuse_rebound_class_names(StructType * const struct_class) {
+enum result refuse_rebound_class_names(
+	StructType * const struct_class,
+	PyObject * const declared_annotations
+) {
 	PyTypeObject * const created = (PyTypeObject *) struct_class;
 	PyObject * const field_names = struct_class->struct_field_names;
 	PyObject * const class_var_positions = struct_class->struct_class_var_positions;
@@ -85,11 +88,22 @@ enum result refuse_rebound_class_names(StructType * const struct_class) {
 			class_var_name
 		);
 
-		if (entry.tag == CLASS_ENTRY_ERROR) {
+		int const declared_here = (
+			entry.tag == CLASS_ENTRY_ERROR ? -1 :
+			PyDict_Contains(declared_annotations, class_var_name)
+		);
+
+		if (declared_here < 0) {
 			return RESULT_ERROR;
 		}
 
-		if (entry.tag != CLASS_ENTRY_CLASS_VAR || entry.value != PyTuple_GET_ITEM(position, 2)) {
+		bool const owned_here = entry.owner == created;
+		bool const holds_its_value = entry.value == PyTuple_GET_ITEM(position, 2);
+
+		if (
+			entry.tag != CLASS_ENTRY_CLASS_VAR ||
+			(declared_here ? !owned_here || !holds_its_value : owned_here && !holds_its_value)
+		) {
 			return refuse_a_rebound_name(
 				created,
 				class_var_name,

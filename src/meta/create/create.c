@@ -316,7 +316,7 @@ PyObject * build_struct_class(
 			if (
 				defines_hash < 0 ||
 				defines_setattr < 0 ||
-				refuse_rebound_class_names(struct_class) != RESULT_OK
+				refuse_rebound_class_names(struct_class, plan.declared_annotations) != RESULT_OK
 			) {
 				Py_CLEAR(struct_class);
 			} else {

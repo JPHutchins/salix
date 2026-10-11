@@ -1342,6 +1342,40 @@ class TestFieldsReboundDuringClassCreation:
             class Sub(Base):
                 limit: ClassVar[int] = 2
 
+    def test_a_hook_deleting_a_redeclaration_equal_to_the_base_s_value_is_refused(self) -> None:
+        class Base(Struct):
+            limit: ClassVar[int] = 1
+
+            def __init_subclass__(cls, **keywords: object) -> None:
+                super().__init_subclass__(**keywords)
+                del cls.limit
+
+        with pytest.raises(TypeError, match=r"Sub\.limit does not reach its ClassVar's value"):
+
+            class Sub(Base):
+                limit: ClassVar[int] = 1
+
+    def test_a_diamond_reaching_a_sibling_s_class_var_refinement_builds_in_either_order(
+        self,
+    ) -> None:
+        class Root(Struct):
+            x: int = 1
+            limit: ClassVar[int] = 1
+
+        class PassThrough(Root):
+            pass
+
+        class Refining(Root):
+            limit: ClassVar[int] = 5
+
+        class PassThroughFirst(PassThrough, Refining):
+            pass
+
+        class RefiningFirst(Refining, PassThrough):
+            pass
+
+        assert (PassThroughFirst.limit, RefiningFirst.limit) == (5, 5)
+
     def test_a_hook_rebinding_a_field_to_its_own_descriptor_builds(self) -> None:
         class Base(Struct):
             y: int = 0
