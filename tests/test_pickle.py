@@ -93,6 +93,42 @@ def round_trip(value: object, protocol: int = pickle.HIGHEST_PROTOCOL) -> object
     return pickle.loads(pickle.dumps(value, protocol))
 
 
+def all_unset_mutable() -> Mutable:
+    instance = Mutable(1)
+    del instance.x
+    del instance.y
+
+    return instance
+
+
+@pytest.mark.parametrize(
+    "instance",
+    [
+        Frozen(1),
+        Frozen(1, None),
+        Nested(Frozen(1)),
+        Seeded(3),
+        Mutable(1),
+        all_unset_mutable(),
+    ],
+    ids=["frozen", "none-value", "nested", "init-var", "mutable", "all-unset"],
+)
+def test_a_plain_struct_reduces_exactly_as_object_does(instance: Struct) -> None:
+    assert instance.__reduce_ex__(4) == object.__reduce_ex__(instance, 4)
+
+
+def test_a_getstate_hook_still_shapes_the_reduced_state() -> None:
+    assert Stateful(3).__reduce_ex__(4)[2] == {"doubled": 6}
+    assert round_trip(Stateful(3)) == Stateful(6)
+
+
+def test_a_state_naming_a_slot_beyond_the_fields_restores_through_the_slot() -> None:
+    restored = CoBase.__new__(CoBase)
+    restored.__setstate__((None, {"x": 5, "extra": "kept"}))
+
+    assert (restored.x, restored.extra) == (5, "kept")
+
+
 @pytest.mark.parametrize("protocol", PROTOCOLS)
 def test_a_frozen_struct_round_trips(protocol: int) -> None:
     first = object()
