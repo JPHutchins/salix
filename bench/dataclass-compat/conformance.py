@@ -53,7 +53,7 @@ def failure_outcome(test_id: str, status: Status, error: ExceptionInformation) -
     return Outcome(
         test_id,
         status,
-        "" if error[0] is None else error[0].__name__,
+        "" if error[0] is None else f"{error[0].__module__}.{error[0].__qualname__}",
         "" if error[1] is None else next(iter(str(error[1]).splitlines()), ""),
     )
 
