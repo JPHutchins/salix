@@ -97,8 +97,8 @@ static PyMemberDef Field_members[] = {
 
 static_assert(sizeof Field_members / sizeof Field_members[0] == FIELD_ATTRIBUTE_COUNT + 1);
 
-static PyObject * * field_slot(PyObject * const field, PyMemberDef const * const member) {
-	return (PyObject * *) ((char *) field + member->offset);
+static PyObject * * field_slot(PyObject * const field, Py_ssize_t const offset) {
+	return (PyObject * *) ((char *) field + offset);
 }
 
 static PyObject * field_new(PyObject * const attributes[static FIELD_ATTRIBUTE_COUNT]) {
@@ -144,34 +144,31 @@ static void Field_dealloc(PyObject * const self) {
 }
 
 static PyObject * Field_repr(PyObject * const self) {
-	PY_OWNED(parts, PyList_New(0));
+	PY_OWNED(parts, PyList_New(FIELD_ATTRIBUTE_COUNT));
 
 	if (parts == NULL) {
 		return NULL;
 	}
 
-	for (PyMemberDef const * member = Field_members; member->name != NULL; member += 1) {
-		PY_OWNED(part, PyUnicode_FromFormat("%s=%R", member->name, *field_slot(self, member)));
+	for (Py_ssize_t index = 0; index < FIELD_ATTRIBUTE_COUNT; index += 1) {
+		PyMemberDef const * const member = &Field_members[index];
+		PyObject * const part = PyUnicode_FromFormat(
+			"%s=%R",
+			member->name,
+			*field_slot(self, member->offset)
+		);
 
-		if (part == NULL || PyList_Append(parts, part) < 0) {
+		if (part == NULL) {
 			return NULL;
 		}
+
+		PyList_SET_ITEM(parts, index, part);
 	}
 
 	PY_OWNED(separator, PyUnicode_FromString(", "));
 	PY_OWNED(joined, separator != NULL ? PyUnicode_Join(separator, parts) : NULL);
 
 	return joined != NULL ? PyUnicode_FromFormat("Field(%U)", joined) : NULL;
-}
-
-static PyMemberDef const * field_member_named(PyObject * const name) {
-	for (PyMemberDef const * member = Field_members; member->name != NULL; member += 1) {
-		if (PyUnicode_CompareWithASCIIString(name, member->name) == 0) {
-			return member;
-		}
-	}
-
-	return NULL;
 }
 
 static PyObject * Field_replace(
@@ -200,19 +197,26 @@ static PyObject * Field_replace(
 
 	for (Py_ssize_t change = 0; change < change_count; change += 1) {
 		PyObject * const name = PyTuple_GET_ITEM(keyword_names, change);
-		PyMemberDef const * const member = field_member_named(name);
+		struct member_lookup const lookup = find_member(Field_members, FIELD_ATTRIBUTE_COUNT, name);
 
-		if (member == NULL) {
-			PyErr_Format(
-				PyExc_TypeError,
-				"Field.__replace__() got an unexpected keyword argument '%U'",
-				name
-			);
+		switch (lookup.tag) {
+			case MEMBER_LOOKUP_ERROR:
+				return NULL;
+			case MEMBER_LOOKUP_MISSING:
+				PyErr_Format(
+					PyExc_TypeError,
+					"Field.__replace__() got an unexpected keyword argument '%U'",
+					name
+				);
 
-			return NULL;
+				return NULL;
+			case MEMBER_LOOKUP_FOUND:
+				Py_SETREF(
+					*field_slot(replaced, lookup.slot_offset),
+					Py_NewRef(arguments[nargs + change])
+				);
+				break;
 		}
-
-		Py_SETREF(*field_slot(replaced, member), Py_NewRef(arguments[nargs + change]));
 	}
 
 	return py_move(&replaced);
@@ -293,13 +297,6 @@ static PyObject * field_records_of(StructType const * const type) {
 	struct salix_state const * const state = type->struct_state;
 	Py_ssize_t const count = PyTuple_GET_SIZE(type->struct_field_names);
 	Py_ssize_t const required = count - PyTuple_GET_SIZE(type->struct_defaults);
-
-	if (state == NULL) {
-		PyErr_SetString(PyExc_SystemError, "a struct class with fields has no module state");
-
-		return NULL;
-	}
-
 	PY_MOVABLE(records, PyTuple_New(count));
 
 	if (records == NULL) {
@@ -336,31 +333,6 @@ static PyObject * field_records_of(StructType const * const type) {
 	return py_move(&records);
 }
 
-static PyObject * cached_field_records(StructType * const type) {
-	PyObject * cached = NULL;
-
-	STRUCT_BEGIN_CRITICAL_SECTION(type);
-	cached = Py_XNewRef(type->struct_field_records);
-	STRUCT_END_CRITICAL_SECTION();
-
-	return cached;
-}
-
-static PyObject * stored_field_records(StructType * const type, PyObject * const records) {
-	PyObject * stored = NULL;
-
-	STRUCT_BEGIN_CRITICAL_SECTION(type);
-
-	if (type->struct_field_records == NULL) {
-		type->struct_field_records = Py_NewRef(records);
-	}
-
-	stored = Py_NewRef(type->struct_field_records);
-	STRUCT_END_CRITICAL_SECTION();
-
-	return stored;
-}
-
 PyObject * Struct_fields(PyObject * const module, PyObject * const class_or_instance) {
 	PyObject * const struct_class = (
 		is_struct_class(class_or_instance) ? class_or_instance :
@@ -371,7 +343,10 @@ PyObject * Struct_fields(PyObject * const module, PyObject * const class_or_inst
 	if (struct_class == NULL) {
 		PyErr_Format(
 			PyExc_TypeError,
-			"fields() expects a struct class or instance, not %.200s",
+			PyType_Check(class_or_instance) ?
+			"fields() expects a struct class or instance, not the class %.200s" :
+			"fields() expects a struct class or instance, not an instance of %.200s",
+			PyType_Check(class_or_instance) ? ((PyTypeObject *) class_or_instance)->tp_name :
 			Py_TYPE(class_or_instance)->tp_name
 		);
 
@@ -380,17 +355,33 @@ PyObject * Struct_fields(PyObject * const module, PyObject * const class_or_inst
 
 	StructType * const type = (StructType *) struct_class;
 
+	if (!struct_class_created(type)) {
+		PyErr_Format(
+			PyExc_TypeError,
+			"fields() cannot read '%.200s' until its class has finished being created",
+			struct_type_name(type)
+		);
+
+		return NULL;
+	}
+
 	if (type->struct_field_names == NULL) {
 		return PyTuple_New(0);
 	}
 
-	PyObject * const cached = cached_field_records(type);
+	PyObject * records = NULL;
 
-	if (cached != NULL) {
-		return cached;
+	STRUCT_BEGIN_CRITICAL_SECTION(type);
+	records = (
+		type->struct_field_records != NULL ? Py_NewRef(type->struct_field_records) :
+		field_records_of(type)
+	);
+
+	if (records != NULL && type->struct_field_records == NULL) {
+		type->struct_field_records = Py_NewRef(records);
 	}
 
-	PY_OWNED(records, field_records_of(type));
+	STRUCT_END_CRITICAL_SECTION();
 
-	return records != NULL ? stored_field_records(type, records) : NULL;
+	return records;
 }

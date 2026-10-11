@@ -131,6 +131,34 @@ def test_anything_but_a_struct_class_or_instance_is_refused(not_a_struct: object
         fields(not_a_struct)  # type: ignore[arg-type]
 
 
+def test_the_refusal_names_the_class_or_the_instance_s_type():
+    with pytest.raises(TypeError, match=r"not the class int$"):
+        fields(int)  # type: ignore[arg-type]
+
+    with pytest.raises(TypeError, match=r"not an instance of int$"):
+        fields(1)  # type: ignore[arg-type]
+
+
+def test_a_hook_reading_fields_during_class_creation_is_refused_and_caches_nothing():
+    refusals: list[str] = []
+
+    class Base(Struct):
+        def __init_subclass__(cls, **keywords: object) -> None:
+            super().__init_subclass__(**keywords)
+
+            try:
+                fields(cls)
+            except TypeError as refusal:
+                refusals.append(str(refusal))
+
+    class Late(Base):
+        x: int
+        y: str = "y"
+
+    assert refusals == ["fields() cannot read 'Late' until its class has finished being created"]
+    assert [(record.name, record.default) for record in fields(Late)] == [("x", MISSING), ("y", "y")]
+
+
 def test_a_generic_field_reads_its_type_variable():
     assert fields(Ok)[0].type is T
 
@@ -199,10 +227,12 @@ def test_the_repr_names_every_attribute_in_order():
 
 
 def test_records_read_inside_a_delegate_do_not_outlive_the_settle():
+    read_before_the_settle: list[list[object]] = []
+
     class Reading(META):
         def __new__(metacls, name, bases, namespace, **keywords):
             built = super().__new__(metacls, name, bases, namespace, **keywords)
-            fields(built)
+            read_before_the_settle.append([record.default for record in fields(built)])
 
             return built
 
@@ -211,6 +241,7 @@ def test_records_read_inside_a_delegate_do_not_outlive_the_settle():
 
     built = META("Built", (Base,), {"__annotations__": {"y": int}, "y": 42})
 
+    assert read_before_the_settle[-1] == [MISSING, MISSING]
     assert [record.default for record in fields(built)] == [MISSING, 42]
 
 
@@ -225,6 +256,30 @@ def test_a_class_its_records_reach_back_to_is_collected():
     gc.collect()
 
     assert collected() is None
+
+
+def test_fields_still_answer_after_the_module_leaves_sys_modules():
+    package_parent = os.path.dirname(os.path.dirname(salix.__file__))
+    probe = (
+        "import gc, sys\n"
+        f"sys.path.insert(0, {package_parent!r})\n"
+        "import salix\n"
+        "fields, missing = salix.fields, salix.MISSING\n"
+        "class Point(salix.Struct):\n"
+        "    x: int\n"
+        "del sys.modules['salix'], salix\n"
+        "gc.collect()\n"
+        "print(fields(Point)[0].default is missing)\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-I", "-c", probe],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=True,
+    )
+
+    assert result.stdout.strip() == "True"
 
 
 def test_reading_fields_imports_nothing():

@@ -294,10 +294,12 @@ def test_struct_meta_has_a_docstring():
 
 
 def test_a_signature_read_inside_a_delegate_does_not_outlive_the_settle():
+    read_before_the_settle: list[inspect.Parameter | None] = []
+
     class Reading(type(Struct)):
         def __new__(metacls, name, bases, namespace, **keywords):
             built = super().__new__(metacls, name, bases, namespace, **keywords)
-            inspect.signature(built)
+            read_before_the_settle.append(inspect.signature(built).parameters.get("y"))
 
             return built
 
@@ -306,4 +308,21 @@ def test_a_signature_read_inside_a_delegate_does_not_outlive_the_settle():
 
     built = type(Struct)("Built", (Base,), {"__annotations__": {"y": int}, "y": 42})
 
+    assert read_before_the_settle[-1] is not None
+    assert read_before_the_settle[-1].default is inspect.Parameter.empty
     assert inspect.signature(built).parameters["y"].default == 42
+
+
+def test_a_signature_read_by_a_hook_during_class_creation_is_not_cached():
+    class Base(Struct):
+        def __init_subclass__(cls, **keywords: object) -> None:
+            super().__init_subclass__(**keywords)
+
+            with pytest.raises(AttributeError, match="until its class has finished being created"):
+                _ = cls.__signature__
+
+    class Late(Base):
+        x: int
+        y: str = "y"
+
+    assert str(inspect.signature(Late)) == "(x: int, y: str = 'y')"

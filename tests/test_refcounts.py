@@ -502,13 +502,15 @@ def test_from_mapping_takes_one_reference_per_field_and_releases_them_with_the_i
 def test_fields_holds_a_default_once_however_often_it_is_read():
     sentinel = Sentinel()
     built = type(Struct)("Held", (Struct,), {"__annotations__": {"value": object}, "value": sentinel})
-    fields(built)
     before = sys.getrefcount(sentinel)
+    first = fields(built)
 
-    for _ in range(100):
-        fields(built)
+    assert sys.getrefcount(sentinel) == before + 1
 
-    assert sys.getrefcount(sentinel) == before
+    second = fields(built)
+
+    assert second is first
+    assert sys.getrefcount(sentinel) == before + 1
 
 
 def test_a_replaced_field_releases_what_it_took():

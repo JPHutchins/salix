@@ -133,6 +133,82 @@ static PyObject * metadata_of(
 	return NULL;
 }
 
+static PyObject * signature_from_tables(
+	StructType const * const type,
+	PyObject * const parameter_type,
+	PyObject * const signature_type,
+	PyObject * const kind,
+	PyObject * const empty
+) {
+	PY_OWNED(parameters, PyList_New(struct_parameter_count(type)));
+
+	if (parameters == NULL) {
+		return NULL;
+	}
+
+	Py_ssize_t const required_count = struct_required_count(type);
+	Py_ssize_t const required_init_var_count = struct_required_init_var_count(type);
+	Py_ssize_t field_index = 0;
+	Py_ssize_t init_var_index = 0;
+
+	for (Py_ssize_t position = 0; position < struct_parameter_count(type); position += 1) {
+		bool const init_var = struct_parameter_kind(type, position) == PARAMETER_INIT_VAR;
+		Py_ssize_t const index = init_var ? init_var_index : field_index;
+		Py_ssize_t const required = init_var ? required_init_var_count : required_count;
+		PY_OWNED(
+			arguments,
+			PyTuple_Pack(
+				2,
+				PyTuple_GET_ITEM(
+					init_var ? type->struct_init_var_names : type->struct_field_names,
+					index
+				),
+				kind
+			)
+		);
+		PY_OWNED(keywords, PyDict_New());
+
+		if (
+			arguments == NULL ||
+			keywords == NULL ||
+			(
+				PyDict_SetItemString(
+					keywords,
+					"default",
+					index < required ? empty : PyTuple_GET_ITEM(
+						init_var ? type->struct_init_var_defaults : type->struct_defaults,
+						index - required
+					)
+				) < 0
+			) ||
+			(
+				PyDict_SetItemString(
+					keywords,
+					"annotation",
+					PyTuple_GET_ITEM(
+						init_var ? type->struct_init_var_annotations : type->struct_annotations,
+						index
+					)
+				) < 0
+			)
+		) {
+			return NULL;
+		}
+
+		PY_MOVABLE(parameter, PyObject_Call(parameter_type, arguments, keywords));
+
+		if (parameter == NULL) {
+			return NULL;
+		}
+
+		PyList_SET_ITEM(parameters, position, py_move(&parameter));
+		init_var_index += init_var ? 1 : 0;
+		field_index += init_var ? 0 : 1;
+	}
+
+	return PyObject_CallOneArg(signature_type, parameters);
+}
+
 PyObject * Struct_get_signature(PyObject * const self, void * const closure) {
 	StructType * type;
 
@@ -183,6 +259,16 @@ PyObject * Struct_get_signature(PyObject * const self, void * const closure) {
 		Py_DECREF(own_binding);
 	}
 	if (PyErr_Occurred()) {
+		return NULL;
+	}
+
+	if (!struct_class_created(type)) {
+		PyErr_Format(
+			PyExc_AttributeError,
+			"the signature of '%.200s' cannot be read until its class has finished being created",
+			struct_type_name(type)
+		);
+
 		return NULL;
 	}
 
@@ -283,8 +369,14 @@ PyObject * Struct_get_signature(PyObject * const self, void * const closure) {
 		}
 	}
 
-	if (type->struct_signature != NULL) {
-		return Py_NewRef(type->struct_signature);
+	PyObject * cached = NULL;
+
+	STRUCT_BEGIN_CRITICAL_SECTION(type);
+	cached = Py_XNewRef(type->struct_signature);
+	STRUCT_END_CRITICAL_SECTION();
+
+	if (cached != NULL) {
+		return cached;
 	}
 
 	PY_OWNED(inspect_module, PyImport_ImportModule("inspect"));
@@ -295,9 +387,8 @@ PyObject * Struct_get_signature(PyObject * const self, void * const closure) {
 
 	PY_OWNED(parameter_type, PyObject_GetAttrString(inspect_module, "Parameter"));
 	PY_OWNED(signature_type, PyObject_GetAttrString(inspect_module, "Signature"));
-	PY_OWNED(parameters, PyList_New(struct_parameter_count(type)));
 
-	if (parameter_type == NULL || signature_type == NULL || parameters == NULL) {
+	if (parameter_type == NULL || signature_type == NULL) {
 		return NULL;
 	}
 
@@ -308,81 +399,21 @@ PyObject * Struct_get_signature(PyObject * const self, void * const closure) {
 		return NULL;
 	}
 
-	Py_ssize_t const required_count = struct_required_count(type);
-	Py_ssize_t const required_init_var_count = struct_required_init_var_count(type);
-	Py_ssize_t field_index = 0;
-	Py_ssize_t init_var_index = 0;
-
-	for (Py_ssize_t position = 0; position < struct_parameter_count(type); position += 1) {
-		bool const init_var = struct_parameter_kind(type, position) == PARAMETER_INIT_VAR;
-		Py_ssize_t const index = init_var ? init_var_index : field_index;
-		Py_ssize_t const required = init_var ? required_init_var_count : required_count;
-		PY_OWNED(
-			arguments,
-			PyTuple_Pack(
-				2,
-				PyTuple_GET_ITEM(
-					init_var ? type->struct_init_var_names : type->struct_field_names,
-					index
-				),
-				kind
-			)
-		);
-		PY_OWNED(keywords, PyDict_New());
-
-		if (
-			arguments == NULL ||
-			keywords == NULL ||
-			(
-				PyDict_SetItemString(
-					keywords,
-					"default",
-					index < required ? empty : PyTuple_GET_ITEM(
-						init_var ? type->struct_init_var_defaults : type->struct_defaults,
-						index - required
-					)
-				) < 0
-			) ||
-			(
-				PyDict_SetItemString(
-					keywords,
-					"annotation",
-					PyTuple_GET_ITEM(
-						init_var ? type->struct_init_var_annotations : type->struct_annotations,
-						index
-					)
-				) < 0
-			)
-		) {
-			return NULL;
-		}
-
-		PY_MOVABLE(parameter, PyObject_Call(parameter_type, arguments, keywords));
-
-		if (parameter == NULL) {
-			return NULL;
-		}
-
-		PyList_SET_ITEM(parameters, position, py_move(&parameter));
-		init_var_index += init_var ? 1 : 0;
-		field_index += init_var ? 0 : 1;
-	}
-
-	PY_MOVABLE(signature, PyObject_CallOneArg(signature_type, parameters));
-
-	if (signature == NULL) {
-		return NULL;
-	}
+	PyObject * signature = NULL;
 
 	STRUCT_BEGIN_CRITICAL_SECTION(type);
+	signature = (
+		type->struct_signature != NULL ? Py_NewRef(type->struct_signature) :
+		signature_from_tables(type, parameter_type, signature_type, kind, empty)
+	);
 
-	if (type->struct_signature == NULL) {
+	if (signature != NULL && type->struct_signature == NULL) {
 		type->struct_signature = Py_NewRef(signature);
 	}
 
 	STRUCT_END_CRITICAL_SECTION();
 
-	return py_move(&signature);
+	return signature;
 }
 
 int Struct_set_signature(PyObject * const self, PyObject * const value, void * const closure) {

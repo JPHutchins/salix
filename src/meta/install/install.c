@@ -120,6 +120,7 @@ enum result install_fields(
 	struct_class->struct_default_count = PyTuple_GET_SIZE(plan->defaults);
 	struct_class->struct_options = options;
 	struct_class->struct_resolves_body_eq = resolves_body_eq;
+	struct_clear_derived_caches(struct_class);
 
 	return RESULT_OK;
 }
