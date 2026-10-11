@@ -3,6 +3,7 @@
 #include "construct.h"
 #include "../owned.h"
 #include "../result.h"
+#include "../hash.h"
 #include "../types.h"
 #include "../mixin/mixin.h"
 
@@ -154,6 +155,66 @@ void defaults_free(void) {
 
 enum default_probe { DEFAULT_PROBE_SHARE, DEFAULT_PROBE_DEEPCOPY, DEFAULT_PROBE_ERROR };
 
+enum probe_prediction { PROBE_PREDICTED_SHARE, PROBE_PREDICTED_DEEPCOPY, PROBE_UNPREDICTED };
+
+static bool hashes_without_user_code(PyTypeObject * const kind) {
+	return (
+		kind == Py_TYPE(Py_None) ||
+		kind == &PyBool_Type ||
+		kind == &PyLong_Type ||
+		kind == &PyFloat_Type ||
+		kind == &PyComplex_Type ||
+		kind == &PyUnicode_Type ||
+		kind == &PyBytes_Type
+	);
+}
+
+static bool declines_to_hash(PyTypeObject * const kind) {
+	return (
+		kind == &PyList_Type ||
+		kind == &PyDict_Type ||
+		kind == &PySet_Type ||
+		kind == &PyByteArray_Type
+	);
+}
+
+static enum probe_prediction predicted_struct_probe(PyObject * const declared) {
+	if (Py_TYPE(declared)->tp_hash != Struct_hash || !is_struct(declared)) {
+		return PROBE_UNPREDICTED;
+	}
+
+	if (Py_EnterRecursiveCall(" while hashing a struct") != 0) {
+		PyErr_Clear();
+
+		return PROBE_PREDICTED_SHARE;
+	}
+
+	StructType const * const type = struct_type_of(declared);
+	enum probe_prediction predicted = PROBE_PREDICTED_SHARE;
+
+	STRUCT_BEGIN_CRITICAL_SECTION(declared);
+
+	for (
+		Py_ssize_t i = 0;
+		predicted == PROBE_PREDICTED_SHARE && i < type->struct_field_count;
+		i += 1
+	) {
+		PyObject * const value = *struct_slot(type, declared, i);
+		PyTypeObject * const kind = value != NULL ? Py_TYPE(value) : Py_TYPE(Py_None);
+
+		predicted = (
+			hashes_without_user_code(kind) ? PROBE_PREDICTED_SHARE :
+			declines_to_hash(kind) ? PROBE_PREDICTED_DEEPCOPY :
+			PROBE_UNPREDICTED
+		);
+	}
+
+	STRUCT_END_CRITICAL_SECTION();
+	Py_LeaveRecursiveCall();
+
+	return predicted;
+}
+
 static enum default_probe probe_default(PyObject * const declared) {
 	PyTypeObject * const kind = Py_TYPE(declared);
 
@@ -185,6 +246,15 @@ PyObject * struct_default_copy(struct salix_state * const state, PyObject * cons
 
 	if (copy != NULL) {
 		return copy(state, declared);
+	}
+
+	switch (predicted_struct_probe(declared)) {
+		case PROBE_PREDICTED_SHARE:
+			return Py_NewRef(declared);
+		case PROBE_PREDICTED_DEEPCOPY:
+			return deep_copy_or_share(state, declared);
+		case PROBE_UNPREDICTED:
+			break;
 	}
 
 	switch (probe_default(declared)) {
