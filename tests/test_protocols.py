@@ -103,6 +103,24 @@ def test_repr_round_trips_through_eval():
     assert eval(repr(point), {"Point": Point}) == point
 
 
+def test_a_field_whose_repr_raises_propagates_and_releases_the_guard():
+    class Unprintable:
+        def __repr__(self) -> str:
+            raise ValueError("no repr")
+
+    class Holder(Struct, frozen=False):
+        value: object
+
+    holder = Holder(Unprintable())
+
+    with pytest.raises(ValueError, match="no repr"):
+        repr(holder)
+
+    holder.value = 1
+
+    assert repr(holder).endswith("Holder(value=1)")
+
+
 def test_repr_of_a_struct_that_contains_itself():
     node = Nested([])
     node.items.append(node)
