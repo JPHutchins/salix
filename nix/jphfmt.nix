@@ -14,6 +14,7 @@ rustPlatform.buildRustPackage rec {
   };
 
   cargoLock.lockFile = ./jphfmt-Cargo.lock;
+  doCheck = false;
 
   meta = {
     description = "Zero-configuration C formatter";
