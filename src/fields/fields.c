@@ -218,6 +218,7 @@ struct field_plan field_plan_build(
 
 	if (
 		plan_built.declared_names == NULL ||
+		plan_built.declared_annotations == NULL ||
 		plan_built.mro_default_names == NULL ||
 		(PyList_GET_SIZE(mro_default_names) == 0 && plan_defaults(&plan_built) != RESULT_OK)
 	) {

@@ -1456,6 +1456,14 @@ class TestFieldAndClassVarNamesAfterClassCreation:
         with pytest.raises(TypeError, match="can't apply this __delattr__"):
             type.__delattr__(Later, "y")
 
+    def test_writing_a_class_s_own_field_descriptor_back_is_a_no_op(self) -> None:
+        class Later(Struct):
+            y: int
+
+        Later.y = Later.__dict__["y"]
+
+        assert Later(y=1).y == 1
+
     def test_writing_a_base_s_field_descriptor_onto_a_subclass_is_refused(self) -> None:
         class Base(Struct):
             z: int = 0

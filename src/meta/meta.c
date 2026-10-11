@@ -538,7 +538,11 @@ static int StructMeta_setattro(
 
 	bool const being_created = ((StructType const *) self)->struct_field_names == NULL;
 
-	if (being_created && value != NULL && value == entry.value) {
+	if (
+		(being_created || entry.owner == (PyTypeObject *) self) &&
+		value != NULL &&
+		value == entry.value
+	) {
 		return PyType_Type.tp_setattro(self, name, value);
 	}
 
