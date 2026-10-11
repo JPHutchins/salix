@@ -1329,6 +1329,53 @@ class TestFieldsReboundDuringClassCreation:
 
         assert (Base.x, Sub.x) == (5, 9)
 
+    def test_a_hook_deleting_a_redeclared_class_var_is_refused(self) -> None:
+        class Base(Struct):
+            limit: ClassVar[int] = 1
+
+            def __init_subclass__(cls, **keywords: object) -> None:
+                super().__init_subclass__(**keywords)
+                del cls.limit
+
+        with pytest.raises(TypeError, match=r"Sub\.limit does not reach its ClassVar's value"):
+
+            class Sub(Base):
+                limit: ClassVar[int] = 2
+
+    def test_a_hook_deleting_a_redeclaration_equal_to_the_base_s_value_is_refused(self) -> None:
+        class Base(Struct):
+            limit: ClassVar[int] = 1
+
+            def __init_subclass__(cls, **keywords: object) -> None:
+                super().__init_subclass__(**keywords)
+                del cls.limit
+
+        with pytest.raises(TypeError, match=r"Sub\.limit does not reach its ClassVar's value"):
+
+            class Sub(Base):
+                limit: ClassVar[int] = 1
+
+    def test_a_diamond_reaching_a_sibling_s_class_var_refinement_builds_in_either_order(
+        self,
+    ) -> None:
+        class Root(Struct):
+            x: int = 1
+            limit: ClassVar[int] = 1
+
+        class PassThrough(Root):
+            pass
+
+        class Refining(Root):
+            limit: ClassVar[int] = 5
+
+        class PassThroughFirst(PassThrough, Refining):
+            pass
+
+        class RefiningFirst(Refining, PassThrough):
+            pass
+
+        assert (PassThroughFirst.limit, RefiningFirst.limit) == (5, 5)
+
     def test_a_hook_rebinding_a_field_to_its_own_descriptor_builds(self) -> None:
         class Base(Struct):
             y: int = 0
@@ -1442,6 +1489,26 @@ class TestFieldAndClassVarNamesAfterClassCreation:
 
         with pytest.raises(TypeError, match="can't apply this __delattr__"):
             type.__delattr__(Later, "y")
+
+    def test_writing_a_class_s_own_field_descriptor_back_is_a_no_op(self) -> None:
+        class Later(Struct):
+            y: int
+
+        Later.y = Later.__dict__["y"]
+
+        assert Later(y=1).y == 1
+
+    def test_writing_a_base_s_field_descriptor_onto_a_subclass_is_refused(self) -> None:
+        class Base(Struct):
+            z: int = 0
+
+        class Sub(Base):
+            w: int = 0
+
+        with pytest.raises(TypeError, match=r"cannot set 'z' attribute of struct class 'Sub'"):
+            Sub.z = Base.__dict__["z"]
+
+        assert "z" not in Sub.__dict__
 
     def test_type_setattr_is_refused_for_every_name(self) -> None:
         class Later(Struct):

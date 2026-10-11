@@ -904,10 +904,15 @@ def _rebuild_struct_subclass(
         return cls
 
 
+    field_name_set = frozenset(names)
     built = cast(Any, type(cls))(
         cls.__name__,
         cls.__bases__,
-        namespace,
+        {
+            key: value
+            for key, value in namespace.items()
+            if key not in field_name_set or key in own_annotations
+        },
         frozen=frozen,
         eq=eq,
         order=order,
