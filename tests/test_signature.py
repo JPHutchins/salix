@@ -291,3 +291,19 @@ def test_struct_has_a_docstring():
 
 def test_struct_meta_has_a_docstring():
     assert type(Struct).__doc__ and "metaclass" in type(Struct).__doc__
+
+
+def test_a_signature_read_inside_a_delegate_does_not_outlive_the_settle():
+    class Reading(type(Struct)):
+        def __new__(metacls, name, bases, namespace, **keywords):
+            built = super().__new__(metacls, name, bases, namespace, **keywords)
+            inspect.signature(built)
+
+            return built
+
+    class Base(Struct, metaclass=Reading):
+        x: int
+
+    built = type(Struct)("Built", (Base,), {"__annotations__": {"y": int}, "y": 42})
+
+    assert inspect.signature(built).parameters["y"].default == 42
