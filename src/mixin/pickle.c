@@ -16,6 +16,8 @@ static PyObject * pickle_cached_build(enum pickle_cached const kind) {
 		[PICKLE_GETSTATE_NAME] = "__getstate__",
 		[PICKLE_SLOTNAMES_NAME] = "__slotnames__",
 		[PICKLE_NEWOBJ_NAME] = "__newobj__",
+		[PICKLE_GETNEWARGS_NAME] = "__getnewargs__",
+		[PICKLE_GETNEWARGS_EX_NAME] = "__getnewargs_ex__",
 	};
 
 	return (
@@ -51,19 +53,8 @@ struct definition {
 	PyTypeObject * owner;
 };
 
-static enum result nearest_definitions(
-	PyTypeObject * const cls,
-	Py_ssize_t const count,
-	PyObject * const keys[static count],
-	struct definition found[static count]
-) {
-	Py_ssize_t missing = count;
-
-	for (Py_ssize_t k = 0; k < count; k += 1) {
-		found[k] = (struct definition){.tag = DEFINITION_MISSING};
-	}
-
-	for (Py_ssize_t i = 0; missing > 0 && i < PyTuple_GET_SIZE(cls->tp_mro); i += 1) {
+static struct definition nearest_definition(PyTypeObject * const cls, PyObject * const key) {
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(cls->tp_mro); i += 1) {
 		PyTypeObject * const entry = (PyTypeObject *) PyTuple_GET_ITEM(cls->tp_mro, i);
 
 		if (entry == &StructMixin_Type) {
@@ -73,36 +64,21 @@ static enum result nearest_definitions(
 		PY_OWNED(entry_dict, struct_type_dict(entry));
 
 		if (entry_dict == NULL) {
-			return RESULT_ERROR;
+			return (struct definition){.tag = DEFINITION_ERROR};
 		}
 
-		for (Py_ssize_t k = 0; k < count; k += 1) {
-			int const present = (
-				found[k].tag == DEFINITION_FOUND ? 0 :
-				PyDict_Contains(entry_dict, keys[k])
-			);
+		int const present = PyDict_Contains(entry_dict, key);
 
-			if (present < 0) {
-				return RESULT_ERROR;
-			}
+		if (present < 0) {
+			return (struct definition){.tag = DEFINITION_ERROR};
+		}
 
-			if (present == 1) {
-				found[k] = (struct definition){.tag = DEFINITION_FOUND, .owner = entry};
-				missing -= 1;
-			}
+		if (present == 1) {
+			return (struct definition){.tag = DEFINITION_FOUND, .owner = entry};
 		}
 	}
 
-	return RESULT_OK;
-}
-
-static struct definition nearest_definition(PyTypeObject * const cls, PyObject * const key) {
-	struct definition found[1];
-
-	return (
-		nearest_definitions(cls, 1, (PyObject *[]){key}, found) == RESULT_OK ? found[0] :
-		(struct definition){.tag = DEFINITION_ERROR}
-	);
+	return (struct definition){.tag = DEFINITION_MISSING};
 }
 
 static int defined_by_user_code(PyTypeObject * const cls, char const * const name) {
@@ -166,23 +142,17 @@ int copies_through_reduce(StructType * const type) {
 	return 0;
 }
 
-static int beyond_object(struct definition const found) {
-	switch (found.tag) {
-		case DEFINITION_ERROR:
-			return -1;
-		case DEFINITION_MISSING:
-			return 0;
-		case DEFINITION_FOUND:
-			break;
-	}
+static bool hook_is_objects(PyTypeObject * const cls, PyObject * const name) {
+	PY_OWNED(found, type_lookup_ref(cls, name));
+	PY_OWNED(objects, type_lookup_ref(&PyBaseObject_Type, name));
 
-	return found.owner != &PyBaseObject_Type;
+	return found == objects;
 }
 
-static int defined_beyond_object(PyObject * const self, enum pickle_cached const hook) {
-	PY_OWNED(key, pickle_cached(self, hook));
+static int overrides_reduce(PyObject * const self) {
+	PY_OWNED(key, pickle_cached(self, PICKLE_REDUCE_NAME));
 
-	return key != NULL ? beyond_object(nearest_definition(Py_TYPE(self), key)) : -1;
+	return key != NULL ? !hook_is_objects(Py_TYPE(self), key) : -1;
 }
 
 static PyObject * object_reduce_ex(PyObject * const self, PyObject * const protocol) {
@@ -193,7 +163,7 @@ static PyObject * object_reduce_ex(PyObject * const self, PyObject * const proto
 }
 
 static PyObject * reduce_fallback(PyObject * const self) {
-	int const overridden = defined_beyond_object(self, PICKLE_REDUCE_NAME);
+	int const overridden = overrides_reduce(self);
 
 	if (overridden < 0) {
 		return NULL;
@@ -228,17 +198,33 @@ PyObject * copy_reduction(PyObject * const self, PyObject * const copier) {
 	return protocol != NULL ? PyObject_CallOneArg(reductor, protocol) : NULL;
 }
 
-static int pickles_plainly(StructType * const type, int const getstate_overridden) {
+static bool reduces_through_objects_hooks(StructType * const type) {
+	static enum pickle_cached const hooks[] = {
+		PICKLE_GETSTATE_NAME,
+		PICKLE_GETNEWARGS_EX_NAME,
+		PICKLE_GETNEWARGS_NAME,
+	};
+	PyTypeObject * const cls = &type->heap_type.ht_type;
+	bool objects = cls->tp_getattro == PyObject_GenericGetAttr;
+
+	for (size_t i = 0; objects && i < sizeof hooks / sizeof hooks[0]; i += 1) {
+		objects = hook_is_objects(cls, type->struct_state->pickle_cache[hooks[i]]);
+	}
+
+	return objects;
+}
+
+static int pickles_plainly(StructType * const type) {
 	PyTypeObject * const cls = &type->heap_type.ht_type;
 
 	if (
-		getstate_overridden != 0 ||
 		cls->tp_dictoffset != 0 ||
 		type->struct_member_count != 0 ||
 		foreign_storage(type) ||
-		PyType_FastSubclass(cls, Py_TPFLAGS_BASE_EXC_SUBCLASS)
+		PyType_FastSubclass(cls, Py_TPFLAGS_BASE_EXC_SUBCLASS) ||
+		!reduces_through_objects_hooks(type)
 	) {
-		return getstate_overridden < 0 ? -1 : 0;
+		return 0;
 	}
 
 	PY_OWNED(own_dict, struct_type_dict(cls));
@@ -356,29 +342,14 @@ PyObject * Struct_reduce_ex(PyObject * const self, PyObject * const protocol) {
 		return PyObject_CallOneArg(deferred, protocol);
 	}
 
-	PY_OWNED(reduce_key, pickle_cached(self, PICKLE_REDUCE_NAME));
-	PY_OWNED(getstate_key, pickle_cached(self, PICKLE_GETSTATE_NAME));
-	struct definition hooks[2];
-
-	if (
-		reduce_key == NULL ||
-		getstate_key == NULL ||
-		(
-			nearest_definitions(
-				Py_TYPE(self),
-				2,
-				(PyObject *[]){reduce_key, getstate_key},
-				hooks
-			) != RESULT_OK
-		)
-	) {
-		return NULL;
+	if (!is_struct(self)) {
+		return object_reduce_ex(self, protocol);
 	}
 
-	int const reduce_overridden = beyond_object(hooks[0]);
+	int const reduce_overridden = overrides_reduce(self);
 
-	if (reduce_overridden == 1 || !is_struct(self)) {
-		return object_reduce_ex(self, protocol);
+	if (reduce_overridden != 0) {
+		return reduce_overridden < 0 ? NULL : object_reduce_ex(self, protocol);
 	}
 
 	StructType * const type = struct_type_of(self);
@@ -398,7 +369,7 @@ PyObject * Struct_reduce_ex(PyObject * const self, PyObject * const protocol) {
 		return NULL;
 	}
 
-	int const plain = pickles_plainly(type, beyond_object(hooks[1]));
+	int const plain = pickles_plainly(type);
 
 	return (
 		plain < 0 ? NULL :

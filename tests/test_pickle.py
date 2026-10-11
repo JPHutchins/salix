@@ -4,6 +4,7 @@ import pickle
 import sys
 from collections import OrderedDict
 from collections.abc import Callable, Iterable
+from contextlib import suppress
 from dataclasses import InitVar
 
 import pytest
@@ -117,10 +118,12 @@ def all_unset_mutable() -> Mutable:
 def test_a_plain_struct_reduces_exactly_as_object_does(instance: Struct) -> None:
     reduced = instance.__reduce_ex__(4)
 
-    assert "__slotnames__" not in vars(type(instance))
-    assert reduced == object.__reduce_ex__(instance, 4)
-
-    del type(instance).__slotnames__
+    try:
+        assert "__slotnames__" not in vars(type(instance))
+        assert reduced == object.__reduce_ex__(instance, 4)
+    finally:
+        with suppress(AttributeError):
+            del type(instance).__slotnames__
 
 
 def reduced_or_refused(reduce: Callable[[int], object]) -> object:
@@ -138,6 +141,36 @@ def test_an_assigned_slotnames_reduces_as_object_does(slotnames: list[str]) -> N
 
     Assigned.__slotnames__ = slotnames
     instance = Assigned(1)
+
+    assert reduced_or_refused(instance.__reduce_ex__) == reduced_or_refused(
+        lambda protocol: object.__reduce_ex__(instance, protocol)
+    )
+
+
+def synthesized_getstate(self: Struct, name: str) -> object:
+    if name == "__getstate__":
+        return lambda: {"x": 99}
+    raise AttributeError(name)
+
+
+def intercepted_getstate(self: Struct, name: str) -> object:
+    return (lambda: {"x": 99}) if name == "__getstate__" else object.__getattribute__(self, name)
+
+
+PICKLE_HOOKS = {
+    "__reduce__": lambda self: (int, (7,)),
+    "__getstate__": lambda self: {"x": 99},
+    "__getnewargs__": lambda self: (99,),
+    "__getnewargs_ex__": lambda self: ((99,), {}),
+    "__getattr__": synthesized_getstate,
+    "__getattribute__": intercepted_getstate,
+}
+
+
+@pytest.mark.parametrize("hook", PICKLE_HOOKS)
+def test_a_struct_defining_a_pickle_hook_reduces_as_object_does(hook: str) -> None:
+    hooked = type(Struct)(f"Hooked{hook}", (Struct,), {"__annotations__": {"x": int}, hook: PICKLE_HOOKS[hook]})
+    instance = hooked(1)
 
     assert reduced_or_refused(instance.__reduce_ex__) == reduced_or_refused(
         lambda protocol: object.__reduce_ex__(instance, protocol)
