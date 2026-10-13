@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../meta/meta.h"
+#include "../meta.h"
 #include "../mixin.h"
 #include "../result.h"
 
@@ -14,6 +14,7 @@ PyObject * co_base_override(PyObject * self, PyObject * name);
 int copies_through_reduce(StructType * type);
 enum result pickle_cache_fill(struct salix_state * state);
 enum result copy_cache_fill(struct salix_state * state);
+PyObject * copy_cached(PyObject * self, enum copy_cached kind);
 PyObject * Struct_deepcopy(PyObject * self, PyObject * memo);
 PyObject * copy_reduction(PyObject * self, PyObject * copier);
 PyObject * copy_dispatch_prologue(

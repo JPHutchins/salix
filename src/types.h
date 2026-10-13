@@ -325,6 +325,10 @@ static inline bool struct_class_created(StructType const * const type) {
 	return type->struct_state != NULL;
 }
 
+static inline struct salix_state * created_struct_state_of(PyObject * const self) {
+	return is_struct(self) ? struct_type_of(self)->struct_state : NULL;
+}
+
 static inline void struct_clear_derived_caches(StructType * const type) {
 	Py_CLEAR(type->struct_field_records);
 	Py_CLEAR(type->struct_signature);

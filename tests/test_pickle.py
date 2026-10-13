@@ -697,3 +697,57 @@ def test_a_class_calling_co_base_carries_field_state_like_a_stock_slotted_subcla
 
     assert getattr(duplicate(original), "a", None) == getattr(duplicate(stock_original), "a", None)
     assert getattr(duplicate(original), "a", None) == (7 if sys.version_info >= (3, 11) else None)
+
+
+def rebuilt_from_its_reduction(instance: Struct) -> object:
+    function, arguments, *_ = instance.__reduce_ex__(4)
+
+    return function(*arguments)
+
+
+def duplicated_while_its_class_is_created(window: str, duplicate: Callable[[object], object]) -> list[tuple]:
+    duplicates: list[tuple] = []
+
+    def record(cls: type) -> None:
+        instance = cls.__new__(cls)
+        duplicates.append((instance, duplicate(instance)))
+
+    if window == "init_subclass":
+
+        class Base(Struct):
+            def __init_subclass__(cls, **keywords: object) -> None:
+                super().__init_subclass__(**keywords)
+                record(cls)
+
+        class Fieldless(Base):
+            pass
+
+        class Fielded(Base):
+            count: int = 1
+
+    else:
+
+        class Hook:
+            def __set_name__(self, owner: type, name: str) -> None:
+                record(owner)
+
+        class Fieldless(Struct):
+            hook = Hook()
+
+        class Fielded(Struct):
+            count: int = 1
+            hook = Hook()
+
+    return duplicates
+
+
+@pytest.mark.parametrize("window", ["init_subclass", "set_name"])
+@pytest.mark.parametrize(
+    "duplicate",
+    [copy.copy, copy.deepcopy, rebuilt_from_its_reduction],
+    ids=["copy", "deepcopy", "reduce"],
+)
+def test_an_instance_made_while_its_class_is_created_duplicates(window, duplicate):
+    duplicates = duplicated_while_its_class_is_created(window, duplicate)
+
+    assert [type(duplicated).__name__ for _, duplicated in duplicates] == ["Fieldless", "Fielded"]

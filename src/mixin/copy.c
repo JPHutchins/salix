@@ -141,19 +141,19 @@ enum result copy_cache_fill(struct salix_state * const state) {
 	return RESULT_OK;
 }
 
-static PyObject * copy_cached(PyObject * const self, enum copy_cached const kind) {
-	return (
-		is_struct(self) ? Py_NewRef(struct_type_of(self)->struct_state->copy_cache[kind]) :
-		copy_cached_build(kind)
-	);
+PyObject * copy_cached(PyObject * const self, enum copy_cached const kind) {
+	struct salix_state const * const state = created_struct_state_of(self);
+
+	return state != NULL ? Py_NewRef(state->copy_cache[kind]) : copy_cached_build(kind);
 }
 
 static PyObject * copy_module_of(PyObject * const self) {
-	if (!is_struct(self)) {
+	struct salix_state * const state = created_struct_state_of(self);
+
+	if (state == NULL) {
 		return PyImport_ImportModule("copy");
 	}
 
-	struct salix_state * const state = struct_type_of(self)->struct_state;
 	PyObject * cached = NULL;
 
 	STRUCT_BEGIN_CRITICAL_SECTION(state->pickle_cache[PICKLE_REDUCE_EX_NAME]);

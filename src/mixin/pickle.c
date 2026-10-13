@@ -42,10 +42,9 @@ enum result pickle_cache_fill(struct salix_state * const state) {
 }
 
 static PyObject * pickle_cached(PyObject * const self, enum pickle_cached const kind) {
-	return (
-		is_struct(self) ? Py_NewRef(struct_type_of(self)->struct_state->pickle_cache[kind]) :
-		pickle_cached_build(kind)
-	);
+	struct salix_state const * const state = created_struct_state_of(self);
+
+	return state != NULL ? Py_NewRef(state->pickle_cache[kind]) : pickle_cached_build(kind);
 }
 
 struct definition {
@@ -218,6 +217,7 @@ static int pickles_plainly(StructType * const type) {
 	PyTypeObject * const cls = &type->heap_type.ht_type;
 
 	if (
+		!struct_class_created(type) ||
 		cls->tp_dictoffset != 0 ||
 		type->struct_member_count != 0 ||
 		foreign_storage(type) ||
