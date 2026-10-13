@@ -197,7 +197,10 @@ PyObject * copy_reduction(PyObject * const self, PyObject * const copier) {
 	return protocol != NULL ? PyObject_CallOneArg(reductor, protocol) : NULL;
 }
 
-static bool reduces_through_objects_hooks(StructType * const type) {
+static bool reduces_through_objects_hooks(
+	struct salix_state const * const state,
+	StructType * const type
+) {
 	static enum pickle_cached const hooks[] = {
 		PICKLE_GETSTATE_NAME,
 		PICKLE_GETNEWARGS_EX_NAME,
@@ -207,32 +210,28 @@ static bool reduces_through_objects_hooks(StructType * const type) {
 	bool objects = cls->tp_getattro == PyObject_GenericGetAttr;
 
 	for (size_t i = 0; objects && i < sizeof hooks / sizeof hooks[0]; i += 1) {
-		objects = hook_is_objects(cls, type->struct_state->pickle_cache[hooks[i]]);
+		objects = hook_is_objects(cls, state->pickle_cache[hooks[i]]);
 	}
 
 	return objects;
 }
 
-static int pickles_plainly(StructType * const type) {
+static int pickles_plainly(struct salix_state const * const state, StructType * const type) {
 	PyTypeObject * const cls = &type->heap_type.ht_type;
 
 	if (
-		!struct_class_created(type) ||
 		cls->tp_dictoffset != 0 ||
 		type->struct_member_count != 0 ||
 		foreign_storage(type) ||
 		PyType_FastSubclass(cls, Py_TPFLAGS_BASE_EXC_SUBCLASS) ||
-		!reduces_through_objects_hooks(type)
+		!reduces_through_objects_hooks(state, type)
 	) {
 		return 0;
 	}
 
 	PY_OWNED(own_dict, struct_type_dict(cls));
 	int const slotnames_cached = (
-		own_dict != NULL ? PyDict_Contains(
-			own_dict,
-			type->struct_state->pickle_cache[PICKLE_SLOTNAMES_NAME]
-		) :
+		own_dict != NULL ? PyDict_Contains(own_dict, state->pickle_cache[PICKLE_SLOTNAMES_NAME]) :
 		-1
 	);
 
@@ -293,14 +292,14 @@ static PyObject * set_slots_of(StructType const * const type, PyObject * const s
 	return filled == RESULT_OK ? py_move(&slots) : NULL;
 }
 
-static PyObject * plain_reduction(PyObject * const self) {
+static PyObject * plain_reduction(struct salix_state * const module_state, PyObject * const self) {
 	StructType const * const type = struct_type_of(self);
-	PY_OWNED(copyreg, copyreg_module_of(type->struct_state));
+	PY_OWNED(copyreg, copyreg_module_of(module_state));
 	PY_OWNED(
 		newobj,
 		copyreg != NULL ? PyObject_GetAttr(
 			copyreg,
-			type->struct_state->pickle_cache[PICKLE_NEWOBJ_NAME]
+			module_state->pickle_cache[PICKLE_NEWOBJ_NAME]
 		) :
 		NULL
 	);
@@ -320,6 +319,10 @@ static PyObject * plain_reduction(PyObject * const self) {
 }
 
 PyObject * Struct_reduce_ex(PyObject * const self, PyObject * const protocol) {
+	if (is_struct(self) && refused_until_created(struct_type_of(self), "pickle")) {
+		return NULL;
+	}
+
 	long const protocol_number = PyLong_AsLong(protocol);
 
 	if (protocol_number == -1 && PyErr_Occurred()) {
@@ -369,11 +372,11 @@ PyObject * Struct_reduce_ex(PyObject * const self, PyObject * const protocol) {
 		return NULL;
 	}
 
-	int const plain = pickles_plainly(type);
+	int const plain = pickles_plainly(type->struct_state, type);
 
 	return (
 		plain < 0 ? NULL :
-		plain == 1 ? plain_reduction(self) :
+		plain == 1 ? plain_reduction(type->struct_state, self) :
 		object_reduce_ex(self, protocol)
 	);
 }

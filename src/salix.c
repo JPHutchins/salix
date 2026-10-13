@@ -93,10 +93,6 @@ static void struct_free(void * const module) {
 		Py_CLEAR(state->object_bindings[i]);
 	}
 
-	Py_CLEAR(state->copy_module);
-	Py_CLEAR(state->copyreg_module);
-	Py_CLEAR(state->deepcopy_tables);
-
 	for (Py_ssize_t i = 0; i < PICKLE_CACHED_COUNT; ++i) {
 		Py_CLEAR(state->pickle_cache[i]);
 	}
@@ -105,7 +101,10 @@ static void struct_free(void * const module) {
 		Py_CLEAR(state->copy_cache[i]);
 	}
 
+	Py_CLEAR(state->copy_module);
 	Py_CLEAR(state->frozen_instance_error);
+	Py_CLEAR(state->copyreg_module);
+	Py_CLEAR(state->deepcopy_tables);
 	Py_CLEAR(state->missing);
 	Py_CLEAR(state->empty_metadata);
 	defaults_free();

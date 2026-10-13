@@ -9,7 +9,7 @@ from dataclasses import InitVar
 
 import pytest
 
-from salix import Struct, set_field
+from salix import Struct, replace, set_field
 
 PROTOCOLS = range(2, pickle.HIGHEST_PROTOCOL + 1)
 
@@ -699,18 +699,24 @@ def test_a_class_calling_co_base_carries_field_state_like_a_stock_slotted_subcla
     assert getattr(duplicate(original), "a", None) == (7 if sys.version_info >= (3, 11) else None)
 
 
+
 def rebuilt_from_its_reduction(instance: Struct) -> object:
-    function, arguments, *_ = instance.__reduce_ex__(4)
+    function, arguments, state, *_ = instance.__reduce_ex__(4)
+    rebuilt = function(*arguments)
+    rebuilt.__setstate__(state)
 
-    return function(*arguments)
+    return rebuilt
 
 
-def duplicated_while_its_class_is_created(window: str, duplicate: Callable[[object], object]) -> list[tuple]:
-    duplicates: list[tuple] = []
+def refused_while_its_class_is_created(window: str, duplicate: Callable[[object], object]) -> Struct:
+    refused: list[Struct] = []
 
     def record(cls: type) -> None:
         instance = cls.__new__(cls)
-        duplicates.append((instance, duplicate(instance)))
+        instance.__setstate__((None, {"count": 5}))
+        with pytest.raises(TypeError, match="'Fielded' until its class has finished being created"):
+            duplicate(instance)
+        refused.append(instance)
 
     if window == "init_subclass":
 
@@ -718,9 +724,6 @@ def duplicated_while_its_class_is_created(window: str, duplicate: Callable[[obje
             def __init_subclass__(cls, **keywords: object) -> None:
                 super().__init_subclass__(**keywords)
                 record(cls)
-
-        class Fieldless(Base):
-            pass
 
         class Fielded(Base):
             count: int = 1
@@ -731,23 +734,29 @@ def duplicated_while_its_class_is_created(window: str, duplicate: Callable[[obje
             def __set_name__(self, owner: type, name: str) -> None:
                 record(owner)
 
-        class Fieldless(Struct):
-            hook = Hook()
-
         class Fielded(Struct):
             count: int = 1
             hook = Hook()
 
-    return duplicates
+    [instance] = refused
+
+    return instance
 
 
 @pytest.mark.parametrize("window", ["init_subclass", "set_name"])
 @pytest.mark.parametrize(
-    "duplicate",
-    [copy.copy, copy.deepcopy, rebuilt_from_its_reduction],
-    ids=["copy", "deepcopy", "reduce"],
+    ("during_creation", "after_creation"),
+    [
+        (copy.copy, copy.copy),
+        (copy.deepcopy, copy.deepcopy),
+        (pickle.dumps, rebuilt_from_its_reduction),
+        (replace, replace),
+    ],
+    ids=["copy", "deepcopy", "pickle", "replace"],
 )
-def test_an_instance_made_while_its_class_is_created_duplicates(window, duplicate):
-    duplicates = duplicated_while_its_class_is_created(window, duplicate)
+def test_a_struct_is_duplicated_only_once_its_class_is_created(window, during_creation, after_creation):
+    instance = refused_while_its_class_is_created(window, during_creation)
+    duplicated = after_creation(instance)
 
-    assert [type(duplicated).__name__ for _, duplicated in duplicates] == ["Fieldless", "Fielded"]
+    assert duplicated == instance
+    assert duplicated.count == 5

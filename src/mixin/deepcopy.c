@@ -73,10 +73,6 @@ static PyObject * deepcopy_tables(
 	PyObject * const copy_module,
 	PyObject * const deepcopy
 ) {
-	if (state == NULL) {
-		return deepcopy_tables_build(copy_module, deepcopy);
-	}
-
 	PyObject * cached = NULL;
 
 	STRUCT_BEGIN_CRITICAL_SECTION(state->pickle_cache[PICKLE_REDUCE_EX_NAME]);
@@ -326,6 +322,10 @@ PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) {
 		return NULL;
 	}
 
+	if (refused_until_created(type, "deepcopy")) {
+		return NULL;
+	}
+
 	PY_MOVABLE(copy_module, NULL);
 	PY_MOVABLE(copier, NULL);
 	PY_MOVABLE(
@@ -373,8 +373,10 @@ PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) {
 		return py_move(&short_circuit);
 	}
 
-	PY_OWNED(deepcopy_name, copy_cached(self, COPY_DEEPCOPY_NAME));
-	PY_OWNED(deepcopy, deepcopy_name != NULL ? PyObject_GetAttr(copy_module, deepcopy_name) : NULL);
+	PY_OWNED(
+		deepcopy,
+		PyObject_GetAttr(copy_module, type->struct_state->copy_cache[COPY_DEEPCOPY_NAME])
+	);
 
 	if (deepcopy == NULL) {
 		return memo_failure(memo, key);

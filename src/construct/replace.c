@@ -135,6 +135,10 @@ PyObject * Struct_replace(
 		return NULL;
 	}
 
+	if (refused_until_created(type, "replace")) {
+		return NULL;
+	}
+
 	if (type->struct_init_var_count > 0 && require_init_vars(type, keyword_names) != RESULT_OK) {
 		return NULL;
 	}
