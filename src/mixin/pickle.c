@@ -319,10 +319,6 @@ static PyObject * plain_reduction(struct salix_state * const module_state, PyObj
 }
 
 PyObject * Struct_reduce_ex(PyObject * const self, PyObject * const protocol) {
-	if (is_struct(self) && refused_until_created(struct_type_of(self), "pickle")) {
-		return NULL;
-	}
-
 	long const protocol_number = PyLong_AsLong(protocol);
 
 	if (protocol_number == -1 && PyErr_Occurred()) {
@@ -356,6 +352,10 @@ PyObject * Struct_reduce_ex(PyObject * const self, PyObject * const protocol) {
 	}
 
 	StructType * const type = struct_type_of(self);
+
+	if (refused_until_created(type, "pickle")) {
+		return NULL;
+	}
 
 	if (type->struct_singleton != NULL) {
 		return Py_BuildValue("(O())", (PyObject *) Py_TYPE(self));

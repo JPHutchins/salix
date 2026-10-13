@@ -708,19 +708,32 @@ def rebuilt_from_its_reduction(instance: Struct) -> object:
     return rebuilt
 
 
-def refused_while_its_class_is_created(window: str, duplicate: Callable[[object], object]) -> Struct:
-    refused: list[Struct] = []
+
+class DuplicatingHooks:
+    def __copy__(self) -> str:
+        return "copied by the base"
+
+    def __deepcopy__(self, memo: dict) -> str:
+        return "deep-copied by the base"
+
+    def __reduce_ex__(self, protocol: int) -> tuple:
+        return (str, ("reduced by the base",))
+
+
+def made_while_its_class_is_created(
+    window: str, bases: tuple[type, ...], during_creation: Callable[[object], None]
+) -> Struct:
+    made: list[Struct] = []
 
     def record(cls: type) -> None:
         instance = cls.__new__(cls)
         instance.__setstate__((None, {"count": 5}))
-        with pytest.raises(TypeError, match="'Fielded' until its class has finished being created"):
-            duplicate(instance)
-        refused.append(instance)
+        during_creation(instance)
+        made.append(instance)
 
     if window == "init_subclass":
 
-        class Base(Struct):
+        class Base(*bases):
             def __init_subclass__(cls, **keywords: object) -> None:
                 super().__init_subclass__(**keywords)
                 record(cls)
@@ -734,29 +747,55 @@ def refused_while_its_class_is_created(window: str, duplicate: Callable[[object]
             def __set_name__(self, owner: type, name: str) -> None:
                 record(owner)
 
-        class Fielded(Struct):
+        class Fielded(*bases):
             count: int = 1
             hook = Hook()
 
-    [instance] = refused
+    [instance] = made
 
     return instance
 
 
-@pytest.mark.parametrize("window", ["init_subclass", "set_name"])
-@pytest.mark.parametrize(
-    ("during_creation", "after_creation"),
+DUPLICATIONS = pytest.mark.parametrize(
+    ("operation", "during_creation", "after_creation"),
     [
-        (copy.copy, copy.copy),
-        (copy.deepcopy, copy.deepcopy),
-        (pickle.dumps, rebuilt_from_its_reduction),
-        (replace, replace),
+        ("copy", copy.copy, copy.copy),
+        ("deepcopy", copy.deepcopy, copy.deepcopy),
+        ("pickle", pickle.dumps, rebuilt_from_its_reduction),
+        ("replace", replace, replace),
     ],
     ids=["copy", "deepcopy", "pickle", "replace"],
 )
-def test_a_struct_is_duplicated_only_once_its_class_is_created(window, during_creation, after_creation):
-    instance = refused_while_its_class_is_created(window, during_creation)
+
+
+@pytest.mark.parametrize("window", ["init_subclass", "set_name"])
+@DUPLICATIONS
+def test_a_struct_is_duplicated_only_once_its_class_is_created(window, operation, during_creation, after_creation):
+    def refused(instance: object) -> None:
+        with pytest.raises(
+            TypeError, match=f"^cannot {operation} 'Fielded' until its class has finished being created$"
+        ):
+            during_creation(instance)
+
+    instance = made_while_its_class_is_created(window, (Struct,), refused)
     duplicated = after_creation(instance)
 
     assert duplicated == instance
     assert duplicated.count == 5
+
+
+@pytest.mark.parametrize("window", ["init_subclass", "set_name"])
+@pytest.mark.parametrize(
+    ("duplicate", "expected"),
+    [
+        (copy.copy, "copied by the base"),
+        (copy.deepcopy, "deep-copied by the base"),
+        (lambda instance: pickle.loads(pickle.dumps(instance)), "reduced by the base"),
+    ],
+    ids=["copy", "deepcopy", "pickle"],
+)
+def test_a_base_class_duplicating_hook_runs_while_the_class_is_created(window, duplicate, expected):
+    def answered_by_the_base(instance: object) -> None:
+        assert duplicate(instance) == expected
+
+    made_while_its_class_is_created(window, (Struct, DuplicatingHooks), answered_by_the_base)

@@ -322,10 +322,6 @@ PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) {
 		return NULL;
 	}
 
-	if (refused_until_created(type, "deepcopy")) {
-		return NULL;
-	}
-
 	PY_MOVABLE(copy_module, NULL);
 	PY_MOVABLE(copier, NULL);
 	PY_MOVABLE(
@@ -365,6 +361,10 @@ PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) {
 		}
 
 		return py_move(&reconstructed);
+	}
+
+	if (refused_until_created(type, "deepcopy")) {
+		return NULL;
 	}
 
 	PY_MOVABLE(short_circuit, interned_copy(type));
