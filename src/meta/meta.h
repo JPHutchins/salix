@@ -82,6 +82,15 @@ struct options inherited_options(StructType const * behaviour, struct base_facts
 bool any_struct_base_is_mutable(PyObject * bases);
 enum { SETTLE_BINDING_COUNT = 7 };
 
+enum deepcopy_table {
+	DEEPCOPY_FUNCTION,
+	DEEPCOPY_DISPATCH,
+	DEEPCOPY_ATOMIC_TYPES,
+	DEEPCOPY_ATOMIC_COPIER,
+	DEEPCOPY_LIST,
+	DEEPCOPY_TABLE_COUNT,
+};
+
 enum pickle_cached {
 	PICKLE_REDUCE_EX_NAME,
 	PICKLE_REDUCE_NAME,
@@ -104,6 +113,7 @@ struct salix_state {
 	PyObject * handoff_new;
 	PyObject * frozen_instance_error;
 	PyObject * copyreg_module;
+	PyObject * deepcopy_tables;
 	PyObject * missing;
 	PyObject * empty_metadata;
 };

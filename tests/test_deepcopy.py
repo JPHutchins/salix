@@ -548,3 +548,97 @@ def test_a_field_that_clears_the_memo_still_raises_its_own_exception():
 
     with pytest.raises(ValueError, match="the field's own error"):
         copy.deepcopy(Holder(Saboteur()))
+
+
+class Bag(Struct):
+    number: int
+    items: list
+    builtin_class: type
+    struct_class: type
+
+
+def a_bag() -> Bag:
+    return Bag(10**20, [1, "two", [3.0, {"four": [5]}], Point(6)], int, Point)
+
+
+@pytest.mark.parametrize("field", ["number", "items", "builtin_class", "struct_class"])
+@pytest.mark.parametrize("seed", [None, "seeded"])
+def test_a_seeded_memo_answers_each_field_as_it_answers_copy_dot_deepcopy(field: str, seed: object):
+    bag = a_bag()
+    value = getattr(bag, field)
+
+    assert getattr(copy.deepcopy(bag, {id(value): seed}), field) == copy.deepcopy(
+        value, {id(value): seed}
+    )
+
+
+def test_the_memo_records_what_copy_dot_deepcopy_records(monkeypatch: pytest.MonkeyPatch):
+    bag = a_bag()
+    mirrored: dict = {}
+    copy.deepcopy(bag, mirrored)
+    stdlib_deepcopy = copy.deepcopy
+    monkeypatch.setattr(copy, "deepcopy", lambda value, memo=None: stdlib_deepcopy(value, memo))
+    delegated: dict = {}
+    copy.deepcopy(bag, delegated)
+
+    assert [key for key in mirrored if key != id(mirrored)] == [
+        key for key in delegated if key != id(delegated)
+    ]
+    assert list(map(id, mirrored[id(mirrored)])) == list(map(id, delegated[id(delegated)]))
+
+
+def test_a_replaced_deepcopy_sees_every_field(monkeypatch: pytest.MonkeyPatch):
+    bag = a_bag()
+    copy.deepcopy(bag)
+    stdlib_deepcopy = copy.deepcopy
+    seen: list[object] = []
+
+    def recording(value: object, memo: dict | None = None) -> object:
+        seen.append(value)
+        return stdlib_deepcopy(value, memo)
+
+    monkeypatch.setattr(copy, "deepcopy", recording)
+    copy.deepcopy(bag)
+
+    fields = (bag.number, bag.items, bag.builtin_class, bag.struct_class)
+
+    assert [value for value in seen if any(value is field for field in fields)] == list(fields)
+
+
+@pytest.mark.parametrize("registered", [int, list])
+def test_a_registered_dispatch_copier_answers_as_it_answers_copy_dot_deepcopy(
+    registered: type, monkeypatch: pytest.MonkeyPatch
+):
+    bag = a_bag()
+    monkeypatch.setitem(copy._deepcopy_dispatch, registered, lambda value, memo: "registered")
+
+    assert copy.deepcopy(bag).number == copy.deepcopy(bag.number)
+    assert copy.deepcopy(bag).items == copy.deepcopy(bag.items)
+
+
+def test_a_list_holding_itself_resolves_to_the_copy():
+    items: list = []
+    items.append(items)
+    duplicate = copy.deepcopy(Bag(1, items, int, Point))
+
+    assert duplicate.items is not items
+    assert duplicate.items[0] is duplicate.items
+
+
+def test_a_list_subclass_field_is_copied_by_its_own_hook():
+    class Hooked(list):
+        def __deepcopy__(self, memo: dict) -> str:
+            return "hooked"
+
+    assert copy.deepcopy(Bag(1, Hooked(), int, Point)).items == "hooked"
+
+
+def test_a_deeply_nested_list_field_raises_recursion_error_like_copy_dot_deepcopy():
+    nested: list = []
+    for _ in range(100_000):
+        nested = [nested]
+
+    with pytest.raises(RecursionError):
+        copy.deepcopy(nested)
+    with pytest.raises(RecursionError):
+        copy.deepcopy(Bag(1, nested, int, Point))

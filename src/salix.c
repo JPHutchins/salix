@@ -99,6 +99,7 @@ static void struct_free(void * const module) {
 
 	Py_CLEAR(state->frozen_instance_error);
 	Py_CLEAR(state->copyreg_module);
+	Py_CLEAR(state->deepcopy_tables);
 	Py_CLEAR(state->missing);
 	Py_CLEAR(state->empty_metadata);
 	defaults_free();
