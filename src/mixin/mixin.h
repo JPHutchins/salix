@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../meta/meta.h"
 #include "../mixin.h"
 #include "../result.h"
 
@@ -12,11 +13,12 @@ PyObject * Struct_setstate(PyObject * self, PyObject * state);
 PyObject * co_base_override(PyObject * self, PyObject * name);
 int copies_through_reduce(StructType * type);
 enum result pickle_cache_fill(struct salix_state * state);
+enum result copy_cache_fill(struct salix_state * state);
 PyObject * Struct_deepcopy(PyObject * self, PyObject * memo);
 PyObject * copy_reduction(PyObject * self, PyObject * copier);
 PyObject * copy_dispatch_prologue(
 	PyObject * self,
-	char const * name,
+	enum copy_cached hook,
 	PyObject * argument,
 	bool dispatch_truthy,
 	PyObject * * copy_module,
@@ -26,7 +28,7 @@ PyObject * copy_delegate(
 	PyObject * self,
 	PyObject * argument,
 	PyObject * memo,
-	char const * name,
+	enum copy_cached hook,
 	char const * uncopyable,
 	bool dispatch_truthy
 );

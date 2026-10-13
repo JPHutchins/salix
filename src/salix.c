@@ -97,6 +97,11 @@ static void struct_free(void * const module) {
 		Py_CLEAR(state->pickle_cache[i]);
 	}
 
+	for (Py_ssize_t i = 0; i < COPY_CACHED_COUNT; ++i) {
+		Py_CLEAR(state->copy_cache[i]);
+	}
+
+	Py_CLEAR(state->copy_module);
 	Py_CLEAR(state->frozen_instance_error);
 	Py_CLEAR(state->copyreg_module);
 	Py_CLEAR(state->deepcopy_tables);
@@ -238,6 +243,7 @@ static int struct_exec(PyObject * const module) {
 		state == NULL ||
 		settle_cache_fill(state) != RESULT_OK ||
 		pickle_cache_fill(state) != RESULT_OK ||
+		copy_cache_fill(state) != RESULT_OK ||
 		introspection_install(module, state) != RESULT_OK ||
 		add_frozen_instance_error(module, state) != RESULT_OK
 	) {

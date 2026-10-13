@@ -118,15 +118,81 @@ PyObject * co_base_override(PyObject * const self, PyObject * const name) {
 	return NULL;
 }
 
+static PyObject * copy_cached_build(enum copy_cached const kind) {
+	static char const * const names[] = {
+		[COPY_SHALLOW_HOOK_NAME] = "__copy__",
+		[COPY_DEEP_HOOK_NAME] = "__deepcopy__",
+		[COPY_DEEPCOPY_NAME] = "deepcopy",
+		[COPY_DISPATCH_TABLE_NAME] = "dispatch_table",
+	};
+
+	return PyUnicode_InternFromString(names[kind]);
+}
+
+enum result copy_cache_fill(struct salix_state * const state) {
+	for (enum copy_cached kind = 0; kind < COPY_CACHED_COUNT; kind += 1) {
+		Py_XSETREF(state->copy_cache[kind], copy_cached_build(kind));
+
+		if (state->copy_cache[kind] == NULL) {
+			return RESULT_ERROR;
+		}
+	}
+
+	return RESULT_OK;
+}
+
+static PyObject * copy_cached(PyObject * const self, enum copy_cached const kind) {
+	return (
+		is_struct(self) ? Py_NewRef(struct_type_of(self)->struct_state->copy_cache[kind]) :
+		copy_cached_build(kind)
+	);
+}
+
+static PyObject * copy_module_of(PyObject * const self) {
+	if (!is_struct(self)) {
+		return PyImport_ImportModule("copy");
+	}
+
+	struct salix_state * const state = struct_type_of(self)->struct_state;
+	PyObject * cached = NULL;
+
+	STRUCT_BEGIN_CRITICAL_SECTION(state->pickle_cache[PICKLE_REDUCE_EX_NAME]);
+	cached = Py_XNewRef(state->copy_module);
+	STRUCT_END_CRITICAL_SECTION();
+
+	if (cached != NULL) {
+		return cached;
+	}
+
+	PY_OWNED(imported, PyImport_ImportModule("copy"));
+
+	if (imported == NULL) {
+		return NULL;
+	}
+
+	PyObject * stored = NULL;
+
+	STRUCT_BEGIN_CRITICAL_SECTION(state->pickle_cache[PICKLE_REDUCE_EX_NAME]);
+
+	if (state->copy_module == NULL) {
+		state->copy_module = Py_NewRef(imported);
+	}
+
+	stored = Py_NewRef(state->copy_module);
+	STRUCT_END_CRITICAL_SECTION();
+
+	return stored;
+}
+
 PyObject * copy_dispatch_prologue(
 	PyObject * const self,
-	char const * const name,
+	enum copy_cached const hook,
 	PyObject * const argument,
 	bool const dispatch_truthy,
 	PyObject * * const copy_module,
 	PyObject * * const copier
 ) {
-	PY_OWNED(copy_name, PyUnicode_InternFromString(name));
+	PY_OWNED(copy_name, copy_cached(self, hook));
 
 	if (copy_name == NULL) {
 		return NULL;
@@ -142,13 +208,17 @@ PyObject * copy_dispatch_prologue(
 		return PyObject_CallOneArg(deferred, argument);
 	}
 
-	PY_MOVABLE(module, PyImport_ImportModule("copy"));
+	PY_MOVABLE(module, copy_module_of(self));
 
 	if (module == NULL) {
 		return NULL;
 	}
 
-	PY_OWNED(dispatch_table, PyObject_GetAttrString(module, "dispatch_table"));
+	PY_OWNED(dispatch_table_name, copy_cached(self, COPY_DISPATCH_TABLE_NAME));
+	PY_OWNED(
+		dispatch_table,
+		dispatch_table_name != NULL ? PyObject_GetAttr(module, dispatch_table_name) : NULL
+	);
 
 	if (dispatch_table == NULL) {
 		return NULL;
@@ -184,7 +254,7 @@ PyObject * copy_delegate(
 	PyObject * const self,
 	PyObject * const argument,
 	PyObject * const memo,
-	char const * const name,
+	enum copy_cached const hook,
 	char const * const uncopyable,
 	bool const dispatch_truthy
 ) {
@@ -192,7 +262,7 @@ PyObject * copy_delegate(
 	PY_MOVABLE(copier, NULL);
 	PY_MOVABLE(
 		deferred,
-		copy_dispatch_prologue(self, name, argument, dispatch_truthy, &copy_module, &copier)
+		copy_dispatch_prologue(self, hook, argument, dispatch_truthy, &copy_module, &copier)
 	);
 
 	if (deferred != NULL) {
@@ -308,7 +378,14 @@ PyObject * interned_copy(StructType const * const type) {
 
 PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 	if (!is_struct(self)) {
-		return copy_delegate(self, self, Py_None, "__copy__", "un(shallow)copyable", false);
+		return copy_delegate(
+			self,
+			self,
+			Py_None,
+			COPY_SHALLOW_HOOK_NAME,
+			"un(shallow)copyable",
+			false
+		);
 	}
 
 	StructType * const type = struct_type_of(self);
@@ -324,7 +401,7 @@ PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 	PY_MOVABLE(copier, NULL);
 	PY_MOVABLE(
 		deferred,
-		copy_dispatch_prologue(self, "__copy__", self, false, &copy_module, &copier)
+		copy_dispatch_prologue(self, COPY_SHALLOW_HOOK_NAME, self, false, &copy_module, &copier)
 	);
 
 	if (deferred != NULL) {
@@ -484,6 +561,20 @@ static void test_a_copy_of_a_fielded_struct_is_equal_and_distinct(void) {
 	Py_DECREF(source);
 }
 
+static void test_a_struct_copy_keeps_the_copy_module_it_found(void) {
+	PyObject * const source = testing_two_field_instance();
+	PyObject * const copy = Struct_copy(source, NULL);
+	PyObject * const copy_module = PyImport_ImportModule("copy");
+
+	TEST_ASSERT_NOT_NULL(copy);
+	TEST_ASSERT_NOT_NULL(copy_module);
+	TEST_ASSERT_EQUAL_PTR(copy_module, struct_type_of(source)->struct_state->copy_module);
+
+	Py_DECREF(copy_module);
+	Py_DECREF(copy);
+	Py_DECREF(source);
+}
+
 static void test_a_string_reduction_copies_the_identity(void) {
 	PyObject * const fixtures = testing_evaluate(reductions_source);
 	PyObject * const copied = copy_reconstruct(
@@ -526,6 +617,7 @@ void copy_tests(void) {
 	RUN_TEST(test_an_interned_copy_answers_the_singleton);
 	RUN_TEST(test_a_copy_of_a_frozen_empty_struct_is_the_singleton);
 	RUN_TEST(test_a_copy_of_a_fielded_struct_is_equal_and_distinct);
+	RUN_TEST(test_a_struct_copy_keeps_the_copy_module_it_found);
 	RUN_TEST(test_a_string_reduction_copies_the_identity);
 	RUN_TEST(test_a_tuple_reduction_rebuilds_through_the_memo);
 }
