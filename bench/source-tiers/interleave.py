@@ -2,6 +2,7 @@ import re
 import statistics
 import subprocess
 import sys
+import time
 from collections import defaultdict
 from typing import NamedTuple
 
@@ -20,6 +21,7 @@ def parse_variant(specification: str) -> Variant:
 
 
 def measurements(python: str, variant: Variant) -> dict[str, tuple[float, str]]:
+    launched = time.perf_counter()
     completed = subprocess.run(
         [python, *variant.arguments],
         env={"PYTHONPATH": variant.python_path, "PATH": "/usr/bin:/bin"},
@@ -27,10 +29,14 @@ def measurements(python: str, variant: Variant) -> dict[str, tuple[float, str]]:
         text=True,
         check=True,
     )
+    exited = time.perf_counter()
     return {
-        match["label"].strip(): (float(match["value"]), match["unit"])
-        for match in map(MEASUREMENT.match, completed.stdout.splitlines())
-        if match
+        **{
+            match["label"].strip(): (float(match["value"]), match["unit"])
+            for match in map(MEASUREMENT.match, completed.stdout.splitlines())
+            if match
+        },
+        "process wall clock": (1e3 * (exited - launched), "ms"),
     }
 
 
@@ -46,6 +52,7 @@ def main(python: str, rounds: int, variants: list[Variant]) -> None:
         f"{'measurement':28s} "
         + " ".join(f"{variant.name:>22s}" for variant in variants)
         + f"   ratio to {variants[0].name}"
+        + f"   change vs {variants[0].name}"
     )
     for label, by_variant in samples.items():
         medians = [statistics.median(by_variant[variant.name]) for variant in variants]
@@ -54,6 +61,8 @@ def main(python: str, rounds: int, variants: list[Variant]) -> None:
             + " ".join(f"{median:16.1f} {units[label]:>5s}" for median in medians)
             + "   "
             + " ".join(f"{median / medians[0]:5.2f}x" for median in medians[1:])
+            + "   "
+            + " ".join(f"{median - medians[0]:+9.1f} {units[label]}" for median in medians[1:])
         )
 
 
