@@ -129,6 +129,14 @@ static inline PyObject * struct_type_dict(PyTypeObject * const type) {
 }
 #endif
 
+static inline PyObject * type_lookup_ref(PyTypeObject * const type, PyObject * const name) {
+#if PY_VERSION_HEX >= 0x030D0000
+	return _PyType_LookupRef(type, name);
+#else
+	return Py_XNewRef(_PyType_Lookup(type, name));
+#endif
+}
+
 static inline PyObject * dict_value_ref(PyObject * const mapping, PyObject * const key) {
 #if PY_VERSION_HEX >= 0x030D0000
 	PyObject * value = NULL;

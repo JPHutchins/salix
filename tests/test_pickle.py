@@ -1,8 +1,10 @@
 import copy
+import copyreg
 import pickle
 import sys
 from collections import OrderedDict
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
+from contextlib import suppress
 from dataclasses import InitVar
 
 import pytest
@@ -91,6 +93,128 @@ class Failure(Exception, Struct):
 
 def round_trip(value: object, protocol: int = pickle.HIGHEST_PROTOCOL) -> object:
     return pickle.loads(pickle.dumps(value, protocol))
+
+
+def all_unset_mutable() -> Mutable:
+    instance = Mutable(1)
+    del instance.x
+    del instance.y
+
+    return instance
+
+
+@pytest.mark.parametrize(
+    "instance",
+    [
+        Frozen(1),
+        Frozen(1, None),
+        Nested(Frozen(1)),
+        Seeded(3),
+        Mutable(1),
+        all_unset_mutable(),
+    ],
+    ids=["frozen", "none-value", "nested", "init-var", "mutable", "all-unset"],
+)
+def test_a_plain_struct_reduces_exactly_as_object_does(instance: Struct) -> None:
+    reduced = instance.__reduce_ex__(4)
+
+    try:
+        assert "__slotnames__" not in vars(type(instance))
+        assert reduced == object.__reduce_ex__(instance, 4)
+    finally:
+        with suppress(AttributeError):
+            del type(instance).__slotnames__
+
+
+def reduced_or_refused(reduce: Callable[[int], object]) -> object:
+    try:
+        return reduce(4)
+    except TypeError as error:
+        return str(error)
+
+
+@pytest.mark.parametrize("slotnames", [["x"], ["x", "y"], ["y", "x"]], ids=["partial", "both", "reversed"])
+def test_an_assigned_slotnames_reduces_as_object_does(slotnames: list[str]) -> None:
+    class Assigned(Struct):
+        x: int
+        y: int = 2
+
+    Assigned.__slotnames__ = slotnames
+    instance = Assigned(1)
+
+    assert reduced_or_refused(instance.__reduce_ex__) == reduced_or_refused(
+        lambda protocol: object.__reduce_ex__(instance, protocol)
+    )
+
+
+def synthesized_getstate(self: Struct, name: str) -> object:
+    if name == "__getstate__":
+        return lambda: {"x": 99}
+    raise AttributeError(name)
+
+
+def intercepted_getstate(self: Struct, name: str) -> object:
+    return (lambda: {"x": 99}) if name == "__getstate__" else object.__getattribute__(self, name)
+
+
+PICKLE_HOOKS = {
+    "__reduce__": lambda self: (int, (7,)),
+    "__getstate__": lambda self: {"x": 99},
+    "__getnewargs__": lambda self: (99,),
+    "__getnewargs_ex__": lambda self: ((99,), {}),
+    "__getattr__": synthesized_getstate,
+    "__getattribute__": intercepted_getstate,
+}
+
+
+@pytest.mark.parametrize("hook", PICKLE_HOOKS)
+def test_a_struct_defining_a_pickle_hook_reduces_as_object_does(hook: str) -> None:
+    hooked = type(Struct)(f"Hooked{hook}", (Struct,), {"__annotations__": {"x": int}, hook: PICKLE_HOOKS[hook]})
+    instance = hooked(1)
+
+    assert reduced_or_refused(instance.__reduce_ex__) == reduced_or_refused(
+        lambda protocol: object.__reduce_ex__(instance, protocol)
+    )
+
+
+def test_a_state_key_that_only_compares_equal_to_a_field_name_is_refused() -> None:
+    class EqualToX:
+        def __hash__(self) -> int:
+            return hash("x")
+
+        def __eq__(self, other: object) -> bool:
+            return other == "x"
+
+    restored = Frozen.__new__(Frozen)
+
+    with pytest.raises(TypeError, match="not a str"):
+        restored.__setstate__((None, {EqualToX(): 42}))
+
+
+def test_a_replaced_copyreg_newobj_is_what_both_reductions_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Local(Struct):
+        x: int
+
+    def replacement(cls: type, *arguments: object) -> object:
+        return cls.__new__(cls, *arguments)
+
+    instance = Local(1)
+    monkeypatch.setattr(copyreg, "__newobj__", replacement)
+
+    assert instance.__reduce_ex__(4)[0] is replacement
+    assert object.__reduce_ex__(instance, 4)[0] is replacement
+
+
+def test_a_getstate_hook_still_shapes_the_reduced_state() -> None:
+    assert Stateful(3).__reduce_ex__(4)[2] == {"doubled": 6}
+    assert round_trip(Stateful(3)) == Stateful(6)
+
+
+def test_a_state_naming_a_slot_beyond_the_fields_restores_through_the_slot() -> None:
+    restored = CoBase.__new__(CoBase)
+    restored.__setstate__((None, {"x": 5, "extra": "kept"}))
+
+    assert (restored.x, restored.extra) == (5, "kept")
 
 
 @pytest.mark.parametrize("protocol", PROTOCOLS)
