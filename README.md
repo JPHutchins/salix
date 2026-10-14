@@ -25,8 +25,10 @@ pip install salix
 Linux on x86_64 and arm64, across the supported CPythons — and wheels are
 published for its cells once the interpreter's ABI is frozen. A pre-release
 interpreter's wheels are built and tested but held back until its rc, and a
-configuration missing from the matrix has no wheel. salix supports CPython
-3.10 through 3.15, including the free-threaded builds. On a machine PyPI has
+configuration missing from the matrix has no wheel. Free-threaded 3.13 wheels
+are built but not published, because the test suite cannot run there. salix
+supports CPython 3.10 through 3.15, and the free-threaded builds of 3.14 and
+3.15. On a machine PyPI has
 no wheel for, pip compiles the sdist — which needs setuptools and a C
 compiler — except on Windows, where MSVC cannot compile this source. PyPy
 and GraalPy satisfy the version floor and have no wheels, and whether the

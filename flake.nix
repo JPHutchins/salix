@@ -35,8 +35,13 @@
 
       abiIsFrozen = version: builtins.match "[0-9]+\\.[0-9]+\\.[0-9]+(rc[0-9]+)?" version != null;
 
+      untestedPythons = [ "3.13t" ];
+
       releasableWheelNames = map ({ pythonMinor, platformName }: "${pythonMinor}-${platformName}") (
-        lib.filter ({ pythonMinor, ... }: abiIsFrozen matrix.pythons.${pythonMinor}.version) wheelIds
+        lib.filter (
+          { pythonMinor, ... }:
+          abiIsFrozen matrix.pythons.${pythonMinor}.version && !(lib.elem pythonMinor untestedPythons)
+        ) wheelIds
       );
 
       buildSourceFiles = lib.fileset.unions [
