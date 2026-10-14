@@ -34,6 +34,7 @@ int main(void) {
 	handoff_tests();
 	init_owner_tests();
 	meta_tests();
+	mirror_tests();
 	mixin_tests();
 	mro_tests();
 	options_tests();
