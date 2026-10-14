@@ -131,7 +131,6 @@ struct salix_state {
 	PyObject * empty_metadata;
 };
 
-PyModuleDef * salix_module_def(void);
 bool any_base_diverts_setattro(PyObject * bases);
 bool carries_weakref_slot(PyTypeObject const * type);
 
