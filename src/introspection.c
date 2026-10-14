@@ -400,29 +400,8 @@ PyObject * Struct_to_dict(PyObject * const module, PyObject * const instance) {
 
 	StructType * const type = struct_type_of(instance);
 
-	if (refused_until_created(type, "read the fields of")) {
-		return NULL;
-	}
-
-	PY_OWNED(values, PyTuple_New(type->struct_field_count));
-	PY_MOVABLE(by_name, values != NULL ? PyDict_New() : NULL);
-
-	if (by_name == NULL) {
-		return NULL;
-	}
-
-	struct_slots_ref_into(type, instance, values, NULL);
-
-	for (Py_ssize_t i = 0; i < type->struct_field_count; i += 1) {
-		PyObject * const value = PyTuple_GET_ITEM(values, i);
-
-		if (
-			value != NULL &&
-			PyDict_SetItem(by_name, PyTuple_GET_ITEM(type->struct_field_names, i), value) < 0
-		) {
-			return NULL;
-		}
-	}
-
-	return py_move(&by_name);
+	return (
+		refused_until_created(type, "read the fields of") ? NULL :
+		struct_slots_by_name(type, instance)
+	);
 }

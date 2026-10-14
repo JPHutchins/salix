@@ -53,6 +53,10 @@ def test_an_unset_field_is_skipped():
     assert to_dict(Point.__new__(Point)) == {}
 
 
+def test_a_field_set_to_none_is_kept():
+    assert to_dict(Point(1, None)) == {"x": 1, "y": None}
+
+
 def test_a_fieldless_struct_gives_an_empty_dict():
     assert to_dict(Empty()) == {}
 
