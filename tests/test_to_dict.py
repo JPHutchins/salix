@@ -68,7 +68,7 @@ def test_the_instance_dict_is_not_merged():
     assert to_dict(instance) == {"x": 1}
 
 
-def test_equal_structs_give_equal_dicts():
+def test_equal_fields_give_equal_dicts_whatever_the_instance_dicts_hold():
     first = WithDict(1)
     second = WithDict(1)
     first.extra = "a"
@@ -76,6 +76,16 @@ def test_equal_structs_give_equal_dicts():
 
     assert first == second
     assert to_dict(first) == to_dict(second)
+
+
+def test_an_unset_field_and_a_none_field_compare_equal_but_give_different_dicts():
+    unset = Partial(1)
+    none = Partial(1)
+    none.y = None
+
+    assert unset == none
+    assert to_dict(unset) == {"x": 1}
+    assert to_dict(none) == {"x": 1, "y": None}
 
 
 def test_each_call_returns_a_new_dict():

@@ -454,6 +454,12 @@ def test_a_shared_struct_is_safe_to_replace_through_a_body_init_while_another_th
 
 
 def test_a_shared_struct_is_safe_to_read_as_a_dict_while_another_thread_writes_it():
+    """to_dict snapshots every slot under one section before it builds the
+    dict. One writer, because `first >= second` pins that snapshot: the
+    writer writes first and then second, so the source's own states always
+    satisfy it, while a per-slot read could assemble (i, i+1) across a
+    writer round, which the source never held."""
+
     class Shared(Struct, frozen=False):
         first: object
         second: object

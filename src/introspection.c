@@ -333,6 +333,17 @@ static PyObject * field_records_of(StructType const * const type) {
 	return py_move(&records);
 }
 
+static PyObject * refused_non_struct(char const * const expected, PyObject * const object) {
+	PyErr_Format(
+		PyExc_TypeError,
+		PyType_Check(object) ? "%s, not the class %.200s" : "%s, not an instance of %.200s",
+		expected,
+		PyType_Check(object) ? ((PyTypeObject *) object)->tp_name : Py_TYPE(object)->tp_name
+	);
+
+	return NULL;
+}
+
 PyObject * Struct_fields(PyObject * const module, PyObject * const class_or_instance) {
 	PyObject * const struct_class = (
 		is_struct_class(class_or_instance) ? class_or_instance :
@@ -341,16 +352,7 @@ PyObject * Struct_fields(PyObject * const module, PyObject * const class_or_inst
 	);
 
 	if (struct_class == NULL) {
-		PyErr_Format(
-			PyExc_TypeError,
-			PyType_Check(class_or_instance) ?
-			"fields() expects a struct class or instance, not the class %.200s" :
-			"fields() expects a struct class or instance, not an instance of %.200s",
-			PyType_Check(class_or_instance) ? ((PyTypeObject *) class_or_instance)->tp_name :
-			Py_TYPE(class_or_instance)->tp_name
-		);
-
-		return NULL;
+		return refused_non_struct("fields() expects a struct class or instance", class_or_instance);
 	}
 
 	StructType * const type = (StructType *) struct_class;
@@ -388,14 +390,7 @@ PyObject * Struct_fields(PyObject * const module, PyObject * const class_or_inst
 
 PyObject * Struct_to_dict(PyObject * const module, PyObject * const instance) {
 	if (!is_struct(instance)) {
-		PyErr_Format(
-			PyExc_TypeError,
-			PyType_Check(instance) ? "to_dict() expects a struct instance, not the class %.200s" :
-			"to_dict() expects a struct instance, not an instance of %.200s",
-			PyType_Check(instance) ? ((PyTypeObject *) instance)->tp_name : Py_TYPE(instance)->tp_name
-		);
-
-		return NULL;
+		return refused_non_struct("to_dict() expects a struct instance", instance);
 	}
 
 	StructType * const type = struct_type_of(instance);

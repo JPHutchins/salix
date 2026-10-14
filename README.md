@@ -162,12 +162,16 @@ changed one. `ClassVar` and `InitVar` names are not fields.
 
 `to_dict()` reads an instance's set fields into a new dict, in declaration
 order. It is shallow, skips an unset field, and leaves out the instance
-`__dict__`, so structs that compare equal give equal dicts:
+`__dict__`:
 
 ```python
->>> from salix import to_dict
+>>> from salix import Struct, to_dict
 
->>> to_dict(Option("verbose"))
+>>> class Flag(Struct):
+...     name: str
+...     count: int = 1
+
+>>> to_dict(Flag("verbose"))
 {'name': 'verbose', 'count': 1}
 
 ```
