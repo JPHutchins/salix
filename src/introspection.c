@@ -296,7 +296,7 @@ enum result introspection_install(PyObject * const module, struct salix_state * 
 static PyObject * field_records_of(StructType const * const type) {
 	struct salix_state const * const state = type->struct_state;
 	Py_ssize_t const count = PyTuple_GET_SIZE(type->struct_field_names);
-	Py_ssize_t const required = count - PyTuple_GET_SIZE(type->struct_defaults);
+	Py_ssize_t const required = struct_required_count(type);
 	PY_MOVABLE(records, PyTuple_New(count));
 
 	if (records == NULL) {

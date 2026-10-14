@@ -102,25 +102,34 @@ enum result install_fields(
 		return RESULT_ERROR;
 	}
 
-	if (install_init_vars(struct_class, plan) != RESULT_OK) {
+	enum result installed = RESULT_ERROR;
+
+	STRUCT_BEGIN_CRITICAL_SECTION(struct_class);
+	installed = install_init_vars(struct_class, plan);
+
+	if (installed == RESULT_OK) {
+		struct_class->struct_field_names = py_move(&field_names);
+		struct_class->struct_defaults = Py_NewRef(plan->defaults);
+		struct_class->struct_annotations = Py_NewRef(plan->annotations);
+		struct_class->struct_metadata = Py_NewRef(plan->metadata);
+		struct_class->struct_slot_offsets = offsets;
+		struct_class->struct_member_offsets = member_offsets;
+		struct_class->struct_member_count = member_count;
+		struct_class->struct_field_count = field_count;
+		struct_class->struct_default_count = PyTuple_GET_SIZE(plan->defaults);
+		struct_class->struct_options = options;
+		struct_class->struct_resolves_body_eq = resolves_body_eq;
+		struct_clear_derived_caches(struct_class);
+	}
+
+	STRUCT_END_CRITICAL_SECTION();
+
+	if (installed != RESULT_OK) {
 		PyMem_Free(member_offsets);
 		PyMem_Free(offsets);
 
 		return RESULT_ERROR;
 	}
-
-	struct_class->struct_field_names = py_move(&field_names);
-	struct_class->struct_defaults = Py_NewRef(plan->defaults);
-	struct_class->struct_annotations = Py_NewRef(plan->annotations);
-	struct_class->struct_metadata = Py_NewRef(plan->metadata);
-	struct_class->struct_slot_offsets = offsets;
-	struct_class->struct_member_offsets = member_offsets;
-	struct_class->struct_member_count = member_count;
-	struct_class->struct_field_count = field_count;
-	struct_class->struct_default_count = PyTuple_GET_SIZE(plan->defaults);
-	struct_class->struct_options = options;
-	struct_class->struct_resolves_body_eq = resolves_body_eq;
-	struct_clear_derived_caches(struct_class);
 
 	return RESULT_OK;
 }
