@@ -160,6 +160,18 @@ static void store_exception_args(PyObject * const self, PyObject * const args) {
 	Py_XDECREF(old);
 }
 
+enum result install_empty_exception_payload(StructType * const type, PyObject * const self) {
+	PyObject * const no_args = PyTuple_New(0);
+
+	if (no_args == NULL) {
+		return RESULT_ERROR;
+	}
+
+	store_exception_args(self, no_args);
+
+	return carry_group_members(type, self, NULL, NULL, NULL, NULL, NULL);
+}
+
 #if PY_VERSION_HEX >= 0x030B0000
 enum result store_group_args(
 	StructType * const type,

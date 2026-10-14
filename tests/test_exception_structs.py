@@ -975,7 +975,13 @@ def reached_from_a_deepcopy(error_class: type[OSError], shape: str) -> ReachedFr
     error.args = (wrap(error),)
     error.path = wrap(error)
     copied = copy.deepcopy(error)
+
+    assert len(copied.args) == 1, f"the copy's args are {copied.args!r}"
+    assert copied.path is not None, "the copy lost its path"
+
     reached = unwrap(copied.args[0])
+
+    assert len(reached.args) == 1, f"the reached error's args are {reached.args!r}"
 
     return ReachedFromTheCopy(
         args_reach_the_copy=reached is copied,
@@ -1011,13 +1017,18 @@ def test_a_family_payload_that_reaches_itself_deepcopies_as_the_stdlib_copies_a_
 
 
 class FormatsEveryExceptionInTheMemo:
-    def __deepcopy__(self, memo: dict) -> "FormatsEveryExceptionInTheMemo":
-        for value in list(memo.values()):
-            if isinstance(value, BaseException):
-                str(value)
-                repr(value)
+    def __init__(self) -> None:
+        self.seen: list[BaseException] = []
 
-        return self
+    def __deepcopy__(self, memo: dict) -> "FormatsEveryExceptionInTheMemo":
+        copied = FormatsEveryExceptionInTheMemo()
+        copied.seen = [value for value in list(memo.values()) if isinstance(value, BaseException)]
+
+        for seen in copied.seen:
+            str(seen)
+            repr(seen)
+
+        return copied
 
 
 class HookedPlainError(Exception, Struct, frozen=False):
@@ -1028,29 +1039,102 @@ class HookedFileError(OSError, Struct, frozen=False):
     hook: object = None
 
 
-@pytest.mark.parametrize("error_class", [HookedPlainError, HookedFileError])
-def test_a_deepcopy_hook_can_format_the_copy_it_finds_in_the_memo(error_class: type[BaseException]):
+def a_hooked_plain_error() -> BaseException:
+    error = HookedPlainError()
+    error.args = ("boom", 2)
+    error.hook = FormatsEveryExceptionInTheMemo()
+
+    return error
+
+
+def a_hooked_file_error_without_args() -> BaseException:
+    error = HookedFileError()
+    error.hook = FormatsEveryExceptionInTheMemo()
+
+    return error
+
+
+def a_hooked_file_error_with_args() -> BaseException:
+    error = HookedFileError(2, "missing")
+    error.hook = FormatsEveryExceptionInTheMemo()
+
+    return error
+
+
+def a_hooked_group() -> BaseException:
+    from builtins import ExceptionGroup
+
+    class HookedGroup(ExceptionGroup, Struct, frozen=False):
+        exceptions: list = ()
+        hook: object = None
+
+    group = HookedGroup()
+    group.hook = FormatsEveryExceptionInTheMemo()
+
+    return group
+
+
+@pytest.mark.parametrize(
+    "make_error",
+    [
+        a_hooked_plain_error,
+        a_hooked_file_error_without_args,
+        a_hooked_file_error_with_args,
+        pytest.param(
+            a_hooked_group,
+            marks=pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11"),
+        ),
+    ],
+)
+def test_a_deepcopy_hook_can_format_the_copy_it_finds_in_the_memo(make_error):
     import copy
 
-    error = error_class()
-    error.hook = FormatsEveryExceptionInTheMemo()
+    error = make_error()
     copied = copy.deepcopy(error)
 
+    assert copied.hook is not error.hook
+    assert any(seen is copied for seen in copied.hook.seen)
     assert copied.args == error.args
-    assert copied.hook is error.hook
 
 
-def test_a_self_referential_exception_payload_deepcopies_to_its_copy():
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
+def test_a_group_member_hook_can_format_the_group_copy_it_finds_in_the_memo():
+    import copy
+    from builtins import ExceptionGroup
+
+    class Group(ExceptionGroup, Struct, frozen=False):
+        exceptions: list = ()
+        hook: object = None
+
+    member = HookedPlainError()
+    member.hook = FormatsEveryExceptionInTheMemo()
+    group = Group("m", [member])
+    copied = copy.deepcopy(group)
+
+    assert str(copied) == "m (1 sub-exception)"
+    assert any(seen is copied for seen in copied.exceptions[0].hook.seen)
+
+
+def test_a_non_family_payload_that_is_itself_deepcopies_to_its_copy_where_the_stdlib_recurses():
     import copy
 
-    class M(Exception, Struct, frozen=False):
+    class PlainSelfReferential(Exception):
         pass
 
-    m = M()
-    m.args = (m,)
-    copied_m = copy.deepcopy(m)
+    class SelfReferential(Exception, Struct, frozen=False):
+        pass
 
-    assert copied_m.args[0] is copied_m
+    plain = PlainSelfReferential()
+    plain.args = (plain,)
+
+    with pytest.raises(RecursionError):
+        copy.deepcopy(plain)
+
+    error = SelfReferential()
+    error.args = (error,)
+    copied = copy.deepcopy(error)
+
+    assert copied.args[0] is copied
 
 
 def test_a_subclass_of_a_none_new_struct_refuses_every_entry_point():

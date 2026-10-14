@@ -20,22 +20,18 @@ static PyObject * memo_failure(PyObject * const memo, PyObject * const key) {
 	return NULL;
 }
 
-static PyObject * allocated_copy(PyTypeObject * const cls) {
+static PyObject * allocated_copy(StructType * const type) {
+	PyTypeObject * const cls = &type->heap_type.ht_type;
 	PY_MOVABLE(copy, cls->tp_alloc(cls, 0));
 
-	if (copy == NULL || !PyExceptionInstance_Check(copy)) {
-		return py_move(&copy);
-	}
-
-	PyObject * const no_args = PyTuple_New(0);
-
-	if (no_args == NULL) {
-		return NULL;
-	}
-
-	((PyBaseExceptionObject *) copy)->args = no_args;
-
-	return py_move(&copy);
+	return (
+		(
+			copy == NULL ||
+			!PyExceptionInstance_Check(copy) ||
+			install_empty_exception_payload(type, copy) == RESULT_OK
+		) ? py_move(&copy) :
+		NULL
+	);
 }
 
 PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) {
@@ -195,7 +191,7 @@ PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) {
 			}
 		} else {
 			Py_DECREF(args);
-			copy = allocated_copy(cls);
+			copy = allocated_copy(type);
 
 			if (copy == NULL) {
 				return NULL;
@@ -210,7 +206,7 @@ PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) {
 			}
 		}
 	} else {
-		copy = allocated_copy(cls);
+		copy = allocated_copy(type);
 	}
 
 	if (copy == NULL) {
