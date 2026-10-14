@@ -24,14 +24,11 @@ static PyObject * allocated_copy(StructType * const type) {
 	PyTypeObject * const cls = &type->heap_type.ht_type;
 	PY_MOVABLE(copy, cls->tp_alloc(cls, 0));
 
-	return (
-		(
-			copy == NULL ||
-			!PyExceptionInstance_Check(copy) ||
-			install_empty_exception_payload(type, copy) == RESULT_OK
-		) ? py_move(&copy) :
-		NULL
-	);
+	if (copy != NULL && install_empty_exception_payload(type, copy) != RESULT_OK) {
+		return NULL;
+	}
+
+	return py_move(&copy);
 }
 
 PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) {

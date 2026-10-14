@@ -1068,7 +1068,7 @@ def a_hooked_group() -> BaseException:
         exceptions: list = ()
         hook: object = None
 
-    group = HookedGroup()
+    group = HookedGroup("m", [ValueError("x")])
     group.hook = FormatsEveryExceptionInTheMemo()
 
     return group
@@ -1094,7 +1094,8 @@ def test_a_deepcopy_hook_can_format_the_copy_it_finds_in_the_memo(make_error):
 
     assert copied.hook is not error.hook
     assert any(seen is copied for seen in copied.hook.seen)
-    assert copied.args == error.args
+    assert repr(copied.args) == repr(error.args)
+    assert str(copied) == str(error)
 
 
 @pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")

@@ -161,6 +161,10 @@ static void store_exception_args(PyObject * const self, PyObject * const args) {
 }
 
 enum result install_empty_exception_payload(StructType * const type, PyObject * const self) {
+	if (!PyExceptionInstance_Check(self)) {
+		return RESULT_OK;
+	}
+
 	PyObject * const no_args = PyTuple_New(0);
 
 	if (no_args == NULL) {
