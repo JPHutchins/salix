@@ -145,24 +145,12 @@ flake_check = Sequential(flake_evaluates, Task("nix flake check", when=NIX_INPUT
 
 test = Parallel(Sequential(build, pytest), matrix={"PY": PYTHONS})
 
-FREE_THREADED = "3.14t"
+FREE_THREADED = ("3.14t", "3.15t")
 
 FREE_THREADED_ROOT = {"UV_PYTHON_INSTALL_DIR": ".free-threaded-python"}
-free_threaded_build = Sequential(
-    Task(
-        MAKE_ENV.format(PY=FREE_THREADED),
-        mutates=True,
-        env=FREE_THREADED_ROOT,
-        when=lambda changed: not (Path(".venvs") / FREE_THREADED / "bin/python").exists(),
-    ),
-    Task(BUILD.format(PY=FREE_THREADED), mutates=True, env=FREE_THREADED_ROOT | STRICT_BUILD),
+free_threaded = Parallel(
+    Sequential(build, pytest), matrix={"PY": FREE_THREADED}, env=FREE_THREADED_ROOT
 )
-free_threaded_pytest = Task(
-    PYTEST.format(PY=FREE_THREADED),
-    env=FREE_THREADED_ROOT | {"UV_PROJECT_ENVIRONMENT": ".venvs/" + FREE_THREADED},
-    agent_format=JUNIT_FORMAT,
-)
-free_threaded = Sequential(free_threaded_build, free_threaded_pytest)
 in_place_build = Task("uv run python setup.py build_ext --inplace", mutates=True, env=STRICT_BUILD)
 benchmark = Sequential(in_place_build, bench)
 CONFORMANCE_PYTHON = "3.14.6"
