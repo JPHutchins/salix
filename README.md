@@ -160,6 +160,22 @@ empty, and the flags hold their stock defaults; the `Annotated` extras are
 `annotated_metadata`. A `Field` is read-only, and its `__replace__` derives a
 changed one. `ClassVar` and `InitVar` names are not fields.
 
+`to_dict()` reads an instance's set fields into a new dict, in declaration
+order. It is shallow, skips an unset field, and leaves out the instance
+`__dict__`:
+
+```python
+>>> from salix import Struct, to_dict
+
+>>> class Flag(Struct):
+...     name: str
+...     count: int = 1
+
+>>> to_dict(Flag("verbose"))
+{'name': 'verbose', 'count': 1}
+
+```
+
 ## Caching a computed value
 
 `functools.cached_property` caches into an instance `__dict__`; a struct has

@@ -10,3 +10,4 @@ extern PyTypeObject Missing_Type;
 
 enum result introspection_install(PyObject * module, struct salix_state * state);
 PyObject * Struct_fields(PyObject * module, PyObject * class_or_instance);
+PyObject * Struct_to_dict(PyObject * module, PyObject * instance);

@@ -269,29 +269,6 @@ static PyObject * copyreg_module_of(struct salix_state * const state) {
 	return stored;
 }
 
-static PyObject * set_slots_of(StructType const * const type, PyObject * const self) {
-	PY_MOVABLE(slots, PyDict_New());
-	enum result filled = slots != NULL ? RESULT_OK : RESULT_ERROR;
-
-	STRUCT_BEGIN_CRITICAL_SECTION(self);
-
-	for (Py_ssize_t i = 0; filled == RESULT_OK && i < type->struct_field_count; i += 1) {
-		PyObject * const value = *struct_slot(type, self, i);
-
-		filled = (
-			(
-				value == NULL ||
-				PyDict_SetItem(slots, PyTuple_GET_ITEM(type->struct_field_names, i), value) == 0
-			) ? RESULT_OK :
-			RESULT_ERROR
-		);
-	}
-
-	STRUCT_END_CRITICAL_SECTION();
-
-	return filled == RESULT_OK ? py_move(&slots) : NULL;
-}
-
 static PyObject * plain_reduction(struct salix_state * const module_state, PyObject * const self) {
 	StructType const * const type = struct_type_of(self);
 	PY_OWNED(copyreg, copyreg_module_of(module_state));
@@ -303,7 +280,7 @@ static PyObject * plain_reduction(struct salix_state * const module_state, PyObj
 		) :
 		NULL
 	);
-	PY_OWNED(slots, newobj != NULL ? set_slots_of(type, self) : NULL);
+	PY_OWNED(slots, newobj != NULL ? struct_slots_by_name(type, self) : NULL);
 
 	if (slots == NULL) {
 		return NULL;

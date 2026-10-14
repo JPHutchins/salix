@@ -5,7 +5,7 @@ import sysconfig
 
 import pytest
 
-from salix import Struct, fields, from_mapping, replace, set_field
+from salix import Struct, fields, from_mapping, replace, set_field, to_dict
 
 pytestmark = pytest.mark.skipif(
     bool(sysconfig.get_config_var("Py_GIL_DISABLED")),
@@ -521,5 +521,33 @@ def test_a_replaced_field_releases_what_it_took():
     assert sys.getrefcount(sentinel) == before + 2
 
     del changed
+
+    assert sys.getrefcount(sentinel) == before
+
+
+def test_to_dict_takes_one_reference_per_set_field_and_releases_them_with_the_dict():
+    sentinel = Sentinel()
+    pair = Pair(sentinel, sentinel)
+    before = sys.getrefcount(sentinel)
+    by_name = to_dict(pair)
+
+    assert sys.getrefcount(sentinel) == before + 2
+
+    del by_name
+
+    assert sys.getrefcount(sentinel) == before
+
+
+def test_to_dict_of_a_partly_set_instance_releases_its_snapshot():
+    sentinel = Sentinel()
+    half = Pair.__new__(Pair)
+    set_field(half, "first", sentinel)
+    before = sys.getrefcount(sentinel)
+    by_name = to_dict(half)
+
+    assert by_name == {"first": sentinel}
+    assert sys.getrefcount(sentinel) == before + 1
+
+    del by_name
 
     assert sys.getrefcount(sentinel) == before

@@ -239,6 +239,33 @@ static inline void struct_slots_ref_into(
 	STRUCT_END_CRITICAL_SECTION();
 }
 
+static inline PyObject * struct_slots_by_name(
+	StructType const * const type,
+	PyObject * const self
+) {
+	PyObject * const values = PyTuple_New(type->struct_field_count);
+	PyObject * by_name = values != NULL ? _PyDict_NewPresized(type->struct_field_count) : NULL;
+
+	if (by_name != NULL) {
+		struct_slots_ref_into(type, self, values, NULL);
+	}
+
+	for (Py_ssize_t i = 0; by_name != NULL && i < type->struct_field_count; ++i) {
+		PyObject * const value = PyTuple_GET_ITEM(values, i);
+
+		if (
+			value != NULL &&
+			PyDict_SetItem(by_name, PyTuple_GET_ITEM(type->struct_field_names, i), value) < 0
+		) {
+			Py_CLEAR(by_name);
+		}
+	}
+
+	Py_XDECREF(values);
+
+	return by_name;
+}
+
 static inline void struct_slots_copy_into(
 	StructType const * const type,
 	PyObject * const source,

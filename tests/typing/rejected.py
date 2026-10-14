@@ -1,6 +1,6 @@
 from dataclasses import InitVar
 
-from salix import Struct, fields, set_field
+from salix import Struct, fields, set_field, to_dict
 
 
 class Point(Struct):
@@ -96,6 +96,14 @@ def match_args_false_leaves_no_positional_pattern() -> None:
 
 def set_field_will_not_take_a_non_struct() -> None:
     set_field(1, "x", 9)  # type: ignore[arg-type]
+
+
+def to_dict_will_not_take_a_non_struct() -> None:
+    to_dict(1)  # type: ignore[arg-type]
+
+
+def to_dict_will_not_take_a_struct_class() -> None:
+    to_dict(Point)  # type: ignore[arg-type]
 
 
 def set_field_will_not_take_a_name_that_is_not_a_string() -> None:
