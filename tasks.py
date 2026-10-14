@@ -148,26 +148,9 @@ test = Parallel(Sequential(build, pytest), matrix={"PY": PYTHONS})
 FREE_THREADED = ("3.14t", "3.15t")
 
 FREE_THREADED_ROOT = {"UV_PYTHON_INSTALL_DIR": ".free-threaded-python"}
-
-
-def free_threaded_leg(python: str) -> Sequential:
-    return Sequential(
-        Task(
-            MAKE_ENV.format(PY=python),
-            mutates=True,
-            env=FREE_THREADED_ROOT,
-            when=lambda changed: not (Path(".venvs") / python / "bin/python").exists(),
-        ),
-        Task(BUILD.format(PY=python), mutates=True, env=FREE_THREADED_ROOT | STRICT_BUILD),
-        Task(
-            PYTEST.format(PY=python),
-            env=FREE_THREADED_ROOT | {"UV_PROJECT_ENVIRONMENT": ".venvs/" + python},
-            agent_format=JUNIT_FORMAT,
-        ),
-    )
-
-
-free_threaded = Parallel(*(free_threaded_leg(python) for python in FREE_THREADED))
+free_threaded = Parallel(
+    Sequential(build, pytest), matrix={"PY": FREE_THREADED}, env=FREE_THREADED_ROOT
+)
 in_place_build = Task("uv run python setup.py build_ext --inplace", mutates=True, env=STRICT_BUILD)
 benchmark = Sequential(in_place_build, bench)
 CONFORMANCE_PYTHON = "3.14.6"
