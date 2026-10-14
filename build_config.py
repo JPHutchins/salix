@@ -29,6 +29,8 @@ BUILD: Final = BuildConfig(
         "src/construct/defaults.c",
         "src/construct/exceptions.c",
         "src/fields/fields.c",
+        "src/fields/inheritance.c",
+        "src/fields/declarations.c",
         "src/fields/forms.c",
         "src/hash.c",
         "src/introspection.c",
