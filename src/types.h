@@ -325,6 +325,28 @@ static inline bool struct_class_created(StructType const * const type) {
 	return type->struct_state != NULL;
 }
 
+static inline struct salix_state * created_struct_state_of(PyObject * const self) {
+	return is_struct(self) ? struct_type_of(self)->struct_state : NULL;
+}
+
+static inline bool refused_until_created(
+	StructType const * const type,
+	char const * const operation
+) {
+	if (struct_class_created(type)) {
+		return false;
+	}
+
+	PyErr_Format(
+		PyExc_TypeError,
+		"cannot %s '%.200s' until its class has finished being created",
+		operation,
+		struct_type_name(type)
+	);
+
+	return true;
+}
+
 static inline void struct_clear_derived_caches(StructType * const type) {
 	Py_CLEAR(type->struct_field_records);
 	Py_CLEAR(type->struct_signature);

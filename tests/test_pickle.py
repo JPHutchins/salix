@@ -9,7 +9,7 @@ from dataclasses import InitVar
 
 import pytest
 
-from salix import Struct, set_field
+from salix import Struct, replace, set_field
 
 PROTOCOLS = range(2, pickle.HIGHEST_PROTOCOL + 1)
 
@@ -697,3 +697,105 @@ def test_a_class_calling_co_base_carries_field_state_like_a_stock_slotted_subcla
 
     assert getattr(duplicate(original), "a", None) == getattr(duplicate(stock_original), "a", None)
     assert getattr(duplicate(original), "a", None) == (7 if sys.version_info >= (3, 11) else None)
+
+
+
+def rebuilt_from_its_reduction(instance: Struct) -> object:
+    function, arguments, state, *_ = instance.__reduce_ex__(4)
+    rebuilt = function(*arguments)
+    rebuilt.__setstate__(state)
+
+    return rebuilt
+
+
+
+class DuplicatingHooks:
+    def __copy__(self) -> str:
+        return "copied by the base"
+
+    def __deepcopy__(self, memo: dict) -> str:
+        return "deep-copied by the base"
+
+    def __reduce_ex__(self, protocol: int) -> tuple:
+        return (str, ("reduced by the base",))
+
+
+def made_while_its_class_is_created(
+    window: str, bases: tuple[type, ...], during_creation: Callable[[object], None]
+) -> Struct:
+    made: list[Struct] = []
+
+    def record(cls: type) -> None:
+        instance = cls.__new__(cls)
+        instance.__setstate__((None, {"count": 5}))
+        during_creation(instance)
+        made.append(instance)
+
+    if window == "init_subclass":
+
+        class Base(*bases):
+            def __init_subclass__(cls, **keywords: object) -> None:
+                super().__init_subclass__(**keywords)
+                record(cls)
+
+        class Fielded(Base):
+            count: int = 1
+
+    else:
+
+        class Hook:
+            def __set_name__(self, owner: type, name: str) -> None:
+                record(owner)
+
+        class Fielded(*bases):
+            count: int = 1
+            hook = Hook()
+
+    [instance] = made
+
+    return instance
+
+
+DUPLICATIONS = pytest.mark.parametrize(
+    ("operation", "during_creation", "after_creation"),
+    [
+        ("copy", copy.copy, copy.copy),
+        ("deepcopy", copy.deepcopy, copy.deepcopy),
+        ("pickle", pickle.dumps, rebuilt_from_its_reduction),
+        ("replace", replace, replace),
+    ],
+    ids=["copy", "deepcopy", "pickle", "replace"],
+)
+
+
+@pytest.mark.parametrize("window", ["init_subclass", "set_name"])
+@DUPLICATIONS
+def test_a_struct_is_duplicated_only_once_its_class_is_created(window, operation, during_creation, after_creation):
+    def refused(instance: object) -> None:
+        with pytest.raises(
+            TypeError, match=f"^cannot {operation} 'Fielded' until its class has finished being created$"
+        ):
+            during_creation(instance)
+
+    instance = made_while_its_class_is_created(window, (Struct,), refused)
+    duplicated = after_creation(instance)
+
+    assert duplicated == instance
+    assert duplicated.count == 5
+
+
+@pytest.mark.parametrize("window", ["init_subclass", "set_name"])
+@pytest.mark.parametrize(
+    ("duplicate", "expected"),
+    [
+        (copy.copy, "copied by the base"),
+        (copy.deepcopy, "deep-copied by the base"),
+        (lambda instance: pickle.loads(pickle.dumps(instance)), "reduced by the base"),
+    ],
+    ids=["copy", "deepcopy", "pickle"],
+)
+def test_a_base_class_duplicating_hook_runs_while_the_class_is_created(window, duplicate, expected):
+    def answered_by_the_base(instance: object) -> None:
+        assert duplicate(instance) == expected
+
+    made_while_its_class_is_created(window, (Struct, DuplicatingHooks), answered_by_the_base)

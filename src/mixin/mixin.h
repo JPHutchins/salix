@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../meta/meta.h"
+#include "../meta.h"
 #include "../mixin.h"
 #include "../result.h"
 
