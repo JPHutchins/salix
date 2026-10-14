@@ -63,6 +63,7 @@ BUILD: Final = BuildConfig(
         f"-DSALIX_VERSION={VERSION}",
         "-std=c2x",
         "-O2",
+        "-fvisibility=hidden",
         "-Wdouble-promotion",
         "-Wall",
         "-Wextra",
