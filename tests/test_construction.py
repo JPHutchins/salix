@@ -839,3 +839,70 @@ class TestMutableDefaults:
         first, second = Holder(), Holder()
 
         assert next(iter(first.v)) is not next(iter(second.v))
+
+    def test_an_author_hash_before_a_list_in_a_struct_default_still_propagates(self):
+        class Angry:
+            def __hash__(self) -> int:
+                raise RuntimeError("boom")
+
+        class Inner(Struct):
+            first: object
+            second: object
+
+        with pytest.raises(RuntimeError, match="boom"):
+
+            class Holder(Struct):
+                inner: Inner = Inner(Angry(), [1])
+
+    def test_a_struct_default_whose_fields_share_a_list_keeps_them_shared(self):
+        class Pair(Struct):
+            first: list
+            second: list
+
+        shared = [1]
+
+        class Holder(Struct):
+            pair: Pair = Pair(shared, shared)
+
+        constructed = Holder()
+
+        assert constructed.pair.first is constructed.pair.second
+        assert constructed.pair.first is not Holder().pair.first
+
+    def test_a_struct_default_that_reduces_itself_is_copied_through_the_reduction(self):
+        class Reducing(Struct):
+            values: list
+
+            def __reduce__(self) -> tuple:
+                return (Reducing, ([*self.values, 99],))
+
+        class Holder(Struct):
+            inner: Reducing = Reducing([1])
+
+        assert Holder().inner == copy.deepcopy(Holder._struct_defaults_[0])
+
+    def test_a_struct_default_with_a_registered_reductor_is_copied_by_it(self, monkeypatch):
+        class Inner(Struct):
+            values: list
+
+        class Holder(Struct):
+            inner: Inner = Inner([1])
+
+        monkeypatch.setitem(copyreg.dispatch_table, Inner, lambda value: (Inner, ([7],)))
+
+        assert Holder().inner == Inner([7])
+
+    def test_a_struct_default_with_a_co_base_deepcopy_is_copied_by_it(self):
+        class CoBase:
+            __slots__ = ()
+
+            def __deepcopy__(self, memo: dict) -> object:
+                return WithCoBase([*self.values, 5])
+
+        class WithCoBase(Struct, CoBase):
+            values: list
+
+        class Holder(Struct):
+            inner: WithCoBase = WithCoBase([1])
+
+        assert Holder().inner == copy.deepcopy(Holder._struct_defaults_[0])
