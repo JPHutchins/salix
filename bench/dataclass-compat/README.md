@@ -1,6 +1,6 @@
 # dataclass-compat
 
-`_shim.py` builds salix `Struct`s behind the `dataclasses` API, for
+`_shim/` builds salix `Struct`s behind the `dataclasses` API, for
 [salix #160](https://github.com/JPHutchins/salix/issues/160). The source
 tier's shim-based legs (`../source-tiers/`) and the CPython conformance
 run below use it. `known_gaps.md` lists where the shim and salix differ
