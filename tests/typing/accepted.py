@@ -12,6 +12,7 @@ from salix import (
     from_mapping,
     replace,
     set_field,
+    to_dict,
 )
 
 
@@ -162,6 +163,10 @@ def replace_returns_the_concrete_struct_type() -> None:
 def from_mapping_returns_the_concrete_struct_type() -> None:
     assert_type(from_mapping(Point, {"x": 1, "y": "two"}), Point)
     from_mapping(Point, {"x": object()})
+
+
+def to_dict_maps_field_names_to_values() -> None:
+    assert_type(to_dict(Point(1, "two")), dict[str, object])
 
 
 def fields_reads_records_from_a_class_or_an_instance() -> None:

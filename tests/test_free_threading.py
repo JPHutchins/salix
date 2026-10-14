@@ -5,7 +5,7 @@ import threading
 
 import pytest
 
-from salix import Struct, fields, replace, set_field
+from salix import Struct, fields, replace, set_field, to_dict
 
 pytestmark = pytest.mark.skipif(
     not sysconfig.get_config_var("Py_GIL_DISABLED"), reason="not a free-threaded build"
@@ -449,5 +449,29 @@ def test_a_shared_struct_is_safe_to_replace_through_a_body_init_while_another_th
 
             if i % 1000 == 0:
                 assert replaced.first >= replaced.second
+
+    run_in_roles((write,) + (read,) * (THREADS - 1))
+
+
+def test_a_shared_struct_is_safe_to_read_as_a_dict_while_another_thread_writes_it():
+    class Shared(Struct, frozen=False):
+        first: object
+        second: object
+
+    shared = Shared(0, 0)
+
+    rounds = ITERATIONS * 5
+
+    def write():
+        for i in range(rounds):
+            shared.first = i
+            shared.second = i
+
+    def read():
+        for i in range(rounds):
+            values = to_dict(shared)
+
+            if i % 1000 == 0:
+                assert values["first"] >= values["second"]
 
     run_in_roles((write,) + (read,) * (THREADS - 1))

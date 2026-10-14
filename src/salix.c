@@ -62,6 +62,12 @@ static PyMethodDef struct_functions[] = {
 		.ml_flags = METH_O,
 		.ml_doc = "fields(class_or_instance) -- the struct's fields, as Field records.",
 	},
+	{
+		.ml_name = "to_dict",
+		.ml_meth = Struct_to_dict,
+		.ml_flags = METH_O,
+		.ml_doc = "to_dict(instance) -- the struct's set fields, by name, in declaration order.",
+	},
 	{.ml_name = NULL},
 };
 
