@@ -33,7 +33,7 @@ PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) {
 		return NULL;
 	}
 
-	PY_MOVABLE(seeded, dict_value_ref(memo, key));
+	PY_MOVABLE(seeded, memo_entry(memo, key));
 
 	if (seeded == NULL && PyErr_Occurred()) {
 		return NULL;

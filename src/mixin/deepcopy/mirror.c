@@ -88,9 +88,8 @@ PyObject * deepcopy_tables(struct salix_state * const state, PyObject * const de
 	return stored;
 }
 
-static PyObject * remembered(PyObject * const memo, PyObject * const value) {
-	PY_OWNED(key, PyLong_FromVoidPtr(value));
-	PyObject * const found = key != NULL ? dict_value_ref(memo, key) : NULL;
+PyObject * memo_entry(PyObject * const memo, PyObject * const key) {
+	PyObject * const found = dict_value_ref(memo, key);
 
 #if PY_VERSION_HEX >= 0x030F0000
 	if (found == Py_None) {
@@ -101,6 +100,12 @@ static PyObject * remembered(PyObject * const memo, PyObject * const value) {
 #endif
 
 	return found;
+}
+
+static PyObject * remembered(PyObject * const memo, PyObject * const value) {
+	PY_OWNED(key, PyLong_FromVoidPtr(value));
+
+	return key != NULL ? memo_entry(memo, key) : NULL;
 }
 
 static enum result keep_alive(PyObject * const memo, PyObject * const original) {
