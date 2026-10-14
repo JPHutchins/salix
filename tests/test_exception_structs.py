@@ -943,19 +943,53 @@ def test_a_two_positional_exceptions_first_construction_binds_the_body():
     assert str(restored) == "m (1 sub-exception)"
 
 
-@pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
-def test_a_self_referential_family_payload_deepcopies():
+SELF_REFERENCES = {
+    "alone": (lambda error: error, lambda wrapped: wrapped),
+    "in_a_list": (lambda error: [error], lambda wrapped: wrapped[0]),
+    "in_a_dict": (lambda error: {"key": error}, lambda wrapped: wrapped["key"]),
+}
+
+
+def deepcopy_of_a_payload_that_reaches_itself(error_class: type[OSError], shape: str) -> object:
     import copy
 
-    class F(OSError, Struct, frozen=False):
+    wrap, unwrap = SELF_REFERENCES[shape]
+    error = error_class(2, "missing")
+    error.args = (wrap(error),)
+
+    try:
+        copied = copy.deepcopy(error)
+    except RecursionError:
+        return RecursionError
+
+    reached = unwrap(copied.args[0])
+    reached_again = unwrap(reached.args[0])
+
+    return (
+        reached is copied,
+        reached is error,
+        type(reached) is error_class,
+        reached_again is reached,
+        reached_again is copied,
+    )
+
+
+@pytest.mark.parametrize("shape", SELF_REFERENCES)
+def test_a_family_payload_that_reaches_itself_deepcopies_as_the_stdlib_copies_a_plain_one(shape: str):
+    class PlainFileError(OSError):
         pass
 
-    f = F(2, "m")
-    f.args = (f,)
-    copied = copy.deepcopy(f)
+    class FileError(OSError, Struct, frozen=False):
+        pass
 
-    assert isinstance(copied.args[0], F)
-    assert copied.args[0] is not f
+    expected = deepcopy_of_a_payload_that_reaches_itself(PlainFileError, shape)
+
+    assert deepcopy_of_a_payload_that_reaches_itself(FileError, shape) == expected
+    assert (expected is RecursionError) == (shape == "alone")
+
+
+def test_a_self_referential_exception_payload_deepcopies_to_its_copy():
+    import copy
 
     class M(Exception, Struct, frozen=False):
         pass

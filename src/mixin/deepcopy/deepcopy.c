@@ -168,30 +168,6 @@ PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) {
 		}
 
 		if (PyTuple_GET_SIZE(args) > 0) {
-			PY_MOVABLE(shell, cls->tp_alloc(cls, 0));
-
-			if (shell == NULL) {
-				Py_DECREF(args);
-
-				return NULL;
-			}
-
-			PY_MOVABLE(empty_payload, PyTuple_New(0));
-
-			if (empty_payload == NULL) {
-				Py_DECREF(args);
-
-				return NULL;
-			}
-
-			((PyBaseExceptionObject *) shell)->args = py_move(&empty_payload);
-
-			if (PyDict_SetItem(memo, key, shell) < 0) {
-				Py_DECREF(args);
-
-				return NULL;
-			}
-
 			PY_MOVABLE(deep_args, PyObject_CallFunctionObjArgs(deepcopy, args, memo, NULL));
 			Py_DECREF(args);
 
