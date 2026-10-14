@@ -572,6 +572,35 @@ def test_a_seeded_memo_answers_each_field_as_it_answers_copy_dot_deepcopy(field:
     )
 
 
+class PlainPoint:
+    def __init__(self, x: int) -> None:
+        self.x = x
+
+
+@pytest.mark.parametrize("seed", [None, "seeded"])
+def test_a_seeded_memo_answers_for_the_struct_as_it_answers_for_a_plain_class(seed: object):
+    struct_value = Point(1)
+    plain_value = PlainPoint(1)
+
+    struct_copy = copy.deepcopy(struct_value, {id(struct_value): seed})
+    plain_copy = copy.deepcopy(plain_value, {id(plain_value): seed})
+
+    assert (struct_copy is seed) == (plain_copy is seed)
+    assert struct_copy is seed or (struct_copy == struct_value and struct_copy is not struct_value)
+
+
+@pytest.mark.parametrize("seed", [None, "seeded"])
+def test_a_direct_deepcopy_call_reads_a_seeded_memo_as_copy_dot_deepcopy_reads_it(seed: object):
+    struct_value = Point(1)
+    plain_value = PlainPoint(1)
+
+    struct_copy = struct_value.__deepcopy__({id(struct_value): seed})
+    plain_copy = copy.deepcopy(plain_value, {id(plain_value): seed})
+
+    assert (struct_copy is seed) == (plain_copy is seed)
+    assert struct_copy is seed or (struct_copy == struct_value and struct_copy is not struct_value)
+
+
 def test_the_memo_records_what_copy_dot_deepcopy_records(monkeypatch: pytest.MonkeyPatch):
     bag = a_bag()
     mirrored: dict = {}
