@@ -1,6 +1,7 @@
 import inspect
 import pickle
 import sys
+from typing import NamedTuple
 
 import pytest
 
@@ -944,48 +945,99 @@ def test_a_two_positional_exceptions_first_construction_binds_the_body():
 
 
 SELF_REFERENCES = {
-    "alone": (lambda error: error, lambda wrapped: wrapped),
     "in_a_list": (lambda error: [error], lambda wrapped: wrapped[0]),
     "in_a_dict": (lambda error: {"key": error}, lambda wrapped: wrapped["key"]),
 }
 
 
-def deepcopy_of_a_payload_that_reaches_itself(error_class: type[OSError], shape: str) -> object:
+class PlainReachingError(OSError):
+    path = None
+
+
+class ReachingError(OSError, Struct, frozen=False):
+    path: object = None
+
+
+class ReachedFromTheCopy(NamedTuple):
+    args_reach_the_copy: bool
+    args_reach_the_original: bool
+    args_reach_a_second_copy: bool
+    second_copy_args_reach_the_second_copy: bool
+    path_reaches_the_copy: bool
+    path_reaches_the_second_copy: bool
+
+
+def reached_from_a_deepcopy(error_class: type[OSError], shape: str) -> ReachedFromTheCopy:
     import copy
 
     wrap, unwrap = SELF_REFERENCES[shape]
     error = error_class(2, "missing")
     error.args = (wrap(error),)
-
-    try:
-        copied = copy.deepcopy(error)
-    except RecursionError:
-        return RecursionError
-
+    error.path = wrap(error)
+    copied = copy.deepcopy(error)
     reached = unwrap(copied.args[0])
-    reached_again = unwrap(reached.args[0])
 
-    return (
-        reached is copied,
-        reached is error,
-        type(reached) is error_class,
-        reached_again is reached,
-        reached_again is copied,
+    return ReachedFromTheCopy(
+        args_reach_the_copy=reached is copied,
+        args_reach_the_original=reached is error,
+        args_reach_a_second_copy=(
+            type(reached) is error_class and reached is not copied and reached is not error
+        ),
+        second_copy_args_reach_the_second_copy=unwrap(reached.args[0]) is reached,
+        path_reaches_the_copy=unwrap(copied.path) is copied,
+        path_reaches_the_second_copy=unwrap(copied.path) is reached,
     )
+
+
+@pytest.mark.parametrize("error_class", [PlainReachingError, ReachingError])
+def test_a_family_payload_that_is_itself_raises_recursion_error_as_the_stdlib_does(
+    error_class: type[OSError],
+):
+    import copy
+
+    error = error_class(2, "missing")
+    error.args = (error,)
+
+    with pytest.raises(RecursionError):
+        copy.deepcopy(error)
 
 
 @pytest.mark.parametrize("shape", SELF_REFERENCES)
 def test_a_family_payload_that_reaches_itself_deepcopies_as_the_stdlib_copies_a_plain_one(shape: str):
-    class PlainFileError(OSError):
-        pass
+    expected = reached_from_a_deepcopy(PlainReachingError, shape)
 
-    class FileError(OSError, Struct, frozen=False):
-        pass
+    assert expected.args_reach_a_second_copy
+    assert reached_from_a_deepcopy(ReachingError, shape) == expected
 
-    expected = deepcopy_of_a_payload_that_reaches_itself(PlainFileError, shape)
 
-    assert deepcopy_of_a_payload_that_reaches_itself(FileError, shape) == expected
-    assert (expected is RecursionError) == (shape == "alone")
+class FormatsEveryExceptionInTheMemo:
+    def __deepcopy__(self, memo: dict) -> "FormatsEveryExceptionInTheMemo":
+        for value in list(memo.values()):
+            if isinstance(value, BaseException):
+                str(value)
+                repr(value)
+
+        return self
+
+
+class HookedPlainError(Exception, Struct, frozen=False):
+    hook: object = None
+
+
+class HookedFileError(OSError, Struct, frozen=False):
+    hook: object = None
+
+
+@pytest.mark.parametrize("error_class", [HookedPlainError, HookedFileError])
+def test_a_deepcopy_hook_can_format_the_copy_it_finds_in_the_memo(error_class: type[BaseException]):
+    import copy
+
+    error = error_class()
+    error.hook = FormatsEveryExceptionInTheMemo()
+    copied = copy.deepcopy(error)
+
+    assert copied.args == error.args
+    assert copied.hook is error.hook
 
 
 def test_a_self_referential_exception_payload_deepcopies_to_its_copy():

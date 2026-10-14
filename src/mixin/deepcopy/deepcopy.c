@@ -20,6 +20,24 @@ static PyObject * memo_failure(PyObject * const memo, PyObject * const key) {
 	return NULL;
 }
 
+static PyObject * allocated_copy(PyTypeObject * const cls) {
+	PY_MOVABLE(copy, cls->tp_alloc(cls, 0));
+
+	if (copy == NULL || !PyExceptionInstance_Check(copy)) {
+		return py_move(&copy);
+	}
+
+	PyObject * const no_args = PyTuple_New(0);
+
+	if (no_args == NULL) {
+		return NULL;
+	}
+
+	((PyBaseExceptionObject *) copy)->args = no_args;
+
+	return py_move(&copy);
+}
+
 PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) {
 	if (!PyDict_Check(memo)) {
 		PyErr_SetString(PyExc_TypeError, "__deepcopy__() argument must be a dict");
@@ -168,29 +186,16 @@ PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) {
 		}
 
 		if (PyTuple_GET_SIZE(args) > 0) {
-			PY_MOVABLE(deep_args, PyObject_CallFunctionObjArgs(deepcopy, args, memo, NULL));
+			PY_OWNED(deep_args, PyObject_CallFunctionObjArgs(deepcopy, args, memo, NULL));
 			Py_DECREF(args);
+			copy = deep_args != NULL ? PyObject_Call((PyObject *) cls, deep_args, NULL) : NULL;
 
-			if (deep_args == NULL) {
-				return memo_failure(memo, key);
-			}
-
-			PY_MOVABLE(rebuilt, PyObject_Call((PyObject *) cls, deep_args, NULL));
-
-			if (rebuilt == NULL) {
-				return memo_failure(memo, key);
-			}
-
-			copy = py_move(&rebuilt);
-
-			if (PyDict_SetItem(memo, key, copy) < 0) {
-				Py_CLEAR(copy);
-
+			if (copy == NULL) {
 				return NULL;
 			}
 		} else {
 			Py_DECREF(args);
-			copy = cls->tp_alloc(cls, 0);
+			copy = allocated_copy(cls);
 
 			if (copy == NULL) {
 				return NULL;
@@ -205,7 +210,7 @@ PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) {
 			}
 		}
 	} else {
-		copy = cls->tp_alloc(cls, 0);
+		copy = allocated_copy(cls);
 	}
 
 	if (copy == NULL) {
