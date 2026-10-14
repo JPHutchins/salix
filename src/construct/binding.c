@@ -287,6 +287,7 @@ enum result fill_init_var_defaults(
 		}
 
 		PyObject * const value = struct_default_copy(
+			type->struct_state,
 			PyTuple_GET_ITEM(type->struct_init_var_defaults, i - required_count)
 		);
 
@@ -437,6 +438,7 @@ enum result fill_defaults(
 		}
 
 		PyObject * const value = struct_default_copy(
+			type->struct_state,
 			PyTuple_GET_ITEM(type->struct_defaults, i - required_count)
 		);
 

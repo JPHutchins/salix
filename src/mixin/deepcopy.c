@@ -32,6 +32,9 @@ static PyObject * deepcopy_tables_build(PyObject * const copy_module, PyObject *
 		[DEEPCOPY_ATOMIC_TYPES] = "_atomic_types",
 		[DEEPCOPY_ATOMIC_COPIER] = "_deepcopy_atomic",
 		[DEEPCOPY_LIST] = "_deepcopy_list",
+		[DEEPCOPY_DICT] = "_deepcopy_dict",
+		[DEEPCOPY_TUPLE] = "_deepcopy_tuple",
+		[DEEPCOPY_REDUCTORS] = "dispatch_table",
 	};
 	PY_MOVABLE(tables, PyTuple_New(DEEPCOPY_TABLE_COUNT));
 
@@ -68,11 +71,7 @@ static PyObject * deepcopy_tables_build(PyObject * const copy_module, PyObject *
 	return py_move(&tables);
 }
 
-static PyObject * deepcopy_tables(
-	struct salix_state * const state,
-	PyObject * const copy_module,
-	PyObject * const deepcopy
-) {
+static PyObject * deepcopy_tables(struct salix_state * const state, PyObject * const deepcopy) {
 	PyObject * cached = NULL;
 
 	STRUCT_BEGIN_CRITICAL_SECTION(state->pickle_cache[PICKLE_REDUCE_EX_NAME]);
@@ -83,7 +82,8 @@ static PyObject * deepcopy_tables(
 		return cached;
 	}
 
-	PY_OWNED(built, deepcopy_tables_build(copy_module, deepcopy));
+	PY_OWNED(copy_module, PyImport_ImportModule("copy"));
+	PY_OWNED(built, copy_module != NULL ? deepcopy_tables_build(copy_module, deepcopy) : NULL);
 
 	if (built == NULL) {
 		return NULL;
@@ -277,6 +277,230 @@ static PyObject * deep_value(
 	return found != NULL || PyErr_Occurred() ? py_move(&found) : deep_list(tables, memo, value);
 }
 
+enum keeps_identity { KEEPS_IDENTITY_ERROR, KEEPS_IDENTITY_PROVEN, KEEPS_IDENTITY_UNPROVEN };
+
+static enum keeps_identity item_keeps_identity(PyObject * const tables, PyObject * const item) {
+	switch (route_of(tables, item)) {
+		case DEEP_ROUTE_ERROR:
+			return KEEPS_IDENTITY_ERROR;
+		case DEEP_ROUTE_ATOMIC:
+		case DEEP_ROUTE_ITSELF:
+			return KEEPS_IDENTITY_PROVEN;
+		case DEEP_ROUTE_LIST:
+		case DEEP_ROUTE_COPY_MODULE:
+			break;
+	}
+
+	return KEEPS_IDENTITY_UNPROVEN;
+}
+
+static enum keeps_identity every_item_keeps_identity(
+	PyObject * const tables,
+	PyObject * const items
+) {
+	for (Py_ssize_t i = 0; i < PyList_GET_SIZE(items); i += 1) {
+		enum keeps_identity const kept = item_keeps_identity(tables, PyList_GET_ITEM(items, i));
+
+		if (kept != KEEPS_IDENTITY_PROVEN) {
+			return kept;
+		}
+	}
+
+	return KEEPS_IDENTITY_PROVEN;
+}
+
+static enum keeps_identity every_entry_keeps_identity(
+	PyObject * const tables,
+	PyObject * const mapping
+) {
+	Py_ssize_t position = 0;
+	PyObject * key = NULL;
+	PyObject * entry = NULL;
+
+	while (PyDict_Next(mapping, &position, &key, &entry)) {
+		enum keeps_identity const key_kept = item_keeps_identity(tables, key);
+		enum keeps_identity const kept = (
+			key_kept == KEEPS_IDENTITY_PROVEN ? item_keeps_identity(tables, entry) :
+			key_kept
+		);
+
+		if (kept != KEEPS_IDENTITY_PROVEN) {
+			return kept;
+		}
+	}
+
+	return KEEPS_IDENTITY_PROVEN;
+}
+
+static PyObject * proven_copy(PyObject * * const copied, enum keeps_identity const kept) {
+	switch (kept) {
+		case KEEPS_IDENTITY_ERROR:
+		case KEEPS_IDENTITY_UNPROVEN:
+			return NULL;
+		case KEEPS_IDENTITY_PROVEN:
+			break;
+	}
+
+	return py_move(copied);
+}
+
+static PyObject * list_of_identities(PyObject * const tables, PyObject * const value) {
+	if (route_of(tables, value) != DEEP_ROUTE_LIST) {
+		return NULL;
+	}
+
+	PY_MOVABLE(copied, PyList_GetSlice(value, 0, PY_SSIZE_T_MAX));
+
+	return copied != NULL ? proven_copy(&copied, every_item_keeps_identity(tables, copied)) : NULL;
+}
+
+static int table_entry_is(
+	PyObject * const table,
+	PyTypeObject * const kind,
+	PyObject * const expected
+) {
+	PY_OWNED(entry, dict_value_ref(table, (PyObject *) kind));
+
+	return entry == NULL && PyErr_Occurred() ? -1 : (entry == NULL ? Py_None : entry) == expected;
+}
+
+static PyObject * dict_of_identities(PyObject * const tables, PyObject * const value) {
+	PyObject * const dict_copier = PyTuple_GET_ITEM(tables, DEEPCOPY_DICT);
+	PyObject * const dispatch = PyTuple_GET_ITEM(tables, DEEPCOPY_DISPATCH);
+	int const stdlib_copier = (
+		dict_copier != Py_None ? table_entry_is(dispatch, &PyDict_Type, dict_copier) :
+		0
+	);
+
+	if (stdlib_copier <= 0) {
+		return NULL;
+	}
+
+	PY_MOVABLE(copied, PyDict_Copy(value));
+
+	return copied != NULL ? proven_copy(&copied, every_entry_keeps_identity(tables, copied)) : NULL;
+}
+
+static int set_reduces_through_the_stdlib(PyObject * const tables) {
+	PyObject * const dispatch = PyTuple_GET_ITEM(tables, DEEPCOPY_DISPATCH);
+	PyObject * const reductors = PyTuple_GET_ITEM(tables, DEEPCOPY_REDUCTORS);
+	PyObject * const tuple_copier = PyTuple_GET_ITEM(tables, DEEPCOPY_TUPLE);
+	PyObject * const list_copier = PyTuple_GET_ITEM(tables, DEEPCOPY_LIST);
+
+	if (!PyDict_CheckExact(reductors) || tuple_copier == Py_None || list_copier == Py_None) {
+		return 0;
+	}
+
+	int const no_set_copier = table_entry_is(dispatch, &PySet_Type, Py_None);
+	int const no_set_reductor = (
+		no_set_copier > 0 ? table_entry_is(reductors, &PySet_Type, Py_None) :
+		no_set_copier
+	);
+	int const stdlib_tuple_copier = (
+		no_set_reductor > 0 ? table_entry_is(dispatch, &PyTuple_Type, tuple_copier) :
+		no_set_reductor
+	);
+
+	return (
+		stdlib_tuple_copier > 0 ? table_entry_is(dispatch, &PyList_Type, list_copier) :
+		stdlib_tuple_copier
+	);
+}
+
+static PyObject * set_of_identities(PyObject * const tables, PyObject * const value) {
+	int const reduces = set_reduces_through_the_stdlib(tables);
+
+	if (reduces <= 0) {
+		return NULL;
+	}
+
+	PY_OWNED(elements, PySequence_List(value));
+
+	if (elements == NULL) {
+		return NULL;
+	}
+
+	switch (every_item_keeps_identity(tables, elements)) {
+		case KEEPS_IDENTITY_ERROR:
+		case KEEPS_IDENTITY_UNPROVEN:
+			return NULL;
+		case KEEPS_IDENTITY_PROVEN:
+			break;
+	}
+
+	return PySet_New(elements);
+}
+
+static int hook_precedes_the_mixin(PyTypeObject * const cls, PyObject * const hook_name) {
+	PyObject * const mro = cls->tp_mro;
+
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); i += 1) {
+		PyTypeObject * const entry = (PyTypeObject *) PyTuple_GET_ITEM(mro, i);
+
+		if (entry == &StructMixin_Type) {
+			return 0;
+		}
+
+		PY_OWNED(entry_dict, struct_type_dict(entry));
+		int const present = entry_dict != NULL ? PyDict_Contains(entry_dict, hook_name) : -1;
+
+		if (present != 0) {
+			return present;
+		}
+	}
+
+	return 0;
+}
+
+static PyObject * struct_of_identities(
+	struct salix_state const * const state,
+	PyObject * const tables,
+	PyObject * const value
+) {
+	PyTypeObject * const cls = Py_TYPE(value);
+	PyObject * const dispatch = PyTuple_GET_ITEM(tables, DEEPCOPY_DISPATCH);
+	bool const reaches_copy_module = route_of(tables, value) == DEEP_ROUTE_COPY_MODULE;
+	int const unregistered = reaches_copy_module ? table_entry_is(dispatch, cls, Py_None) : 0;
+
+	if (
+		unregistered <= 0 ||
+		cls->tp_getattro != PyObject_GenericGetAttr ||
+		cls->tp_dictoffset != 0
+	) {
+		return NULL;
+	}
+
+	int const shadowed = hook_precedes_the_mixin(cls, state->copy_cache[COPY_DEEP_HOOK_NAME]);
+
+	if (shadowed != 0) {
+		return NULL;
+	}
+
+	PY_OWNED(memo, PyDict_New());
+
+	return memo != NULL ? Struct_deepcopy(value, memo) : NULL;
+}
+
+PyObject * fresh_deepcopy(
+	struct salix_state * const state,
+	PyObject * const deepcopy,
+	PyObject * const value
+) {
+	PY_OWNED(tables, deepcopy_tables(state, deepcopy));
+
+	if (tables == NULL || PyTuple_GET_ITEM(tables, DEEPCOPY_FUNCTION) != deepcopy) {
+		return NULL;
+	}
+
+	return (
+		PyList_CheckExact(value) ? list_of_identities(tables, value) :
+		PyDict_CheckExact(value) ? dict_of_identities(tables, value) :
+		PySet_CheckExact(value) ? set_of_identities(tables, value) :
+		is_struct(value) ? struct_of_identities(state, tables, value) :
+		NULL
+	);
+}
+
 PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) {
 	if (!PyDict_Check(memo)) {
 		PyErr_SetString(PyExc_TypeError, "__deepcopy__() argument must be a dict");
@@ -382,7 +606,7 @@ PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) {
 		return memo_failure(memo, key);
 	}
 
-	PY_OWNED(tables, deepcopy_tables(type->struct_state, copy_module, deepcopy));
+	PY_OWNED(tables, deepcopy_tables(type->struct_state, deepcopy));
 
 	if (tables == NULL) {
 		return memo_failure(memo, key);

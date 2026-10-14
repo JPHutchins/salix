@@ -15,6 +15,7 @@ int copies_through_reduce(StructType * type);
 enum result pickle_cache_fill(struct salix_state * state);
 enum result copy_cache_fill(struct salix_state * state);
 PyObject * Struct_deepcopy(PyObject * self, PyObject * memo);
+PyObject * fresh_deepcopy(struct salix_state * state, PyObject * deepcopy, PyObject * value);
 PyObject * copy_reduction(PyObject * self, PyObject * copier);
 PyObject * copy_dispatch_prologue(
 	PyObject * self,
