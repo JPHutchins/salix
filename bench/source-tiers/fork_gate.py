@@ -99,11 +99,35 @@ def source_hits(package: Path) -> list[SourceHit]:
     return [hit for path in sorted(package.rglob("*.py")) for hit in file_hits(path)]
 
 
-def declared_replacements(pyproject: Path) -> list[str]:
-    project = tomllib.loads(pyproject.read_text(encoding="utf-8")).get("project", {})
+def pyproject_requirements(pyproject: Path) -> list[str]:
+    if not pyproject.is_file():
+        return []
+    document = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+    project = document.get("project", {})
+    return [
+        *project.get("dependencies", []),
+        *(requirement for group in project.get("optional-dependencies", {}).values() for requirement in group),
+        *(
+            requirement
+            for group in document.get("dependency-groups", {}).values()
+            for requirement in group
+            if isinstance(requirement, str)
+        ),
+    ]
+
+
+def requirements_file_lines(root: Path) -> list[str]:
+    return [
+        line
+        for path in sorted({*root.glob("requirements*.txt"), *root.glob("requirements/*.txt")})
+        for line in path.read_text(encoding="utf-8").splitlines()
+    ]
+
+
+def declared_replacements(root: Path) -> list[str]:
     return [
         requirement
-        for requirement in project.get("dependencies", [])
+        for requirement in (*pyproject_requirements(root / "pyproject.toml"), *requirements_file_lines(root))
         if (match := REQUIREMENT_NAME.match(requirement)) is not None
         and match.group(1).lower() in REPLACED_MODULES
     ]
@@ -139,12 +163,12 @@ def belongs_to(module: str, library: str) -> bool:
 
 
 def main() -> int:
-    python, python_path, package, pyproject, library, *rest = sys.argv[1:]
+    python, python_path, package, root, library, *rest = sys.argv[1:]
     workload, arguments = (rest[0], rest[1:]) if rest else ("", [])
     found = source_hits(Path(package))
     hits = [hit for hit in found if not hit.in_string]
     strings = [hit for hit in found if hit.in_string]
-    declared = declared_replacements(Path(pyproject))
+    declared = declared_replacements(Path(root))
     importers = runtime_importers(python, python_path, library, workload, arguments)
     responsible = {module: responsible_module(chain) for module, chain in importers.items()}
     own = {module: chain for module, chain in importers.items() if belongs_to(responsible[module], library)}
