@@ -60,7 +60,7 @@ trap cleanup EXIT
 if [[ ! -d "$VENV" ]]; then
     uv venv --python "$PYTHON_VERSION" "$VENV"
 fi
-uv pip install --python "$VENV" --index https://download.pytorch.org/whl/cpu torch
+uv pip install --python "$VENV" --index https://download.pytorch.org/whl/cpu torch torchvision
 uv pip install --python "$VENV" -e "$CHECKOUT[torch,testing]"
 if [[ -d "$SALIX_WHEEL" ]]; then
     WHEEL_LINKS="$SALIX_WHEEL"
