@@ -11,7 +11,7 @@ request against it:
 | omegaconf | [JPHutchins/omegaconf-salix#1](https://github.com/JPHutchins/omegaconf-salix/pull/1) |
 | tyro | [JPHutchins/tyro-salix#1](https://github.com/JPHutchins/tyro-salix/pull/1) |
 | cyclopts | [JPHutchins/cyclopts-salix#1](https://github.com/JPHutchins/cyclopts-salix/pull/1) |
-| hydra | HYDRA_PR |
+| hydra | [JPHutchins/hydra-salix#5](https://github.com/JPHutchins/hydra-salix/pull/5) |
 | transformers | [JPHutchins/transformers-salix#1](https://github.com/JPHutchins/transformers-salix/pull/1) |
 
 `run_benchmarks.py` gates each pinned fork with `fork_gate.py`, then
