@@ -18,6 +18,7 @@ stdenv.mkDerivation {
 
   buildPhase = ''
     runHook preBuild
+    set -o pipefail
 
     mapfile -t cFlags < <(python3 build_config.py c-flags --strict)
     mapfile -t sources < <(python3 build_config.py sources)
@@ -32,7 +33,7 @@ stdenv.mkDerivation {
       $(python3-config --ldflags --embed) \
       -o c-tests
 
-    ./c-tests > $out
+    ./c-tests | tee $out
 
     runHook postBuild
   '';
