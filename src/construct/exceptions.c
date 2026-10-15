@@ -107,6 +107,14 @@ enum result group_members_from_fields(
 		}
 	}
 
+	if (excs_str == NULL && group_layout_has_excs_str()) {
+		excs_str = PyObject_Repr(excs);
+
+		if (excs_str == NULL) {
+			return RESULT_ERROR;
+		}
+	}
+
 	return carry_group_members(type, self, msg, excs, excs_str, NULL, NULL);
 }
 #endif
@@ -183,7 +191,14 @@ enum result install_empty_exception_payload(StructType * const type, PyObject * 
 
 	store_exception_args(self, no_args);
 
-	return carry_group_members(type, self, NULL, NULL, NULL, NULL, NULL);
+	bool const caches_members_str = type->struct_group_family && group_layout_has_excs_str();
+	PY_OWNED(no_members_str, caches_members_str ? PyObject_Repr(no_args) : NULL);
+
+	if (caches_members_str && no_members_str == NULL) {
+		return RESULT_ERROR;
+	}
+
+	return carry_group_members(type, self, NULL, no_args, no_members_str, NULL, NULL);
 }
 
 #if PY_VERSION_HEX >= 0x030B0000
@@ -438,6 +453,12 @@ Py_ssize_t explicit_items_prefix(
 
 #	include "../testing.h"
 
+#	if PY_VERSION_HEX >= 0x030B0000
+static char const members_string_source[] = {
+#		embed "../../tests/c/fixtures/construct/members_string.py" suffix(, '\0')
+};
+#	endif
+
 static PyObject * exception_instance(void) {
 	return testing_evaluate(
 		"class E(Exception, Struct, frozen=True):\n"
@@ -542,9 +563,35 @@ static void test_the_group_members_carry_writes_the_bound_fields(void) {
 	TEST_ASSERT_TRUE(PyTuple_Check(group->excs));
 	TEST_ASSERT_EQUAL_INT(1, PyTuple_GET_SIZE(group->excs));
 	TEST_ASSERT_TRUE(PyExceptionInstance_Check(PyTuple_GET_ITEM(group->excs, 0)));
+	TEST_ASSERT_TRUE(!group_layout_has_excs_str() || group_excs_str(shell) != NULL);
 
 	Py_DECREF(exceptions);
 	Py_DECREF(message);
+	Py_DECREF(shell);
+	Py_DECREF(instance);
+}
+
+static void test_a_group_built_without_member_fields_caches_its_members_string(void) {
+	PyObject * const fixtures = testing_evaluate(members_string_source);
+	PyObject * const instance = testing_entry(fixtures, "fieldless");
+
+	TEST_ASSERT_NOT_NULL(instance);
+	TEST_ASSERT_EQUAL_INT(1, PyTuple_GET_SIZE(((PyBaseExceptionObject *) instance)->args));
+	TEST_ASSERT_TRUE(!group_layout_has_excs_str() || group_excs_str(instance) != NULL);
+
+	Py_DECREF(fixtures);
+}
+
+static void test_an_empty_group_payload_caches_its_members_string(void) {
+	PyObject * const instance = group_instance();
+	StructType * const type = struct_type_of(instance);
+	PyObject * const shell = type->heap_type.ht_type.tp_alloc(&type->heap_type.ht_type, 0);
+
+	TEST_ASSERT_NOT_NULL(shell);
+	TEST_ASSERT_EQUAL_INT(RESULT_OK, install_empty_exception_payload(type, shell));
+	TEST_ASSERT_EQUAL_INT(0, PyTuple_GET_SIZE(((PyBaseExceptionObject *) shell)->args));
+	TEST_ASSERT_TRUE(!group_layout_has_excs_str() || group_excs_str(shell) != NULL);
+
 	Py_DECREF(shell);
 	Py_DECREF(instance);
 }
@@ -560,6 +607,8 @@ void exceptions_tests(void) {
 	RUN_TEST(test_the_carried_payload_count_reads_the_stored_args);
 #	if PY_VERSION_HEX >= 0x030B0000
 	RUN_TEST(test_the_group_members_carry_writes_the_bound_fields);
+	RUN_TEST(test_a_group_built_without_member_fields_caches_its_members_string);
+	RUN_TEST(test_an_empty_group_payload_caches_its_members_string);
 #	endif
 }
 
