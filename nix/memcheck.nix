@@ -33,9 +33,12 @@ stdenv.mkDerivation {
     python setup.py build_ext --inplace
     export PYTHONPATH="$PWD:$(python -c 'import sys; print(":".join(path for path in sys.path if path))')"
     export PYTHONMALLOC=malloc
+    stackKib=8192
+    ulimit -s $stackKib
 
     valgrind \
       --tool=memcheck \
+      --main-stacksize=$((stackKib * 1024)) \
       --trace-children=yes \
       --errors-for-leak-kinds=none \
       --error-exitcode=99 \
