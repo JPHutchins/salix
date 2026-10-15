@@ -194,9 +194,12 @@ PLANS: dict[str, Callable[[dict[str, Sides], Path], Plan]] = {
 
 
 def run(command: Sequence[str | Path], cwd: Path | None = None) -> str:
-    return subprocess.run(
-        [str(part) for part in command], cwd=cwd, check=True, capture_output=True, text=True
-    ).stdout
+    completed = subprocess.run(
+        [str(part) for part in command], cwd=cwd, check=False, capture_output=True, text=True
+    )
+    if completed.returncode != 0:
+        raise SystemExit(f"{' '.join(map(str, command))} exited {completed.returncode}:\n{completed.stderr}")
+    return completed.stdout
 
 
 def pinned_tree(fork: Fork) -> Path:
@@ -237,7 +240,7 @@ def build_venv(name: str, stock_tree: Path, wheel: Path, python: str, scratch: P
     run(["uv", "venv", "--python", python, venv])
     if fork.preinstall:
         run([*install, *fork.preinstall])
-    run([*install, f"{stock_tree}{fork.install_extra}"])
+    run([*(java_command() if fork.generates_parsers else ()), *install, f"{stock_tree}{fork.install_extra}"])
     run([*install, "--reinstall", "--no-deps", wheel])
     return venv / "bin" / "python"
 
