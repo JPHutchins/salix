@@ -69,6 +69,8 @@ int change_names_touch(
 	Py_ssize_t field_index
 );
 
+enum result install_empty_exception_payload(StructType * type, PyObject * self);
+
 enum result carry_group_members(
 	StructType * type,
 	PyObject * self,

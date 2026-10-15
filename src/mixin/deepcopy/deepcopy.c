@@ -20,6 +20,17 @@ static PyObject * memo_failure(PyObject * const memo, PyObject * const key) {
 	return NULL;
 }
 
+static PyObject * allocated_copy(StructType * const type) {
+	PyTypeObject * const cls = &type->heap_type.ht_type;
+	PY_MOVABLE(copy, cls->tp_alloc(cls, 0));
+
+	if (copy != NULL && install_empty_exception_payload(type, copy) != RESULT_OK) {
+		return NULL;
+	}
+
+	return py_move(&copy);
+}
+
 PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) {
 	if (!PyDict_Check(memo)) {
 		PyErr_SetString(PyExc_TypeError, "__deepcopy__() argument must be a dict");
@@ -168,53 +179,16 @@ PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) {
 		}
 
 		if (PyTuple_GET_SIZE(args) > 0) {
-			PY_MOVABLE(shell, cls->tp_alloc(cls, 0));
-
-			if (shell == NULL) {
-				Py_DECREF(args);
-
-				return NULL;
-			}
-
-			PY_MOVABLE(empty_payload, PyTuple_New(0));
-
-			if (empty_payload == NULL) {
-				Py_DECREF(args);
-
-				return NULL;
-			}
-
-			((PyBaseExceptionObject *) shell)->args = py_move(&empty_payload);
-
-			if (PyDict_SetItem(memo, key, shell) < 0) {
-				Py_DECREF(args);
-
-				return NULL;
-			}
-
-			PY_MOVABLE(deep_args, PyObject_CallFunctionObjArgs(deepcopy, args, memo, NULL));
+			PY_OWNED(deep_args, PyObject_CallFunctionObjArgs(deepcopy, args, memo, NULL));
 			Py_DECREF(args);
+			copy = deep_args != NULL ? PyObject_Call((PyObject *) cls, deep_args, NULL) : NULL;
 
-			if (deep_args == NULL) {
-				return memo_failure(memo, key);
-			}
-
-			PY_MOVABLE(rebuilt, PyObject_Call((PyObject *) cls, deep_args, NULL));
-
-			if (rebuilt == NULL) {
-				return memo_failure(memo, key);
-			}
-
-			copy = py_move(&rebuilt);
-
-			if (PyDict_SetItem(memo, key, copy) < 0) {
-				Py_CLEAR(copy);
-
+			if (copy == NULL) {
 				return NULL;
 			}
 		} else {
 			Py_DECREF(args);
-			copy = cls->tp_alloc(cls, 0);
+			copy = allocated_copy(type);
 
 			if (copy == NULL) {
 				return NULL;
@@ -229,7 +203,7 @@ PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) {
 			}
 		}
 	} else {
-		copy = cls->tp_alloc(cls, 0);
+		copy = allocated_copy(type);
 	}
 
 	if (copy == NULL) {
@@ -308,7 +282,7 @@ PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) {
 				copy,
 				source_group->msg,
 				source_group->excs,
-				NULL,
+				group_excs_str(self),
 				deepcopy,
 				memo
 			) != RESULT_OK

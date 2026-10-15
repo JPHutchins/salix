@@ -1,6 +1,8 @@
+import copy
 import inspect
 import pickle
 import sys
+from typing import NamedTuple
 
 import pytest
 
@@ -396,6 +398,57 @@ def test_an_exception_group_struct_constructs_through_the_family_new():
     assert error.message == "boom"
     assert len(error.exceptions) == 1
     assert isinstance(error.exceptions[0], ValueError)
+
+
+class Members:
+    def __init__(self, *items: BaseException) -> None:
+        self.items = items
+
+    def __len__(self) -> int:
+        return len(self.items)
+
+    def __getitem__(self, index: int) -> BaseException:
+        return self.items[index]
+
+    def __repr__(self) -> str:
+        return f"Members{self.items!r}"
+
+
+def members_list(*items: BaseException) -> list[BaseException]:
+    return list(items)
+
+
+def members_tuple(*items: BaseException) -> tuple[BaseException, ...]:
+    return items
+
+
+if sys.version_info >= (3, 11):
+    class PlainMembersGroup(ExceptionGroup):
+        pass
+
+    class MembersGroup(ExceptionGroup, Struct, frozen=False):
+        message: str
+        exceptions: object
+
+
+def built_positionally(members: object) -> BaseException:
+    return MembersGroup("m", members)
+
+
+def built_by_keyword(members: object) -> BaseException:
+    return MembersGroup(message="m", exceptions=members)
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
+@pytest.mark.parametrize("build", [built_positionally, built_by_keyword])
+@pytest.mark.parametrize("make_members", [members_list, members_tuple, Members])
+@pytest.mark.parametrize("duplicate", [copy.copy, copy.deepcopy])
+def test_a_group_copy_reprs_as_its_source_and_the_source_as_a_plain_group(build, make_members, duplicate):
+    error = build(make_members(ValueError("x")))
+    plain = PlainMembersGroup("m", make_members(ValueError("x")))
+
+    assert repr(duplicate(error)) == repr(error)
+    assert repr(error).removeprefix("MembersGroup") == repr(plain).removeprefix("PlainMembersGroup")
 
 
 class KwNew(Exception, Struct, frozen=False):
@@ -943,28 +996,198 @@ def test_a_two_positional_exceptions_first_construction_binds_the_body():
     assert str(restored) == "m (1 sub-exception)"
 
 
-@pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
-def test_a_self_referential_family_payload_deepcopies():
+SELF_REFERENCES = {
+    "in_a_list": (lambda error: [error], lambda wrapped: wrapped[0]),
+    "in_a_dict": (lambda error: {"key": error}, lambda wrapped: wrapped["key"]),
+}
+
+
+class PlainReachingError(OSError):
+    path = None
+
+
+class ReachingError(OSError, Struct, frozen=False):
+    path: object = None
+
+
+class ReachedFromTheCopy(NamedTuple):
+    args_reach_the_copy: bool
+    args_reach_the_original: bool
+    args_reach_a_second_copy: bool
+    second_copy_args_reach_the_second_copy: bool
+    path_reaches_the_copy: bool
+    path_reaches_the_second_copy: bool
+
+
+def reached_from_a_deepcopy(error_class: type[OSError], shape: str) -> ReachedFromTheCopy:
     import copy
 
-    class F(OSError, Struct, frozen=False):
+    wrap, unwrap = SELF_REFERENCES[shape]
+    error = error_class(2, "missing")
+    error.args = (wrap(error),)
+    error.path = wrap(error)
+    copied = copy.deepcopy(error)
+
+    assert len(copied.args) == 1, f"the copy's args are {copied.args!r}"
+    assert copied.path is not None, "the copy lost its path"
+
+    reached = unwrap(copied.args[0])
+
+    assert len(reached.args) == 1, f"the reached error's args are {reached.args!r}"
+
+    return ReachedFromTheCopy(
+        args_reach_the_copy=reached is copied,
+        args_reach_the_original=reached is error,
+        args_reach_a_second_copy=(
+            type(reached) is error_class and reached is not copied and reached is not error
+        ),
+        second_copy_args_reach_the_second_copy=unwrap(reached.args[0]) is reached,
+        path_reaches_the_copy=unwrap(copied.path) is copied,
+        path_reaches_the_second_copy=unwrap(copied.path) is reached,
+    )
+
+
+@pytest.mark.parametrize("error_class", [PlainReachingError, ReachingError])
+def test_a_family_payload_that_is_itself_raises_recursion_error_as_the_stdlib_does(
+    error_class: type[OSError],
+):
+    import copy
+
+    error = error_class(2, "missing")
+    error.args = (error,)
+
+    with pytest.raises(RecursionError):
+        copy.deepcopy(error)
+
+
+@pytest.mark.parametrize("shape", SELF_REFERENCES)
+def test_a_family_payload_that_reaches_itself_deepcopies_as_the_stdlib_copies_a_plain_one(shape: str):
+    expected = reached_from_a_deepcopy(PlainReachingError, shape)
+
+    assert expected.args_reach_a_second_copy
+    assert reached_from_a_deepcopy(ReachingError, shape) == expected
+
+
+class FormatsEveryExceptionInTheMemo:
+    def __init__(self) -> None:
+        self.seen: list[BaseException] = []
+
+    def __deepcopy__(self, memo: dict) -> "FormatsEveryExceptionInTheMemo":
+        copied = FormatsEveryExceptionInTheMemo()
+        copied.seen = [value for value in list(memo.values()) if isinstance(value, BaseException)]
+
+        for seen in copied.seen:
+            str(seen)
+            repr(seen)
+
+        return copied
+
+
+class HookedPlainError(Exception, Struct, frozen=False):
+    hook: object = None
+
+
+class HookedFileError(OSError, Struct, frozen=False):
+    hook: object = None
+
+
+def a_hooked_plain_error() -> BaseException:
+    error = HookedPlainError()
+    error.args = ("boom", 2)
+    error.hook = FormatsEveryExceptionInTheMemo()
+
+    return error
+
+
+def a_hooked_file_error_without_args() -> BaseException:
+    error = HookedFileError()
+    error.hook = FormatsEveryExceptionInTheMemo()
+
+    return error
+
+
+def a_hooked_file_error_with_args() -> BaseException:
+    error = HookedFileError(2, "missing")
+    error.hook = FormatsEveryExceptionInTheMemo()
+
+    return error
+
+
+def a_hooked_group() -> BaseException:
+    from builtins import ExceptionGroup
+
+    class HookedGroup(ExceptionGroup, Struct, frozen=False):
+        exceptions: list = ()
+        hook: object = None
+
+    group = HookedGroup("m", [ValueError("x")])
+    group.hook = FormatsEveryExceptionInTheMemo()
+
+    return group
+
+
+@pytest.mark.parametrize(
+    "make_error",
+    [
+        a_hooked_plain_error,
+        a_hooked_file_error_without_args,
+        a_hooked_file_error_with_args,
+        pytest.param(
+            a_hooked_group,
+            marks=pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11"),
+        ),
+    ],
+)
+def test_a_deepcopy_hook_can_format_the_copy_it_finds_in_the_memo(make_error):
+    import copy
+
+    error = make_error()
+    copied = copy.deepcopy(error)
+
+    assert copied.hook is not error.hook
+    assert any(seen is copied for seen in copied.hook.seen)
+    assert repr(copied.args) == repr(error.args)
+    assert str(copied) == str(error)
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
+def test_a_group_member_hook_can_format_the_group_copy_it_finds_in_the_memo():
+    import copy
+    from builtins import ExceptionGroup
+
+    class Group(ExceptionGroup, Struct, frozen=False):
+        exceptions: list = ()
+        hook: object = None
+
+    member = HookedPlainError()
+    member.hook = FormatsEveryExceptionInTheMemo()
+    group = Group("m", [member])
+    copied = copy.deepcopy(group)
+
+    assert str(copied) == "m (1 sub-exception)"
+    assert any(seen is copied for seen in copied.exceptions[0].hook.seen)
+
+
+def test_a_non_family_payload_that_is_itself_deepcopies_to_its_copy_where_the_stdlib_recurses():
+    import copy
+
+    class PlainSelfReferential(Exception):
         pass
 
-    f = F(2, "m")
-    f.args = (f,)
-    copied = copy.deepcopy(f)
-
-    assert isinstance(copied.args[0], F)
-    assert copied.args[0] is not f
-
-    class M(Exception, Struct, frozen=False):
+    class SelfReferential(Exception, Struct, frozen=False):
         pass
 
-    m = M()
-    m.args = (m,)
-    copied_m = copy.deepcopy(m)
+    plain = PlainSelfReferential()
+    plain.args = (plain,)
 
-    assert copied_m.args[0] is copied_m
+    with pytest.raises(RecursionError):
+        copy.deepcopy(plain)
+
+    error = SelfReferential()
+    error.args = (error,)
+    copied = copy.deepcopy(error)
+
+    assert copied.args[0] is copied
 
 
 def test_a_subclass_of_a_none_new_struct_refuses_every_entry_point():
