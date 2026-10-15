@@ -279,6 +279,7 @@ def gate(name: str, python: Path, workload: Variant, workdir: Path, out: Path) -
         cwd=workdir,
         capture_output=True,
         text=True,
+        check=False,
     )
     (out / f"{name}-gate.txt").write_text(completed.stdout + completed.stderr)
     print(f"{name}: {(completed.stdout or completed.stderr).strip().splitlines()[-1]}", flush=True)

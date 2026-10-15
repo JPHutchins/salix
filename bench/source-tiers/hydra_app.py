@@ -13,7 +13,6 @@ ConfigStore.instance().store(name="root", node=schema.Root)
 stored = time.perf_counter()
 
 
-@hydra.main(config_name="config")
 def task(config: object) -> None:
     entered = time.perf_counter()
     instance = OmegaConf.to_object(config)
@@ -28,7 +27,7 @@ def task(config: object) -> None:
     )
 
 
-task()
+hydra.main(config_name="config")(task)()
 returned = time.perf_counter()
 print(
     f"import hydra {1e3 * (imported - started):.3f} ms\n"
