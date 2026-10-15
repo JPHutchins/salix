@@ -33,10 +33,11 @@ MACHO_MACHINES = {0x01000007: "x86-64", 0x0100000C: "aarch64"}
 PE_MACHINES = {0x8664: "x86-64", 0xAA64: "aarch64"}
 
 ELF_SECTION_DYNSYM = 11
-ELF_BINDINGS_EXPORTED = frozenset({1, 2})
+ELF_BINDINGS_EXPORTED = frozenset({1, 2, 10})
 ELF_VISIBILITIES_EXPORTED = frozenset({0, 3})
 MACHO_LOAD_SYMTAB = 0x2
 MACHO_LOAD_DYSYMTAB = 0xB
+PE32_PLUS_MAGIC = 0x20B
 PE32_PLUS_DATA_DIRECTORIES = 112
 LINKER_EXPORTS: dict[str, frozenset[str]] = {"macho": frozenset({"__dso_handle", "_mh_dylib_header"})}
 
@@ -56,8 +57,7 @@ def identify(binary: bytes) -> Shape:
         return Shape("macho", MACHO_MACHINES.get(cpu, hex(cpu)))
 
     if binary.startswith(b"MZ"):
-        (offset,) = struct.unpack_from("<I", binary, 0x3C)
-        (machine,) = struct.unpack_from("<H", binary, offset + 4)
+        (machine,) = struct.unpack_from("<H", binary, pe_header(binary) + 4)
         return Shape("pe", PE_MACHINES.get(machine, hex(machine)))
 
     return Shape("unknown", "unknown")
@@ -113,13 +113,22 @@ def check(path: Path) -> Iterator[Failure]:
 
     if actual != expected:
         yield Failure(path.name, f"{modules[0]} is {actual}, tag {platform_tag} implies {expected}")
+        return
 
     symbol = init_symbol(modules[0])
-    exported = exports(binary, actual.container)
-    allowed = {symbol} | LINKER_EXPORTS.get(actual.container, frozenset())
+    linker = LINKER_EXPORTS.get(actual.container, frozenset())
 
-    if exported != allowed:
-        yield Failure(path.name, f"{modules[0]} exports {sorted(exported)}, not exactly {sorted(allowed)}")
+    try:
+        exported = exports(binary, actual.container)
+    except (struct.error, ValueError, IndexError) as error:
+        yield Failure(path.name, f"{modules[0]} exports could not be read: {error}")
+        return
+
+    if symbol not in exported or not exported - {symbol} <= linker:
+        yield Failure(
+            path.name,
+            f"{modules[0]} exports {sorted(exported)}, not {symbol} alone or with the linker's {sorted(linker)}",
+        )
 
 
 def init_symbol(payload: str) -> str:
@@ -146,21 +155,35 @@ def c_string(binary: bytes, start: int) -> str:
     return binary[start : binary.index(b"\0", start)].decode()
 
 
+class ElfSection(NamedTuple):
+    kind: int
+    offset: int
+    size: int
+    link: int
+    entry_size: int
+
+
+def elf_section(binary: bytes, start: int) -> ElfSection:
+    _, kind, _, _, offset, size, link, _, _, entry_size = struct.unpack_from("<IIQQQQIIQQ", binary, start)
+    return ElfSection(kind, offset, size, link, entry_size)
+
+
 def elf_exports(binary: bytes) -> frozenset[str]:
     (section_table,) = struct.unpack_from("<Q", binary, 0x28)
     section_size, section_count = struct.unpack_from("<HH", binary, 0x3A)
-    sections = [
-        struct.unpack_from("<IIQQQQIIQQ", binary, section_table + index * section_size)
-        for index in range(section_count)
-    ]
+
+    if section_count == 0:
+        raise ValueError("the section headers are stripped")
+
+    sections = [elf_section(binary, section_table + index * section_size) for index in range(section_count)]
 
     return frozenset(
-        c_string(binary, sections[link][4] + name)
-        for _, kind, _, _, offset, size, link, _, _, symbol_size in sections
-        if kind == ELF_SECTION_DYNSYM
+        c_string(binary, sections[symbols.link].offset + name)
+        for symbols in sections
+        if symbols.kind == ELF_SECTION_DYNSYM
         for name, info, other, section in (
             struct.unpack_from("<IBBH", binary, start)
-            for start in range(offset, offset + size, symbol_size)
+            for start in range(symbols.offset, symbols.offset + symbols.size, symbols.entry_size)
         )
         if section != 0
         and info >> 4 in ELF_BINDINGS_EXPORTED
@@ -174,12 +197,20 @@ def macho_load_commands(binary: bytes) -> Iterator[tuple[int, int]]:
 
     for _ in range(command_count):
         command, size = struct.unpack_from("<II", binary, offset)
+
+        if size < 8 or offset + size > len(binary):
+            raise ValueError(f"load command {command:#x} at {offset} has size {size}")
+
         yield command, offset
         offset += size
 
 
 def macho_exports(binary: bytes) -> frozenset[str]:
     commands = dict(macho_load_commands(binary))
+
+    if not {MACHO_LOAD_SYMTAB, MACHO_LOAD_DYSYMTAB} <= commands.keys():
+        raise ValueError("there is no LC_SYMTAB and LC_DYSYMTAB pair")
+
     symbols, _, strings, _ = struct.unpack_from("<IIII", binary, commands[MACHO_LOAD_SYMTAB] + 8)
     _, _, first_defined, defined_count = struct.unpack_from(
         "<IIII", binary, commands[MACHO_LOAD_DYSYMTAB] + 8
@@ -199,18 +230,37 @@ class PeSection(NamedTuple):
 
 
 def pe_offset(sections: list[PeSection], address: int) -> int:
-    return next(
-        section.raw_start + address - section.virtual_start
-        for section in sections
-        if section.virtual_start <= address < section.virtual_start + max(section.virtual_size, section.raw_size)
+    offset = next(
+        (
+            section.raw_start + address - section.virtual_start
+            for section in sections
+            if section.raw_start != 0
+            and section.virtual_start <= address < section.virtual_start + min(section.virtual_size, section.raw_size)
+        ),
+        None,
     )
+
+    if offset is None:
+        raise ValueError(f"RVA {address:#x} is in no file-backed section")
+
+    return offset
+
+
+def pe_header(binary: bytes) -> int:
+    (header,) = struct.unpack_from("<I", binary, 0x3C)
+    return int(header)
 
 
 def pe_exports(binary: bytes) -> frozenset[str]:
-    (header,) = struct.unpack_from("<I", binary, 0x3C)
+    header = pe_header(binary)
     (section_count,) = struct.unpack_from("<H", binary, header + 6)
     (optional_size,) = struct.unpack_from("<H", binary, header + 20)
     optional = header + 24
+    (magic,) = struct.unpack_from("<H", binary, optional)
+
+    if magic != PE32_PLUS_MAGIC:
+        raise ValueError(f"optional header magic {magic:#x} is not PE32+")
+
     (export_address,) = struct.unpack_from("<I", binary, optional + PE32_PLUS_DATA_DIRECTORIES)
     sections = [
         PeSection(*struct.unpack_from("<IIII", binary, optional + optional_size + index * 40 + 8))
@@ -222,12 +272,10 @@ def pe_exports(binary: bytes) -> frozenset[str]:
 
     directory = pe_offset(sections, export_address)
     name_count, _, name_table = struct.unpack_from("<III", binary, directory + 24)
+    names = pe_offset(sections, name_table)
 
     return frozenset(
-        c_string(
-            binary,
-            pe_offset(sections, struct.unpack_from("<I", binary, pe_offset(sections, name_table) + index * 4)[0]),
-        )
+        c_string(binary, pe_offset(sections, struct.unpack_from("<I", binary, names + index * 4)[0]))
         for index in range(name_count)
     )
 
