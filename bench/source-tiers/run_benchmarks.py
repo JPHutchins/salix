@@ -178,7 +178,7 @@ FORKS = {
         "42ca97014c85d71a88ad60d55f08cb9fb4d26e2c",
         "src",
         False,
-        ("--index", PYTORCH_CPU_INDEX, "torch"),
+        ("--index", PYTORCH_CPU_INDEX, "--no-deps", "torch==2.14.1"),
         "[torch]",
         (),
     ),
@@ -239,7 +239,7 @@ def build_venv(name: str, stock_tree: Path, wheel: Path, python: str, scratch: P
     install = ("uv", "pip", "install", "--python", venv, "--exclude-newer", EXCLUDE_NEWER)
     run(["uv", "venv", "--python", python, venv])
     if fork.preinstall:
-        run([*install, *fork.preinstall])
+        run(["uv", "pip", "install", "--python", venv, *fork.preinstall])
     run([*(java_command() if fork.generates_parsers else ()), *install, f"{stock_tree}{fork.install_extra}"])
     run([*install, "--reinstall", "--no-deps", wheel])
     return venv / "bin" / "python"
