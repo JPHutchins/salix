@@ -104,6 +104,16 @@
 
           cTests = pkgs.callPackage ./nix/c-tests.nix { src = testSource; };
 
+          memcheck = pkgs.callPackage ./nix/memcheck.nix {
+            src = lib.fileset.toSource {
+              root = ./.;
+              fileset = lib.fileset.unions [
+                buildSourceFiles
+                ./tests
+              ];
+            };
+          };
+
           sdist = pkgs.callPackage ./nix/sdist.nix {
             src = lib.fileset.toSource {
               root = ./.;
@@ -132,6 +142,7 @@
             named
             jphfmt
             cTests
+            memcheck
             sdist
             release
             ;
@@ -151,6 +162,9 @@
           default = forSystem.${system}.all;
           c-tests = forSystem.${system}.cTests;
           inherit (forSystem.${system}) sdist release;
+        }
+        // lib.optionalAttrs (lib.hasSuffix "-linux" system) {
+          inherit (forSystem.${system}) memcheck;
         }
       );
 
