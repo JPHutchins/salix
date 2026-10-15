@@ -20,9 +20,12 @@ stdenv.mkDerivation {
     runHook preBuild
     set -o pipefail
 
-    mapfile -t cFlags < <(python3 build_config.py c-flags --strict)
-    mapfile -t sources < <(python3 build_config.py sources)
-    mapfile -t testSources < <(python3 build_config.py test-sources)
+    python3 build_config.py c-flags --strict > c-flags
+    python3 build_config.py sources > sources
+    python3 build_config.py test-sources > test-sources
+    mapfile -t cFlags < c-flags
+    mapfile -t sources < sources
+    mapfile -t testSources < test-sources
 
     $CC -DTESTING \
       "''${cFlags[@]}" \
