@@ -7,12 +7,13 @@
 }:
 
 let
-  python = python3.withPackages (packages: [
-    packages.setuptools
-    packages.pytest
-    packages.hypothesis
-    packages.packaging
-  ]);
+  testRequirements = (lib.importTOML (src + "/tests/pyproject.toml")).project.dependencies;
+  testPackageNames = map (
+    requirement: builtins.head (builtins.match "([A-Za-z0-9_.-]+).*" requirement)
+  ) (lib.filter (requirement: !(lib.hasInfix "python_version <" requirement)) testRequirements);
+  python = python3.withPackages (
+    packages: [ packages.setuptools ] ++ map (name: packages.${name}) testPackageNames
+  );
 in
 stdenv.mkDerivation {
   pname = "salix-memcheck";
@@ -24,26 +25,30 @@ stdenv.mkDerivation {
     valgrind
   ];
 
+  SALIX_STRICT = "1";
+
   dontConfigure = true;
   dontInstall = true;
 
   buildPhase = ''
     runHook preBuild
+    set -o pipefail
 
     python setup.py build_ext --inplace
     export PYTHONPATH="$PWD:$(python -c 'import sys; print(":".join(path for path in sys.path if path))')"
     export PYTHONMALLOC=malloc
-    stackKib=8192
-    ulimit -s $stackKib
+    ulimit -s 8192
 
     valgrind \
       --tool=memcheck \
-      --main-stacksize=$((stackKib * 1024)) \
+      --main-stacksize=$(($(ulimit -s) * 1024)) \
       --trace-children=yes \
       --errors-for-leak-kinds=none \
       --error-exitcode=99 \
-      python -m pytest -q -p no:cacheprovider tests > $out
+      python -m pytest -q -p no:cacheprovider | tee $out
 
     runHook postBuild
   '';
+
+  meta.platforms = lib.platforms.linux;
 }
