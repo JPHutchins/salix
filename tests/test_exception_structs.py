@@ -431,11 +431,20 @@ if sys.version_info >= (3, 11):
         exceptions: object
 
 
+def built_positionally(members: object) -> BaseException:
+    return MembersGroup("m", members)
+
+
+def built_by_keyword(members: object) -> BaseException:
+    return MembersGroup(message="m", exceptions=members)
+
+
 @pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
+@pytest.mark.parametrize("build", [built_positionally, built_by_keyword])
 @pytest.mark.parametrize("make_members", [members_list, members_tuple, Members])
 @pytest.mark.parametrize("duplicate", [copy.copy, copy.deepcopy])
-def test_a_group_copy_reprs_as_its_source_and_the_source_as_a_plain_group(make_members, duplicate):
-    error = MembersGroup("m", make_members(ValueError("x")))
+def test_a_group_copy_reprs_as_its_source_and_the_source_as_a_plain_group(build, make_members, duplicate):
+    error = build(make_members(ValueError("x")))
     plain = PlainMembersGroup("m", make_members(ValueError("x")))
 
     assert repr(duplicate(error)) == repr(error)

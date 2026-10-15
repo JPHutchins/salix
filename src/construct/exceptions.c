@@ -65,12 +65,7 @@ enum result group_members_from_fields(
 	if (type->struct_exceptions_index >= 0) {
 		PyObject * const bound = *struct_slot(type, self, type->struct_exceptions_index);
 
-		if (
-			bound != NULL &&
-			group_layout_has_excs_str() &&
-			!PyList_Check(bound) &&
-			!PyTuple_Check(bound)
-		) {
+		if (bound != NULL && group_layout_has_excs_str()) {
 			excs_str = PyObject_Repr(bound);
 
 			if (excs_str == NULL) {
@@ -563,7 +558,12 @@ static void test_the_group_members_carry_writes_the_bound_fields(void) {
 	TEST_ASSERT_TRUE(PyTuple_Check(group->excs));
 	TEST_ASSERT_EQUAL_INT(1, PyTuple_GET_SIZE(group->excs));
 	TEST_ASSERT_TRUE(PyExceptionInstance_Check(PyTuple_GET_ITEM(group->excs, 0)));
-	TEST_ASSERT_TRUE(!group_layout_has_excs_str() || group_excs_str(shell) != NULL);
+	TEST_ASSERT_TRUE(
+		!group_layout_has_excs_str() || (
+			group_excs_str(shell) != NULL &&
+			PyUnicode_CompareWithASCIIString(group_excs_str(shell), "[ValueError()]") == 0
+		)
+	);
 
 	Py_DECREF(exceptions);
 	Py_DECREF(message);
