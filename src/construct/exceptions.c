@@ -60,9 +60,23 @@ enum result group_members_from_fields(
 	}
 
 	PY_MOVABLE(excs, NULL);
+	PY_MOVABLE(excs_str, NULL);
 
 	if (type->struct_exceptions_index >= 0) {
 		PyObject * const bound = *struct_slot(type, self, type->struct_exceptions_index);
+
+		if (
+			bound != NULL &&
+			group_layout_has_excs_str() &&
+			!PyList_Check(bound) &&
+			!PyTuple_Check(bound)
+		) {
+			excs_str = PyObject_Repr(bound);
+
+			if (excs_str == NULL) {
+				return RESULT_ERROR;
+			}
+		}
 
 		if (bound != NULL) {
 			excs = PyTuple_Check(bound) ? Py_NewRef(bound) : PySequence_Tuple(bound);
@@ -93,7 +107,7 @@ enum result group_members_from_fields(
 		}
 	}
 
-	return carry_group_members(type, self, msg, excs, NULL, NULL, NULL);
+	return carry_group_members(type, self, msg, excs, excs_str, NULL, NULL);
 }
 #endif
 
@@ -117,6 +131,11 @@ enum result carry_group_members(
 			) :
 			PyUnicode_FromString("")
 		));
+
+		if (group->msg == NULL) {
+			return RESULT_ERROR;
+		}
+
 		Py_XSETREF(group->excs, (
 			excs != NULL ? (
 				deepcopier != NULL ? PyObject_CallFunctionObjArgs(deepcopier, excs, memo, NULL) :
@@ -124,25 +143,16 @@ enum result carry_group_members(
 			) :
 			PyTuple_New(0)
 		));
-		bool complete = group->msg != NULL && group->excs != NULL;
+
+		if (group->excs == NULL) {
+			return RESULT_ERROR;
+		}
 
 #	if PY_VERSION_HEX >= 0x030D0C00
 		if (group_layout_has_excs_str()) {
-			Py_XSETREF(
-				group->excs_str,
-				(
-					excs_str != NULL ? Py_NewRef(excs_str) :
-					group->excs != NULL ? PyObject_Repr(group->excs) :
-					NULL
-				)
-			);
-			complete = complete && group->excs_str != NULL;
+			Py_XSETREF(group->excs_str, Py_XNewRef(excs_str));
 		}
 #	endif
-
-		if (!complete) {
-			return RESULT_ERROR;
-		}
 	}
 #endif
 

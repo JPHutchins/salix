@@ -282,7 +282,7 @@ PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) {
 				copy,
 				source_group->msg,
 				source_group->excs,
-				NULL,
+				group_excs_str(self),
 				deepcopy,
 				memo
 			) != RESULT_OK

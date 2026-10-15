@@ -1,3 +1,4 @@
+import copy
 import inspect
 import pickle
 import sys
@@ -397,6 +398,48 @@ def test_an_exception_group_struct_constructs_through_the_family_new():
     assert error.message == "boom"
     assert len(error.exceptions) == 1
     assert isinstance(error.exceptions[0], ValueError)
+
+
+class Members:
+    def __init__(self, *items: BaseException) -> None:
+        self.items = items
+
+    def __len__(self) -> int:
+        return len(self.items)
+
+    def __getitem__(self, index: int) -> BaseException:
+        return self.items[index]
+
+    def __repr__(self) -> str:
+        return f"Members{self.items!r}"
+
+
+def members_list(*items: BaseException) -> list[BaseException]:
+    return list(items)
+
+
+def members_tuple(*items: BaseException) -> tuple[BaseException, ...]:
+    return items
+
+
+if sys.version_info >= (3, 11):
+    class PlainMembersGroup(ExceptionGroup):
+        pass
+
+    class MembersGroup(ExceptionGroup, Struct, frozen=False):
+        message: str
+        exceptions: object
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
+@pytest.mark.parametrize("make_members", [members_list, members_tuple, Members])
+@pytest.mark.parametrize("duplicate", [copy.copy, copy.deepcopy])
+def test_a_group_copy_reprs_as_its_source_and_the_source_as_a_plain_group(make_members, duplicate):
+    error = MembersGroup("m", make_members(ValueError("x")))
+    plain = PlainMembersGroup("m", make_members(ValueError("x")))
+
+    assert repr(duplicate(error)) == repr(error)
+    assert repr(error).removeprefix("MembersGroup") == repr(plain).removeprefix("PlainMembersGroup")
 
 
 class KwNew(Exception, Struct, frozen=False):
