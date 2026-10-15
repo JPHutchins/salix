@@ -6,7 +6,8 @@ from collections.abc import Callable
 
 module = importlib.import_module(sys.argv[1])
 iterations = int(sys.argv[2])
-console = importlib.import_module("rich.console").Console(file=io.StringIO(), width=100)
+buffer = io.StringIO()
+console = importlib.import_module("rich.console").Console(file=buffer, width=100)
 argv = [
     "cmd17",
     "--name",
@@ -39,6 +40,8 @@ def dispatch() -> object:
 
 
 def render_help() -> None:
+    buffer.seek(0)
+    buffer.truncate()
     module.app.help_print(["cmd23"], console=console)
 
 

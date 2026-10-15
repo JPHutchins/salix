@@ -3,6 +3,7 @@ set -euo pipefail
 
 PYTHON_VERSION=3.13
 SALIX_VERSION=0.1.0a1
+EXCLUDE_NEWER=2026-10-15T00:00:00Z
 
 usage() {
     echo "usage: $0 --salix-wheel <wheel-or-dir> [--workdir <dir>] [--keep-venv]" >&2
@@ -60,8 +61,8 @@ trap cleanup EXIT
 if [[ ! -d "$VENV" ]]; then
     uv venv --python "$PYTHON_VERSION" "$VENV"
 fi
-uv pip install --python "$VENV" --index https://download.pytorch.org/whl/cpu torch torchvision
-uv pip install --python "$VENV" -e "$CHECKOUT[torch,testing]"
+uv pip install --python "$VENV" --index https://download.pytorch.org/whl/cpu --no-deps torch==2.14.1 torchvision==0.29.1
+uv pip install --python "$VENV" --exclude-newer "$EXCLUDE_NEWER" -e "$CHECKOUT[torch,testing]" torchvision==0.29.1
 if [[ -d "$SALIX_WHEEL" ]]; then
     WHEEL_LINKS="$SALIX_WHEEL"
 else

@@ -3,6 +3,7 @@ set -euo pipefail
 
 PYTHON_VERSION=3.13
 SALIX_VERSION=0.1.0a1
+EXCLUDE_NEWER=2026-10-15T00:00:00Z
 
 usage() {
     echo "usage: $0 --salix-wheel <wheel-or-dir> [--workdir <dir>] [--keep-venv]" >&2
@@ -62,9 +63,9 @@ trap cleanup EXIT
 if [[ ! -d "$VENV" ]]; then
     uv venv --python "$PYTHON_VERSION" "$VENV"
 fi
-uv pip install --python "$VENV" -e "$OMEGACONF"
-uv pip install --python "$VENV" -e "$CHECKOUT"
-uv pip install --python "$VENV" -r "$CHECKOUT/requirements/dev.txt"
+uv pip install --python "$VENV" --exclude-newer "$EXCLUDE_NEWER" -e "$CHECKOUT"
+uv pip install --python "$VENV" --exclude-newer "$EXCLUDE_NEWER" -r "$CHECKOUT/requirements/dev.txt"
+uv pip install --python "$VENV" --exclude-newer "$EXCLUDE_NEWER" -e "$OMEGACONF"
 if [[ -d "$SALIX_WHEEL" ]]; then
     WHEEL_LINKS="$SALIX_WHEEL"
 else

@@ -48,6 +48,14 @@ def main(python: str, rounds: int, variants: list[Variant]) -> None:
             for label, (value, unit) in measurements(python, variant).items():
                 samples[label][variant.name].append(value)
                 units[label] = unit
+    missing = [
+        f"{label} ({variant.name})"
+        for label, by_variant in samples.items()
+        for variant in variants
+        if not by_variant[variant.name]
+    ]
+    if missing:
+        raise SystemExit(f"measurements not printed by every variant: {', '.join(missing)}")
     print(
         f"{'measurement':28s} "
         + " ".join(f"{variant.name:>22s}" for variant in variants)

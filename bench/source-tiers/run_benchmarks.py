@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import argparse
 import hashlib
 import platform
@@ -14,6 +16,51 @@ HERE = Path(__file__).resolve().parent
 VENDOR = HERE / "vendor"
 EXCLUDE_NEWER = "2026-10-15T00:00:00Z"
 PYTORCH_CPU_INDEX = "https://download.pytorch.org/whl/cpu"
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--salix-wheel", type=Path, required=True)
+    parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--python", default="3.13")
+    parser.add_argument("--only", nargs="+", choices=sorted(FORKS), default=sorted(FORKS))
+    arguments = parser.parse_args()
+    names = sorted({*arguments.only, *(read for name in arguments.only for read in FORKS[name].reads_forks)})
+    wheel = arguments.salix_wheel.resolve()
+    if not wheel.is_file():
+        raise SystemExit(f"--salix-wheel {wheel} is not a file")
+    out = arguments.out.resolve()
+    out.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory() as temporary, ExitStack() as stack:
+        scratch = Path(temporary)
+        trees = {
+            name: Sides(stack.enter_context(base_worktree(FORKS[name], scratch)), pinned_tree(FORKS[name]))
+            for name in names
+        }
+        for name in names:
+            if FORKS[name].generates_parsers:
+                generate_parsers(trees[name].stock, arguments.python)
+                generate_parsers(trees[name].fork, arguments.python)
+                ensure_clean(trees[name].fork)
+        sources = {
+            name: Sides(sides.stock / FORKS[name].source_root, sides.fork / FORKS[name].source_root)
+            for name, sides in trees.items()
+        }
+        pythons = {name: build_venv(name, trees[name].stock, wheel, arguments.python, scratch) for name in names}
+        (out / "provenance.txt").write_text(provenance(names, wheel, pythons))
+        plans = {name: PLANS[name](sources, scratch / "inputs" / name) for name in names}
+        for name, plan in plans.items():
+            (scratch / "inputs" / name).mkdir(parents=True)
+            for generation in plan.generations:
+                subprocess.run(
+                    [pythons[name], HERE / generation.script, scratch / "inputs" / name],
+                    env=environment(generation.python_path),
+                    check=True,
+                )
+            gate(name, pythons[name], plan.gate, scratch, out)
+        for name, plan in plans.items():
+            for row in plan.rows:
+                measure(row, pythons[name], scratch, out)
 
 
 class Fork(NamedTuple):
@@ -184,6 +231,7 @@ FORKS = {
     ),
 }
 
+
 PLANS: dict[str, Callable[[dict[str, Sides], Path], Plan]] = {
     "omegaconf": omegaconf_plan,
     "tyro": tyro_plan,
@@ -191,77 +239,6 @@ PLANS: dict[str, Callable[[dict[str, Sides], Path], Plan]] = {
     "hydra": hydra_plan,
     "transformers": transformers_plan,
 }
-
-
-def run(command: Sequence[str | Path], cwd: Path | None = None) -> str:
-    completed = subprocess.run(
-        [str(part) for part in command], cwd=cwd, check=False, capture_output=True, text=True
-    )
-    if completed.returncode != 0:
-        raise SystemExit(f"{' '.join(map(str, command))} exited {completed.returncode}:\n{completed.stderr}")
-    return completed.stdout
-
-
-def pinned_tree(fork: Fork) -> Path:
-    tree = VENDOR / fork.submodule
-    pin = run(["git", "-C", HERE, "ls-tree", "HEAD", f"vendor/{fork.submodule}"]).split()[2]
-    head = run(["git", "-C", tree, "rev-parse", "HEAD"]).strip()
-    if head != pin:
-        raise SystemExit(f"{tree} is at {head}, not the pinned {pin}: run git submodule update --init")
-    run(["git", "-C", tree, "merge-base", "--is-ancestor", fork.base, pin])
-    return tree
-
-
-@contextmanager
-def base_worktree(fork: Fork, scratch: Path) -> Iterator[Path]:
-    tree = scratch / "stock" / fork.submodule
-    run(["git", "-C", VENDOR / fork.submodule, "worktree", "add", "--detach", tree, fork.base])
-    try:
-        yield tree
-    finally:
-        run(["git", "-C", VENDOR / fork.submodule, "worktree", "remove", "--force", tree])
-
-
-def java_command() -> tuple[str, ...]:
-    return () if shutil.which("java") else ("nix", "shell", "nixpkgs#jdk17", "--command")
-
-
-def generate_parsers(tree: Path, python: str) -> None:
-    run(
-        [*java_command(), "uv", "run", "--no-project", "--python", python, "--with", "setuptools", "python", "setup.py", "antlr"],
-        cwd=tree,
-    )
-
-
-def build_venv(name: str, stock_tree: Path, wheel: Path, python: str, scratch: Path) -> Path:
-    fork = FORKS[name]
-    venv = scratch / "venv" / name
-    install = ("uv", "pip", "install", "--python", venv, "--exclude-newer", EXCLUDE_NEWER)
-    run(["uv", "venv", "--python", python, venv])
-    if fork.preinstall:
-        run(["uv", "pip", "install", "--python", venv, *fork.preinstall])
-    run([*(java_command() if fork.generates_parsers else ()), *install, f"{stock_tree}{fork.install_extra}"])
-    run([*install, "--reinstall", "--no-deps", wheel])
-    return venv / "bin" / "python"
-
-
-def environment(python_path: tuple[Path, ...]) -> dict[str, str]:
-    return {"PYTHONPATH": ":".join(map(str, python_path)), "PATH": "/usr/bin:/bin"}
-
-
-def variant_specification(variant: Variant) -> str:
-    return "|".join(
-        (variant.label, ":".join(map(str, variant.python_path)), str(HERE / variant.script), *variant.arguments)
-    )
-
-
-def measure(row: Row, python: Path, workdir: Path, out: Path) -> None:
-    table = run(
-        [sys.executable, HERE / "interleave.py", python, str(row.rounds), *map(variant_specification, row.variants)],
-        cwd=workdir,
-    )
-    (out / f"{row.output}.txt").write_text(f"### {row.title}\n{table}")
-    print(f"### {row.title}\n{table}", flush=True)
 
 
 def gate(name: str, python: Path, workload: Variant, workdir: Path, out: Path) -> None:
@@ -285,9 +262,18 @@ def gate(name: str, python: Path, workload: Variant, workdir: Path, out: Path) -
         check=False,
     )
     (out / f"{name}-gate.txt").write_text(completed.stdout + completed.stderr)
-    print(f"{name}: {(completed.stdout or completed.stderr).strip().splitlines()[-1]}", flush=True)
+    print(f"{name}: {((completed.stdout + completed.stderr).strip().splitlines() or ['no output'])[-1]}", flush=True)
     if completed.returncode != 0:
         raise SystemExit(f"{name}: the fork gate failed, see {out / f'{name}-gate.txt'}")
+
+
+def measure(row: Row, python: Path, workdir: Path, out: Path) -> None:
+    table = run(
+        [sys.executable, HERE / "interleave.py", python, str(row.rounds), *map(variant_specification, row.variants)],
+        cwd=workdir,
+    )
+    (out / f"{row.output}.txt").write_text(f"### {row.title}\n{table}")
+    print(f"### {row.title}\n{table}", flush=True)
 
 
 def provenance(names: Sequence[str], wheel: Path, pythons: dict[str, Path]) -> str:
@@ -310,48 +296,75 @@ def provenance(names: Sequence[str], wheel: Path, pythons: dict[str, Path]) -> s
     )
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--salix-wheel", type=Path, required=True)
-    parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--python", default="3.13")
-    parser.add_argument("--only", nargs="+", choices=sorted(FORKS), default=sorted(FORKS))
-    arguments = parser.parse_args()
-    selected: list[str] = arguments.only
-    names = sorted({*selected, *(read for name in selected for read in FORKS[name].reads_forks)})
-    wheel = arguments.salix_wheel.resolve()
-    out = arguments.out.resolve()
-    out.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory() as temporary, ExitStack() as stack:
-        scratch = Path(temporary)
-        trees = {
-            name: Sides(stack.enter_context(base_worktree(FORKS[name], scratch)), pinned_tree(FORKS[name]))
-            for name in names
-        }
-        for name in names:
-            if FORKS[name].generates_parsers:
-                generate_parsers(trees[name].stock, arguments.python)
-                generate_parsers(trees[name].fork, arguments.python)
-        sources = {
-            name: Sides(sides.stock / FORKS[name].source_root, sides.fork / FORKS[name].source_root)
-            for name, sides in trees.items()
-        }
-        pythons = {name: build_venv(name, trees[name].stock, wheel, arguments.python, scratch) for name in selected}
-        (out / "provenance.txt").write_text(provenance(names, wheel, pythons))
-        plans = {name: PLANS[name](sources, scratch / "inputs" / name) for name in selected}
-        for name, plan in plans.items():
-            (scratch / "inputs" / name).mkdir(parents=True)
-            for generation in plan.generations:
-                subprocess.run(
-                    [pythons[name], HERE / generation.script, scratch / "inputs" / name],
-                    env=environment(generation.python_path),
-                    check=True,
-                )
-            gate(name, pythons[name], plan.gate, scratch, out)
-        for name, plan in plans.items():
-            for row in plan.rows:
-                measure(row, pythons[name], scratch, out)
+def build_venv(name: str, stock_tree: Path, wheel: Path, python: str, scratch: Path) -> Path:
+    fork = FORKS[name]
+    venv = scratch / "venv" / name
+    install = ("uv", "pip", "install", "--python", venv, "--exclude-newer", EXCLUDE_NEWER)
+    run(["uv", "venv", "--python", python, venv])
+    if fork.preinstall:
+        run(["uv", "pip", "install", "--python", venv, *fork.preinstall])
+    run([*(java_command() if fork.generates_parsers else ()), *install, f"{stock_tree}{fork.install_extra}"])
+    run([*install, "--reinstall", "--no-deps", wheel])
+    return venv / "bin" / "python"
+
+
+def generate_parsers(tree: Path, python: str) -> None:
+    run(
+        [*java_command(), "uv", "run", "--no-project", "--python", python, "--with", "setuptools", "python", "setup.py", "antlr"],
+        cwd=tree,
+    )
+
+
+def java_command() -> tuple[str, ...]:
+    return () if shutil.which("java") else ("nix", "shell", "nixpkgs#jdk17", "--command")
+
+
+@contextmanager
+def base_worktree(fork: Fork, scratch: Path) -> Iterator[Path]:
+    tree = scratch / "stock" / fork.submodule
+    run(["git", "-C", VENDOR / fork.submodule, "worktree", "add", "--detach", tree, fork.base])
+    try:
+        yield tree
+    finally:
+        run(["git", "-C", VENDOR / fork.submodule, "worktree", "remove", "--force", tree])
+
+
+def pinned_tree(fork: Fork) -> Path:
+    tree = VENDOR / fork.submodule
+    pin = run(["git", "-C", HERE, "ls-tree", "HEAD", f"vendor/{fork.submodule}"]).split()[2]
+    head = run(["git", "-C", tree, "rev-parse", "HEAD"]).strip()
+    if head != pin:
+        raise SystemExit(f"{tree} is at {head}, not the pinned {pin}: run git submodule update --init")
+    run(["git", "-C", tree, "merge-base", "--is-ancestor", fork.base, pin])
+    return ensure_clean(tree)
+
+
+def ensure_clean(tree: Path) -> Path:
+    changed = run(["git", "-C", tree, "status", "--porcelain"])
+    if changed:
+        raise SystemExit(f"{tree} differs from its commit:\n{changed}")
+    return tree
+
+
+def run(command: Sequence[str | Path], cwd: Path | None = None) -> str:
+    completed = subprocess.run(
+        [str(part) for part in command], cwd=cwd, check=False, capture_output=True, text=True
+    )
+    if completed.returncode != 0:
+        raise SystemExit(f"{' '.join(map(str, command))} exited {completed.returncode}:\n{completed.stderr}")
+    return completed.stdout
+
+
+def environment(python_path: tuple[Path, ...]) -> dict[str, str]:
+    return {"PYTHONPATH": ":".join(map(str, python_path)), "PATH": "/usr/bin:/bin"}
+
+
+def variant_specification(variant: Variant) -> str:
+    return "|".join(
+        (variant.label, ":".join(map(str, variant.python_path)), str(HERE / variant.script), *variant.arguments)
+    )
 
 
 if __name__ == "__main__":
     main()
+

@@ -17,35 +17,60 @@ SOURCE_MENTION = re.compile(
 )
 REQUIREMENT_NAME = re.compile(r"^\s*([A-Za-z0-9_.-]+)")
 PROBE = """
+import builtins
+import importlib
 import importlib.abc
 import json
 import runpy
 import sys
 
 replaced = {replaced!r}
-importers = {{}}
+imports = []
+
+
+def record(name, depth):
+    top = name.split(".")[0]
+    if top in replaced:
+        chain = []
+        frame = sys._getframe(depth)
+        while frame is not None:
+            module = frame.f_globals.get("__name__", "?")
+            if not module.startswith(("importlib", "_frozen_importlib")) and (not chain or chain[-1] != module):
+                chain.append(module)
+            frame = frame.f_back
+        if [top, chain] not in imports:
+            imports.append([top, chain])
 
 
 class Recorder(importlib.abc.MetaPathFinder):
     def find_spec(self, name, path, target=None):
-        if name in replaced and name not in importers:
-            chain = []
-            frame = sys._getframe(1)
-            while frame is not None:
-                module = frame.f_globals.get("__name__", "?")
-                if not module.startswith(("importlib", "_frozen_importlib")) and (not chain or chain[-1] != module):
-                    chain.append(module)
-                frame = frame.f_back
-            importers[name] = chain
+        record(name, 2)
         return None
 
 
+stock_import = builtins.__import__
+stock_import_module = importlib.import_module
+
+
+def recording_import(name, globals=None, locals=None, fromlist=(), level=0):
+    if level == 0:
+        record(name, 2)
+    return stock_import(name, globals, locals, fromlist, level)
+
+
+def recording_import_module(name, package=None):
+    record(name, 2)
+    return stock_import_module(name, package)
+
+
 sys.meta_path.insert(0, Recorder())
+builtins.__import__ = recording_import
+importlib.import_module = recording_import_module
 __import__({library!r})
 if {workload!r}:
     sys.argv = [{workload!r}, *{arguments!r}]
     runpy.run_path({workload!r}, run_name="__main__")
-print("FORK-GATE " + json.dumps(importers))
+print("FORK-GATE " + json.dumps(imports))
 """
 
 
@@ -133,9 +158,14 @@ def declared_replacements(root: Path) -> list[str]:
     ]
 
 
-def runtime_importers(
+class Import(NamedTuple):
+    module: str
+    chain: list[str]
+
+
+def runtime_imports(
     python: str, python_path: str, library: str, workload: str, arguments: list[str]
-) -> dict[str, list[str]]:
+) -> list[Import]:
     probe = PROBE.format(
         replaced=REPLACED_MODULES, library=library, workload=workload, arguments=arguments
     )
@@ -144,11 +174,16 @@ def runtime_importers(
         env={"PYTHONPATH": python_path, "PATH": "/usr/bin:/bin"},
         capture_output=True,
         text=True,
-        check=True,
+        check=False,
     )
-    line = next(line for line in completed.stdout.splitlines() if line.startswith("FORK-GATE "))
-    loaded: dict[str, list[str]] = json.loads(line.removeprefix("FORK-GATE "))
-    return loaded
+    verdicts = [line for line in completed.stdout.splitlines() if line.startswith("FORK-GATE ")]
+
+    if completed.returncode != 0 or not verdicts:
+        raise SystemExit(
+            f"the probe exited {completed.returncode} without a FORK-GATE line:\n{completed.stdout}{completed.stderr}"
+        )
+
+    return [Import(module, chain) for module, chain in json.loads(verdicts[-1].removeprefix("FORK-GATE "))]
 
 
 def responsible_module(chain: list[str]) -> str:
@@ -169,20 +204,22 @@ def main() -> int:
     hits = [hit for hit in found if not hit.in_string]
     strings = [hit for hit in found if hit.in_string]
     declared = declared_replacements(Path(root))
-    importers = runtime_importers(python, python_path, library, workload, arguments)
-    responsible = {module: responsible_module(chain) for module, chain in importers.items()}
-    own = {module: chain for module, chain in importers.items() if belongs_to(responsible[module], library)}
-    third_party = {module: chain for module, chain in importers.items() if module not in own}
+    imports = runtime_imports(python, python_path, library, workload, arguments)
+    own = [imported for imported in imports if belongs_to(responsible_module(imported.chain), library)]
+    third_party = [imported for imported in imports if imported not in own]
     for hit in hits:
         print(f"SOURCE {hit.path}:{hit.line}: {hit.text}")
     for hit in strings:
         print(f"STRING {hit.path}:{hit.line}: {hit.text}")
     for requirement in declared:
         print(f"DEPENDENCY {requirement}")
-    for module, chain in own.items():
-        print(f"IMPORTED BY THE FORK {module} <- {' <- '.join(chain)}")
-    for module, chain in third_party.items():
-        print(f"IMPORTED BY THIRD PARTY {responsible[module]}: {module} <- {' <- '.join(chain)}")
+    for imported in own:
+        print(f"IMPORTED BY THE FORK {imported.module} <- {' <- '.join(imported.chain)}")
+    for imported in third_party:
+        print(
+            f"IMPORTED BY THIRD PARTY {responsible_module(imported.chain)}: "
+            f"{imported.module} <- {' <- '.join(imported.chain)}"
+        )
     valid = not hits and not declared and not own
     print(
         f"GATE {'PASS' if valid else 'FAIL'}: {len(hits)} source hits, "
