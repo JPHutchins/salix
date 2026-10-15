@@ -147,6 +147,14 @@ flake_check = Sequential(flake_evaluates, Task("nix flake check", when=NIX_INPUT
 
 test = Parallel(Sequential(build, pytest), matrix={"PY": PYTHONS})
 
+instructions = Parallel(
+    Sequential(
+        build,
+        Task("nix shell --inputs-from . nixpkgs#valgrind --command .venvs/{PY}/bin/python bench/instructions.py"),
+    ),
+    matrix={"PY": (NEWEST,)},
+)
+
 FREE_THREADED = ("3.14t", "3.15t")
 
 FREE_THREADED_ROOT = {"UV_PYTHON_INSTALL_DIR": ".free-threaded-python"}
