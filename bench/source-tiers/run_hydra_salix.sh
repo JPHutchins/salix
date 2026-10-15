@@ -3,6 +3,7 @@ set -euo pipefail
 
 PYTHON_VERSION=3.13
 SALIX_VERSION=0.1.0a1
+EXCLUDE_NEWER=2026-10-15T00:00:00Z
 
 usage() {
     echo "usage: $0 --salix-wheel <wheel-or-dir> [--workdir <dir>] [--keep-venv]" >&2
@@ -25,14 +26,16 @@ done
 [[ -e "$SALIX_WHEEL" ]] || { echo "salix wheel not found: $SALIX_WHEEL" >&2; exit 1; }
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-CHECKOUT="$HERE/vendor/hydra"
-[[ -e "$CHECKOUT/.git" ]] || { echo "submodule not initialized: $CHECKOUT" >&2; exit 1; }
-
-PIN_SHA="$(git -C "$HERE" ls-tree HEAD vendor/hydra | awk '{print $3}')"
-[[ "$(git -C "$CHECKOUT" rev-parse HEAD)" == "$PIN_SHA" ]] || {
-    echo "checkout is not at the pinned commit: expected $PIN_SHA, at $(git -C "$CHECKOUT" rev-parse HEAD)" >&2
-    exit 1
-}
+CHECKOUT="$HERE/vendor/hydra-salix"
+OMEGACONF="$HERE/vendor/omegaconf-salix"
+for SUBMODULE in hydra-salix omegaconf-salix; do
+    [[ -e "$HERE/vendor/$SUBMODULE/.git" ]] || { echo "submodule not initialized: $HERE/vendor/$SUBMODULE" >&2; exit 1; }
+    PIN_SHA="$(git -C "$HERE" ls-tree HEAD "vendor/$SUBMODULE" | awk '{print $3}')"
+    [[ "$(git -C "$HERE/vendor/$SUBMODULE" rev-parse HEAD)" == "$PIN_SHA" ]] || {
+        echo "$SUBMODULE is not at the pinned commit: expected $PIN_SHA, at $(git -C "$HERE/vendor/$SUBMODULE" rev-parse HEAD)" >&2
+        exit 1
+    }
+done
 
 if [[ -z "$WORKDIR" ]]; then
     WORKDIR="$(mktemp -d)"
@@ -60,9 +63,9 @@ trap cleanup EXIT
 if [[ ! -d "$VENV" ]]; then
     uv venv --python "$PYTHON_VERSION" "$VENV"
 fi
-uv pip install --python "$VENV" -r "$HERE/../dataclass-compat/requirements-hydra.txt"
-uv pip install --python "$VENV" -e "$CHECKOUT"
-uv pip install --python "$VENV" -r "$CHECKOUT/requirements/dev.txt"
+uv pip install --python "$VENV" --exclude-newer "$EXCLUDE_NEWER" -e "$CHECKOUT"
+uv pip install --python "$VENV" --exclude-newer "$EXCLUDE_NEWER" -r "$CHECKOUT/requirements/dev.txt"
+uv pip install --python "$VENV" --exclude-newer "$EXCLUDE_NEWER" -e "$OMEGACONF"
 if [[ -d "$SALIX_WHEEL" ]]; then
     WHEEL_LINKS="$SALIX_WHEEL"
 else
@@ -70,13 +73,15 @@ else
 fi
 uv pip install --python "$VENV" --no-index --find-links "$WHEEL_LINKS" --reinstall "salix==$SALIX_VERSION"
 
-if command -v java >/dev/null 2>&1; then
-    ( cd "$CHECKOUT" && "$VENV/bin/python" setup.py antlr )
-else
-    ( cd "$CHECKOUT" && nix shell nixpkgs#jdk17 --command "$VENV/bin/python" setup.py antlr )
-fi
+for TREE in "$OMEGACONF" "$CHECKOUT"; do
+    if command -v java >/dev/null 2>&1; then
+        ( cd "$TREE" && "$VENV/bin/python" setup.py antlr )
+    else
+        ( cd "$TREE" && nix shell nixpkgs#jdk17 --command "$VENV/bin/python" setup.py antlr )
+    fi
+done
 
 (
     cd "$CHECKOUT"
-    PYTHONPATH="$HERE/../dataclass-compat:$HERE" "$VENV/bin/python" -m pytest -p shim_install_plugin -p no:cacheprovider tests/ -q
+    "$VENV/bin/python" -m pytest -p no:cacheprovider tests/ -q
 )

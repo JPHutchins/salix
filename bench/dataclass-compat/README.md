@@ -1,16 +1,15 @@
 # dataclass-compat
 
 `_shim/` builds salix `Struct`s behind the `dataclasses` API, for
-[salix #160](https://github.com/JPHutchins/salix/issues/160). The source
-tier's shim-based legs (`../source-tiers/`) and the CPython conformance
-run below use it. `known_gaps.md` lists where the shim and salix differ
-from stock.
+[salix #160](https://github.com/JPHutchins/salix/issues/160). The CPython
+conformance run below uses it; the source tiers (`../source-tiers/`) do
+not, since their forks replace dataclasses in source. `known_gaps.md`
+lists where the shim and salix differ from stock.
 
 `install()` has to run before the code under test imports
 `dataclasses`. A class with a static-type base, such as `dict`, stays a
 stock dataclass. `exclude_prefixes` keeps a package's own dataclasses
-stock: hydra needs it, because its internals read their own instance
-`__dict__` (540 of the source tier's 544 hydra failures).
+stock.
 
 ## CPython conformance
 

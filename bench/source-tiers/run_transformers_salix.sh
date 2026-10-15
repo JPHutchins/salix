@@ -3,9 +3,10 @@ set -euo pipefail
 
 PYTHON_VERSION=3.13
 SALIX_VERSION=0.1.0a1
+EXCLUDE_NEWER=2026-10-15T00:00:00Z
 
 usage() {
-    echo "usage: $0 --salix-wheel <wheel-or-dir> [--workdir <dir>] [--keep-venv] [--suite] [--stock]" >&2
+    echo "usage: $0 --salix-wheel <wheel-or-dir> [--workdir <dir>] [--keep-venv]" >&2
     exit 2
 }
 
@@ -13,15 +14,11 @@ SALIX_WHEEL=""
 WORKDIR=""
 KEEP_VENV=0
 OWNED_WORKDIR=0
-RUN_SUITE=0
-RUN_STOCK=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --salix-wheel) [[ $# -ge 2 && $2 != -* ]] || usage; SALIX_WHEEL="$2"; shift 2 ;;
         --workdir) [[ $# -ge 2 && $2 != -* ]] || usage; WORKDIR="$(realpath "$2")"; shift 2 ;;
         --keep-venv) KEEP_VENV=1; shift ;;
-        --suite) RUN_SUITE=1; shift ;;
-        --stock) RUN_STOCK=1; shift ;;
         *) usage ;;
     esac
 done
@@ -64,8 +61,8 @@ trap cleanup EXIT
 if [[ ! -d "$VENV" ]]; then
     uv venv --python "$PYTHON_VERSION" "$VENV"
 fi
-uv pip install --python "$VENV" --index https://download.pytorch.org/whl/cpu torch
-uv pip install --python "$VENV" -e "$CHECKOUT[testing]"
+uv pip install --python "$VENV" --index https://download.pytorch.org/whl/cpu --no-deps torch==2.14.1 torchvision==0.29.1
+uv pip install --python "$VENV" --exclude-newer "$EXCLUDE_NEWER" -e "$CHECKOUT[torch,testing]" torchvision==0.29.1
 if [[ -d "$SALIX_WHEEL" ]]; then
     WHEEL_LINKS="$SALIX_WHEEL"
 else
@@ -73,23 +70,8 @@ else
 fi
 uv pip install --python "$VENV" --no-index --find-links "$WHEEL_LINKS" --reinstall "salix==$SALIX_VERSION"
 
-PYTHONPATH="$HERE/../dataclass-compat:$HERE" "$VENV/bin/python" -m transformers_parity "$([[ "$RUN_STOCK" -eq 1 ]] && echo --stock)"
-
-if [[ "$RUN_SUITE" -eq 1 ]]; then
-    PYTHONPATH="$HERE/../dataclass-compat" "$VENV/bin/python" - <<PYEOF
-import _shim
-
-_shim.install(include_prefixes=("transformers",))
-
-from transformers import AutoConfig
-
-cfg = AutoConfig.from_pretrained("hf-internal-testing/tiny-bert")
-print(f"config load ok: {cfg.model_type}")
-PYEOF
-    (
-        cd "$CHECKOUT"
-        PYTHONPATH="$HERE/../dataclass-compat:$HERE" "$VENV/bin/python" -m pytest \
-            -p shim_install_transformers_plugin -p no:cacheprovider \
-            tests/test_configuration_common.py tests/tokenization -q
-    )
-fi
+(
+    cd "$CHECKOUT"
+    "$VENV/bin/python" -m pytest -p no:cacheprovider -q \
+        tests/utils tests/trainer/test_training_args.py tests/generation/test_configuration_utils.py
+)
