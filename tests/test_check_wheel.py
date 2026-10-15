@@ -46,63 +46,140 @@ def check(path: Path) -> subprocess.CompletedProcess[str]:
 
 TRUNCATED_ELF = b"\x7fELF" + bytes(14) + struct.pack("<H", 0x3E) + bytes(4)
 
-MACHO_WITH_A_ZERO_SIZE_COMMAND = (
-    b"\xcf\xfa\xed\xfe" + struct.pack("<IIIIIII", 0x01000007, 3, 6, 1, 8, 0, 0) + struct.pack("<II", 0x19, 0)
+ELF_MAGIC_ONLY = b"\x7fELF"
+
+ELF_WITH_AN_UNADDRESSABLE_SECTION_TABLE = (
+    b"\x7fELF"
+    + bytes(14)
+    + struct.pack("<H", 0x3E)
+    + bytes(0x28 - 20)
+    + struct.pack("<Q", 0xFFFFFFFFFFFFFFFF)
+    + bytes(0x3A - 0x30)
+    + struct.pack("<HH", 64, 1)
+    + bytes(2)
 )
 
-MACHO_WITHOUT_A_SYMBOL_TABLE = (
-    b"\xcf\xfa\xed\xfe" + struct.pack("<IIIIIII", 0x01000007, 3, 6, 1, 8, 0, 0) + struct.pack("<II", 0x19, 8)
+MACHO_HEADER = b"\xcf\xfa\xed\xfe" + struct.pack("<IIII", 0x01000007, 3, 6, 1)
+
+MACHO_WITH_A_ZERO_SIZE_COMMAND = MACHO_HEADER + struct.pack("<III", 8, 0, 0) + struct.pack("<II", 0x19, 0)
+
+MACHO_WITHOUT_A_SYMBOL_TABLE = MACHO_HEADER + struct.pack("<III", 8, 0, 0) + struct.pack("<II", 0x19, 8)
+
+MACHO_WITH_A_TRUNCATED_SYMBOL_TABLE = MACHO_HEADER + struct.pack("<III", 8, 0, 0) + struct.pack("<II", 0x2, 8)
+
+MACHO_WITH_DEFINED_SYMBOLS_PAST_THE_TABLE = (
+    b"\xcf\xfa\xed\xfe"
+    + struct.pack("<IIII", 0x01000007, 3, 6, 2)
+    + struct.pack("<III", 104, 0, 0)
+    + struct.pack("<IIIIII", 0x2, 24, 0, 1, 0, 0)
+    + struct.pack("<IIIIII", 0xB, 80, 0, 0, 0, 5)
+    + bytes(56)
 )
 
-PE_EXPORTS_OUTSIDE_EVERY_SECTION = (
-    b"MZ"
-    + bytes(0x3A)
-    + struct.pack("<I", 0x40)
-    + b"PE\0\0"
-    + struct.pack("<HHIIIHH", 0x8664, 0, 0, 0, 0, 240, 0)
-    + struct.pack("<H", 0x20B)
-    + bytes(110)
-    + struct.pack("<II", 0x1000, 0x40)
-    + bytes(120)
-)
 
-PE32_NOT_PLUS = (
-    b"MZ"
-    + bytes(0x3A)
-    + struct.pack("<I", 0x40)
-    + b"PE\0\0"
-    + struct.pack("<HHIIIHH", 0x8664, 0, 0, 0, 0, 224, 0)
-    + struct.pack("<H", 0x10B)
-    + bytes(222)
-)
+def pe(data_directory_count: int, magic: int = 0x20B) -> bytes:
+    return (
+        b"MZ"
+        + bytes(0x3A)
+        + struct.pack("<I", 0x40)
+        + b"PE\0\0"
+        + struct.pack("<HHIIIHH", 0x8664, 0, 0, 0, 0, 240, 0)
+        + struct.pack("<H", magic)
+        + bytes(106)
+        + struct.pack("<I", data_directory_count)
+        + struct.pack("<II", 0x1000, 0x40)
+        + bytes(120)
+    )
+
+
+ELF = ("manylinux_2_17_x86_64", "salix/__init__.cpython-313-x86_64-linux-gnu.so")
+MACHO = ("macosx_10_13_x86_64", "salix/__init__.cpython-313-darwin.so")
+PE = ("win_amd64", "salix/__init__.cp313-win_amd64.pyd")
 
 
 @pytest.mark.parametrize(
-    ("platform", "payload_name", "payload", "reason"),
+    ("target", "payload", "reason"),
     [
-        ("manylinux_2_17_x86_64", "salix/__init__.cpython-313-x86_64-linux-gnu.so", TRUNCATED_ELF, "unpack_from"),
-        ("macosx_10_13_x86_64", "salix/__init__.cpython-313-darwin.so", MACHO_WITH_A_ZERO_SIZE_COMMAND, "has size 0"),
-        ("macosx_10_13_x86_64", "salix/__init__.cpython-313-darwin.so", MACHO_WITHOUT_A_SYMBOL_TABLE, "LC_SYMTAB"),
-        ("win_amd64", "salix/__init__.cp313-win_amd64.pyd", PE_EXPORTS_OUTSIDE_EVERY_SECTION, "no file-backed section"),
-        ("win_amd64", "salix/__init__.cp313-win_amd64.pyd", PE32_NOT_PLUS, "not PE32+"),
+        (ELF, TRUNCATED_ELF, "unpack_from"),
+        (ELF, ELF_MAGIC_ONLY, "unpack_from"),
+        (ELF, ELF_WITH_AN_UNADDRESSABLE_SECTION_TABLE, "OverflowError"),
+        (MACHO, MACHO_WITH_A_ZERO_SIZE_COMMAND, "has size 0"),
+        (MACHO, MACHO_WITHOUT_A_SYMBOL_TABLE, "LC_SYMTAB is missing or shorter than 24 bytes"),
+        (MACHO, MACHO_WITH_A_TRUNCATED_SYMBOL_TABLE, "LC_SYMTAB is missing or shorter than 24 bytes"),
+        (MACHO, MACHO_WITH_DEFINED_SYMBOLS_PAST_THE_TABLE, "outside the 1 symbols"),
+        (PE, pe(16), "no file-backed section"),
+        (PE, pe(0), "declares no data directories"),
+        (PE, pe(16, magic=0x10B), "not PE32+"),
     ],
-    ids=["truncated-elf", "macho-zero-size-command", "macho-no-symtab", "pe-rva-outside-sections", "pe32"],
+    ids=[
+        "truncated-elf",
+        "elf-magic-only",
+        "elf-unaddressable-section-table",
+        "macho-zero-size-command",
+        "macho-no-symtab",
+        "macho-truncated-symtab",
+        "macho-defined-symbols-past-the-table",
+        "pe-rva-outside-sections",
+        "pe-no-data-directories",
+        "pe32",
+    ],
 )
-def test_a_payload_whose_exports_cannot_be_read_fails_that_wheel_cleanly(platform, payload_name, payload, reason, tmp_path):
+def test_a_payload_that_cannot_be_read_fails_that_wheel_cleanly(target, payload, reason, tmp_path):
+    platform, payload_name = target
     completed = check(wheel(tmp_path, platform, payload_name, payload))
 
     assert completed.returncode == 1
     assert "Traceback" not in completed.stderr
-    assert "exports could not be read" in completed.stderr
+    assert "could not be checked" in completed.stderr
     assert reason in completed.stderr
     assert completed.stdout.startswith("FAIL ")
 
 
 def test_a_payload_of_the_wrong_shape_reports_only_its_shape(tmp_path):
-    completed = check(
-        wheel(tmp_path, "win_amd64", "salix/__init__.cp313-win_amd64.pyd", TRUNCATED_ELF)
-    )
+    completed = check(wheel(tmp_path, *PE, TRUNCATED_ELF))
 
     assert completed.returncode == 1
     assert "tag win_amd64 implies" in completed.stderr
     assert "exports" not in completed.stderr
+    assert "could not be checked" not in completed.stderr
+
+
+def test_a_wheel_that_is_not_a_zip_fails_alone(tmp_path):
+    broken = tmp_path / "salix-0.1.0a1-cp313-cp313-manylinux_2_17_x86_64.whl"
+    broken.write_bytes(b"<html>not a wheel</html>")
+    completed = check(broken)
+
+    assert completed.returncode == 1
+    assert "Traceback" not in completed.stderr
+    assert "BadZipFile" in completed.stderr
+
+
+def test_a_record_row_without_three_fields_fails_that_wheel_cleanly(tmp_path):
+    path = tmp_path / "salix-0.1.0a1-cp313-cp313-manylinux_2_17_x86_64.whl"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr(f"{DIST_INFO}/RECORD", f"{DIST_INFO}/RECORD,\n")
+    completed = check(path)
+
+    assert completed.returncode == 1
+    assert "Traceback" not in completed.stderr
+    assert "not enough values to unpack" in completed.stderr
+
+
+def test_one_unreadable_wheel_does_not_hide_the_others(tmp_path):
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    unreadable = wheel(first, *ELF, ELF_MAGIC_ONLY)
+    misshapen = wheel(second, *PE, TRUNCATED_ELF)
+    completed = subprocess.run(
+        [sys.executable, str(CHECK_WHEEL), str(unreadable), str(misshapen)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+
+    assert completed.returncode == 1
+    assert completed.stdout.splitlines() == [f"FAIL {unreadable.name}", f"FAIL {misshapen.name}"]
+    assert "tag win_amd64 implies" in completed.stderr

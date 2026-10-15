@@ -6,7 +6,7 @@ import hashlib
 import struct
 import sys
 import zipfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import NamedTuple
 
@@ -37,7 +37,9 @@ ELF_BINDINGS_EXPORTED = frozenset({1, 2, 10})
 ELF_VISIBILITIES_EXPORTED = frozenset({0, 3})
 MACHO_LOAD_SYMTAB = 0x2
 MACHO_LOAD_DYSYMTAB = 0xB
+MACHO_REQUIRED_COMMANDS = {MACHO_LOAD_SYMTAB: ("LC_SYMTAB", 24), MACHO_LOAD_DYSYMTAB: ("LC_DYSYMTAB", 80)}
 PE32_PLUS_MAGIC = 0x20B
+PE32_PLUS_DATA_DIRECTORY_COUNT = 108
 PE32_PLUS_DATA_DIRECTORIES = 112
 LINKER_EXPORTS: dict[str, frozenset[str]] = {"macho": frozenset({"__dso_handle", "_mh_dylib_header"})}
 
@@ -117,12 +119,7 @@ def check(path: Path) -> Iterator[Failure]:
 
     symbol = init_symbol(modules[0])
     linker = LINKER_EXPORTS.get(actual.container, frozenset())
-
-    try:
-        exported = exports(binary, actual.container)
-    except (struct.error, ValueError, IndexError) as error:
-        yield Failure(path.name, f"{modules[0]} exports could not be read: {error}")
-        return
+    exported = EXPORT_READERS[actual.container](binary)
 
     if symbol not in exported or not exported - {symbol} <= linker:
         yield Failure(
@@ -137,18 +134,6 @@ def init_symbol(payload: str) -> str:
     module = directory.rpartition("/")[2] if stem == "__init__" else stem
 
     return "PyInit_" + module
-
-
-def exports(binary: bytes, container: str) -> frozenset[str]:
-    match container:
-        case "elf":
-            return elf_exports(binary)
-        case "macho":
-            return macho_exports(binary)
-        case "pe":
-            return pe_exports(binary)
-        case _:
-            return frozenset()
 
 
 def c_string(binary: bytes, start: int) -> str:
@@ -191,7 +176,12 @@ def elf_exports(binary: bytes) -> frozenset[str]:
     )
 
 
-def macho_load_commands(binary: bytes) -> Iterator[tuple[int, int]]:
+class MachoCommand(NamedTuple):
+    offset: int
+    size: int
+
+
+def macho_load_commands(binary: bytes) -> Iterator[tuple[int, MachoCommand]]:
     (command_count,) = struct.unpack_from("<I", binary, 16)
     offset = 32
 
@@ -201,20 +191,30 @@ def macho_load_commands(binary: bytes) -> Iterator[tuple[int, int]]:
         if size < 8 or offset + size > len(binary):
             raise ValueError(f"load command {command:#x} at {offset} has size {size}")
 
-        yield command, offset
+        yield command, MachoCommand(offset, size)
         offset += size
 
 
 def macho_exports(binary: bytes) -> frozenset[str]:
     commands = dict(macho_load_commands(binary))
+    unusable = [
+        f"{name} is missing or shorter than {minimum} bytes"
+        for command, (name, minimum) in MACHO_REQUIRED_COMMANDS.items()
+        if commands.get(command, MachoCommand(0, 0)).size < minimum
+    ]
 
-    if not {MACHO_LOAD_SYMTAB, MACHO_LOAD_DYSYMTAB} <= commands.keys():
-        raise ValueError("there is no LC_SYMTAB and LC_DYSYMTAB pair")
+    if unusable:
+        raise ValueError("; ".join(unusable))
 
-    symbols, _, strings, _ = struct.unpack_from("<IIII", binary, commands[MACHO_LOAD_SYMTAB] + 8)
+    symbols, symbol_count, strings, _ = struct.unpack_from("<IIII", binary, commands[MACHO_LOAD_SYMTAB].offset + 8)
     _, _, first_defined, defined_count = struct.unpack_from(
-        "<IIII", binary, commands[MACHO_LOAD_DYSYMTAB] + 8
+        "<IIII", binary, commands[MACHO_LOAD_DYSYMTAB].offset + 8
     )
+
+    if first_defined + defined_count > symbol_count:
+        raise ValueError(
+            f"defined symbols {first_defined}..{first_defined + defined_count} are outside the {symbol_count} symbols"
+        )
 
     return frozenset(
         c_string(binary, strings + struct.unpack_from("<I", binary, symbols + index * 16)[0]).removeprefix("_")
@@ -261,6 +261,11 @@ def pe_exports(binary: bytes) -> frozenset[str]:
     if magic != PE32_PLUS_MAGIC:
         raise ValueError(f"optional header magic {magic:#x} is not PE32+")
 
+    (directory_count,) = struct.unpack_from("<I", binary, optional + PE32_PLUS_DATA_DIRECTORY_COUNT)
+
+    if directory_count == 0:
+        raise ValueError("the optional header declares no data directories")
+
     (export_address,) = struct.unpack_from("<I", binary, optional + PE32_PLUS_DATA_DIRECTORIES)
     sections = [
         PeSection(*struct.unpack_from("<IIII", binary, optional + optional_size + index * 40 + 8))
@@ -278,6 +283,13 @@ def pe_exports(binary: bytes) -> frozenset[str]:
         c_string(binary, pe_offset(sections, struct.unpack_from("<I", binary, names + index * 4)[0]))
         for index in range(name_count)
     )
+
+
+EXPORT_READERS: dict[str, Callable[[bytes], frozenset[str]]] = {
+    "elf": elf_exports,
+    "macho": macho_exports,
+    "pe": pe_exports,
+}
 
 
 def check_record(path: Path, archive: zipfile.ZipFile, record_name: str) -> Iterator[Failure]:
@@ -304,13 +316,24 @@ def check_record(path: Path, archive: zipfile.ZipFile, record_name: str) -> Iter
             yield Failure(path.name, f"RECORD size mismatch for {name}")
 
 
+def checked(path: Path) -> list[Failure]:
+    found: list[Failure] = []
+
+    try:
+        found.extend(check(path))
+    except Exception as error:  # noqa: BLE001
+        found.append(Failure(path.name, f"could not be checked: {error!r}"))
+
+    return found
+
+
 def main() -> None:
     wheels = [Path(argument) for argument in sys.argv[1:]]
 
     if not wheels:
         raise SystemExit("usage: check_wheel.py WHEEL [WHEEL ...]")
 
-    failures = [failure for wheel in wheels for failure in check(wheel)]
+    failures = [failure for wheel in wheels for failure in checked(wheel)]
 
     for wheel in wheels:
         print(f"{'FAIL' if any(f.wheel == wheel.name for f in failures) else 'ok  '} {wheel.name}")
