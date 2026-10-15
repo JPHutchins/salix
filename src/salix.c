@@ -85,10 +85,6 @@ PyMODINIT_FUNC PyInit_salix(void) {
 	return PyModuleDef_Init(&struct_module);
 }
 
-PyModuleDef * salix_module_def(void) {
-	return &struct_module;
-}
-
 static void struct_free(void * const module) {
 	struct salix_state * const state = (struct salix_state *) PyModule_GetState(
 		(PyObject *) module
