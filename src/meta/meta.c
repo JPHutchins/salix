@@ -180,7 +180,6 @@ PyObject * struct_create_root(
 	}
 
 	((StructType *) root)->struct_state = (struct salix_state *) PyModule_GetState(module);
-	struct_class_mark_created((StructType *) root);
 	Py_XSETREF(((PyHeapTypeObject *) root)->ht_module, Py_NewRef(module));
 
 	return root;

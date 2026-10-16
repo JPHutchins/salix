@@ -491,6 +491,7 @@ STILL_BEING_CREATED = "until its class has finished being created"
 def test_a_class_is_unusable_from_another_thread_until_it_has_finished_being_created():
     published: list[tuple[type, Struct]] = []
     writers_left = [THREADS // 2]
+    writers_done = threading.Event()
     claim = threading.Lock()
 
     class Publishing(Struct, frozen=False):
@@ -507,14 +508,18 @@ def test_a_class_is_unusable_from_another_thread_until_it_has_finished_being_cre
             assert STILL_BEING_CREATED in str(error), error
 
     def write():
-        for _ in range(CLASSES_CREATED):
-            type("Fielded", (Publishing,), {"__annotations__": {"count": int}, "count": 1})
+        try:
+            for _ in range(CLASSES_CREATED):
+                type("Fielded", (Publishing,), {"__annotations__": {"count": int}, "count": 1})
+        finally:
+            with claim:
+                writers_left[0] -= 1
 
-        with claim:
-            writers_left[0] -= 1
+                if writers_left[0] == 0:
+                    writers_done.set()
 
     def read():
-        while writers_left[0] > 0:
+        while not writers_done.is_set():
             if not published:
                 continue
 

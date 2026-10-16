@@ -430,6 +430,16 @@ static inline PyObject * struct_metadata(
 	StructType const * const type,
 	enum struct_metadata const which
 ) {
+	if (!struct_class_created(type)) {
+		PyErr_Format(
+			PyExc_AttributeError,
+			"the fields of '%.200s' cannot be read until its class has finished being created",
+			struct_type_name(type)
+		);
+
+		return NULL;
+	}
+
 	switch (which) {
 		case STRUCT_FIELD_NAMES:
 			return struct_tuple_or_empty(type->struct_field_names);

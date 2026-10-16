@@ -1000,7 +1000,7 @@ def tried_while_its_class_is_created(window: str, attempt) -> list[object]:
     def record(cls: type) -> None:
         try:
             outcomes.append(attempt(cls))
-        except TypeError as error:
+        except (TypeError, AttributeError) as error:
             outcomes.append(error)
 
     if window == "init_subclass":
@@ -1047,7 +1047,33 @@ def subclassed_by_a_class_statement(cls: type) -> type:
     ],
 )
 def test_a_class_still_being_created_refuses_instances_and_subclasses(window, attempt, refusal):
-    [outcome] = tried_while_its_class_is_created(window, attempt)
+    outcomes = tried_while_its_class_is_created(window, attempt)
 
-    assert isinstance(outcome, TypeError)
-    assert str(outcome) == f"cannot {refusal} 'Fielded' until its class has finished being created"
+    assert len(outcomes) == 1, outcomes
+    assert isinstance(outcomes[0], TypeError)
+    assert str(outcomes[0]) == f"cannot {refusal} 'Fielded' until its class has finished being created"
+
+
+@pytest.mark.parametrize("window", ["init_subclass", "set_name"])
+@pytest.mark.parametrize("on_the_instance", [False, True], ids=["class", "instance"])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "_struct_fields_",
+        "__struct_fields__",
+        "_struct_defaults_",
+        "__struct_defaults__",
+        "_struct_annotations_",
+        "__struct_annotations__",
+        "_struct_metadata_",
+        "__struct_metadata__",
+    ],
+)
+def test_a_class_still_being_created_has_no_field_tables_to_read(window, on_the_instance, name):
+    outcomes = tried_while_its_class_is_created(
+        window, lambda cls: getattr(cls.__new__(cls) if on_the_instance else cls, name)
+    )
+
+    assert len(outcomes) == 1, outcomes
+    assert isinstance(outcomes[0], AttributeError)
+    assert str(outcomes[0]) == "the fields of 'Fielded' cannot be read until its class has finished being created"

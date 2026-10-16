@@ -287,6 +287,7 @@ enum result install_constructor(
 	}
 
 	struct_class->struct_copies_through_reduce = through_reduce == 1;
+	struct_class->heap_type.ht_type.tp_vectorcall = NULL;
 
 	if (own_init) {
 		initproc captured_init = struct_class->heap_type.ht_type.tp_init;
@@ -305,13 +306,8 @@ enum result install_constructor(
 
 		struct_class->struct_installed_init = captured_init;
 		struct_class->heap_type.ht_type.tp_init = Struct_init_wrapper;
-		struct_class->heap_type.ht_type.tp_vectorcall = NULL;
-	} else {
-		if (!cannot_create && struct_class->heap_type.ht_type.tp_new == NULL) {
-			struct_class->heap_type.ht_type.tp_new = PyBaseObject_Type.tp_new;
-		}
-
-		struct_class->heap_type.ht_type.tp_vectorcall = Struct_vectorcall;
+	} else if (!cannot_create && struct_class->heap_type.ht_type.tp_new == NULL) {
+		struct_class->heap_type.ht_type.tp_new = PyBaseObject_Type.tp_new;
 	}
 
 	struct_class->struct_author_new = author_new_in_chain(&struct_class->heap_type.ht_type);
@@ -356,6 +352,10 @@ enum result install_constructor(
 
 	if (install_post_init(struct_class) != RESULT_OK) {
 		return RESULT_ERROR;
+	}
+
+	if (!own_init) {
+		struct_class->heap_type.ht_type.tp_vectorcall = Struct_vectorcall;
 	}
 
 	return ensure_singleton(struct_class, namespace, bases_divert_setattro);
