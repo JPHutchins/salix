@@ -66,6 +66,18 @@ static bool metatypes_agree(PyObject * const bases, PyTypeObject * const winner)
 	return true;
 }
 
+enum result refuse_uncreated_struct_bases(PyObject * const bases) {
+	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(bases); i += 1) {
+		PyObject * const base = PyTuple_GET_ITEM(bases, i);
+
+		if (is_struct_class(base) && refused_until_created((StructType *) base, "subclass")) {
+			return RESULT_ERROR;
+		}
+	}
+
+	return RESULT_OK;
+}
+
 enum result refuse_two_fielded_layouts(PyObject * const bases, PyTypeObject * const winner) {
 	if (!metatypes_agree(bases, winner)) {
 		return RESULT_OK;

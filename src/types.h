@@ -53,6 +53,8 @@ typedef struct StructType {
 	bool struct_group_family;
 	bool struct_own_init;
 	bool struct_cannot_create;
+	int struct_creation_stage;
+	unsigned long struct_builder_thread;
 	bool struct_copies_through_reduce;
 	initproc struct_installed_init;
 	Py_ssize_t struct_message_index;
@@ -371,8 +373,43 @@ static inline enum parameter_kind struct_parameter_kind(
 	);
 }
 
-static inline bool struct_class_created(StructType const * const type) {
-	return type->struct_state != NULL;
+enum struct_creation_stage : int {
+	STRUCT_BEING_CREATED,
+	STRUCT_INSTALLED_FOR_ITS_BUILDER,
+	STRUCT_CREATED,
+	STRUCT_ABANDONED,
+};
+
+static inline bool struct_class_usable_here(StructType const * const type) {
+#if PY_VERSION_HEX >= 0x030D0000
+	int const stage = _Py_atomic_load_int_acquire(&type->struct_creation_stage);
+#else
+	int const stage = type->struct_creation_stage;
+#endif
+
+	return stage == STRUCT_CREATED || (
+		stage == STRUCT_INSTALLED_FOR_ITS_BUILDER &&
+		type->struct_builder_thread == PyThread_get_thread_ident()
+	);
+}
+
+static inline void struct_class_advance_to(
+	StructType * const type,
+	enum struct_creation_stage const stage
+) {
+	if (stage <= type->struct_creation_stage) {
+		return;
+	}
+
+	if (stage == STRUCT_INSTALLED_FOR_ITS_BUILDER) {
+		type->struct_builder_thread = PyThread_get_thread_ident();
+	}
+
+#if PY_VERSION_HEX >= 0x030D0000
+	_Py_atomic_store_int_release(&type->struct_creation_stage, stage);
+#else
+	type->struct_creation_stage = stage;
+#endif
 }
 
 static inline struct salix_state * created_struct_state_of(PyObject * const self) {
@@ -383,7 +420,7 @@ static inline bool refused_until_created(
 	StructType const * const type,
 	char const * const operation
 ) {
-	if (struct_class_created(type)) {
+	if (struct_class_usable_here(type)) {
 		return false;
 	}
 
@@ -417,6 +454,16 @@ static inline PyObject * struct_metadata(
 	StructType const * const type,
 	enum struct_metadata const which
 ) {
+	if (!struct_class_usable_here(type)) {
+		PyErr_Format(
+			PyExc_AttributeError,
+			"the fields of '%.200s' cannot be read until its class has finished being created",
+			struct_type_name(type)
+		);
+
+		return NULL;
+	}
+
 	switch (which) {
 		case STRUCT_FIELD_NAMES:
 			return struct_tuple_or_empty(type->struct_field_names);

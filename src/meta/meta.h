@@ -187,6 +187,7 @@ enum result refuse_mixin_method_fields(PyObject * all_names);
 enum result refuse_slot_name_fields(PyObject * all_names);
 enum result refuse_reserved_metadata_names(PyObject * original_namespace, PyObject * new_names);
 enum result refuse_two_fielded_layouts(PyObject * bases, PyTypeObject * winner);
+enum result refuse_uncreated_struct_bases(PyObject * bases);
 enum result refuse_unreachable_parameters(
 	PyObject * bases,
 	PyTypeObject * winner,
@@ -217,8 +218,4 @@ enum result ensure_singleton(
 	PyObject * namespace,
 	bool bases_divert_setattro
 );
-enum result install_constructor(
-	StructType * struct_class,
-	PyObject * namespace,
-	bool bases_divert_setattro
-);
+enum result install_constructor(StructType * struct_class, PyObject * namespace);

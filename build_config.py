@@ -24,6 +24,7 @@ BUILD: Final = BuildConfig(
         "src/annotations.c",
         "src/compare.c",
         "src/construct/construct.c",
+        "src/construct/call.c",
         "src/construct/binding.c",
         "src/construct/replace.c",
         "src/construct/defaults.c",

@@ -481,3 +481,64 @@ def test_a_shared_struct_is_safe_to_read_as_a_dict_while_another_thread_writes_i
                 assert values["first"] >= values["second"]
 
     run_in_roles((write,) + (read,) * (THREADS - 1))
+
+
+CLASSES_CREATED = 2_000
+
+STILL_BEING_CREATED = "until its class has finished being created"
+
+
+class Forwarding(type(Struct)):
+    def __new__(mcs, name, bases, namespace, **keywords):
+        return super().__new__(mcs, name, bases, namespace, **keywords)
+
+
+@pytest.mark.parametrize(
+    ("metaclass", "class_keywords"),
+    [(type(Struct), {}), (Forwarding, {"order": True})],
+    ids=["direct", "through-a-metaclass-new"],
+)
+def test_a_class_is_unusable_from_another_thread_until_it_has_finished_being_created(metaclass, class_keywords):
+    published: list[tuple[type, Struct]] = []
+    writers_left = [THREADS // 2]
+    writers_done = threading.Event()
+    claim = threading.Lock()
+
+    class Publishing(Struct, metaclass=metaclass, frozen=False):
+        def __init_subclass__(cls, **keywords: object) -> None:
+            super().__init_subclass__(**keywords)
+            escaped = cls.__new__(cls)
+            escaped.__setstate__((None, {"count": 5}))
+            published.append((cls, escaped))
+
+    def complete_or_refused(read, expected):
+        try:
+            assert read() == expected
+        except (TypeError, AttributeError) as error:
+            assert STILL_BEING_CREATED in str(error), error
+
+    def write():
+        try:
+            for _ in range(CLASSES_CREATED):
+                type(Struct)("Fielded", (Publishing,), {"__annotations__": {"count": int}, "count": 1}, **class_keywords)
+        finally:
+            with claim:
+                writers_left[0] -= 1
+
+                if writers_left[0] == 0:
+                    writers_done.set()
+
+    def read():
+        while not writers_done.is_set():
+            if not published:
+                continue
+
+            cls, escaped = published[-1]
+            complete_or_refused(lambda cls=cls: tuple(field.name for field in fields(cls)), ("count",))
+            complete_or_refused(lambda escaped=escaped: to_dict(escaped), {"count": 5})
+            complete_or_refused(lambda cls=cls: cls(count=5).count, 5)
+            complete_or_refused(lambda cls=cls: cls.__struct_defaults__, (1,))
+            complete_or_refused(lambda cls=cls: cls._struct_metadata_, ((),))
+            complete_or_refused(lambda cls=cls: cls.__struct_annotations__, (int,))
+
+    run_in_roles((write, read))

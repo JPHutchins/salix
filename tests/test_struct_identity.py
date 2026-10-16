@@ -332,6 +332,24 @@ class TestAMetaclassSubclass:
         assert built(1, 2) < built(1, 3)
         assert type(built) is Delegating
 
+    @pytest.mark.parametrize("keywords", [{}, {"order": True}], ids=["no-keywords", "a-salix-option"])
+    def test_an_own_init_survives_the_handoff_to_a_derived_metatype(self, keywords):
+        class Base(Struct, metaclass=Forwarding, frozen=False):
+            x: int
+
+        calls = []
+
+        def __init__(self, x, y):
+            calls.append((x, y))
+            self.x = x
+            self.y = y
+
+        built = META("Built", (Base,), {"__annotations__": {"y": int}, "__init__": __init__}, **keywords)
+        made = built(1, 2)
+
+        assert calls == [(1, 2)]
+        assert (made.x, made.y) == (1, 2)
+
     def test_weakref_survives_the_handoff_to_a_derived_metatype(self):
         class Base(Struct, metaclass=Forwarding):
             x: int

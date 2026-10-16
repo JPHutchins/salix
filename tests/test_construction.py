@@ -3,10 +3,10 @@ import copyreg
 import threading
 
 import pytest
-from platforms import recurses_through_c_until_recursion_error
+from platforms import recurses_through_c_until_recursion_error, starts_a_thread
 from values import COPIED_WHEN_EMPTY, NON_EMPTY
 
-from salix import Struct, set_field
+from salix import Struct, fields, from_mapping, set_field, to_dict
 
 
 class Point(Struct):
@@ -992,3 +992,232 @@ class TestMutableDefaults:
             inner: Inner = Inner()
 
         assert Holder().inner is Holder().inner
+
+
+def tried_while_its_class_is_created(window: str, attempt) -> list[object]:
+    outcomes: list[object] = []
+
+    def record(cls: type) -> None:
+        try:
+            outcomes.append(attempt(cls))
+        except (TypeError, AttributeError) as error:
+            outcomes.append(error)
+
+    if window == "init_subclass":
+
+        class Base(Struct, frozen=False):
+            def __init_subclass__(cls, **keywords: object) -> None:
+                super().__init_subclass__(**keywords)
+                record(cls)
+
+        class Fielded(Base):
+            count: int = 1
+
+    else:
+
+        class Hook:
+            def __set_name__(self, owner: type, name: str) -> None:
+                record(owner)
+
+        class Fielded(Struct, frozen=False):
+            count: int = 1
+            hook = Hook()
+
+    assert Fielded(count=5).count == 5
+
+    return outcomes
+
+
+def subclassed_by_a_class_statement(cls: type) -> type:
+    class Kid(cls):
+        pass
+
+    return Kid
+
+
+@pytest.mark.parametrize("window", ["init_subclass", "set_name"])
+@pytest.mark.parametrize(
+    ("attempt", "refusal"),
+    [
+        pytest.param(lambda cls: cls(), "create an instance of", id="call"),
+        pytest.param(lambda cls: cls(count=5), "create an instance of", id="call-with-a-field"),
+        pytest.param(lambda cls: from_mapping(cls, {"count": 5}), "create an instance of", id="from_mapping"),
+        pytest.param(lambda cls: type("Kid", (cls,), {}), "subclass", id="type"),
+        pytest.param(subclassed_by_a_class_statement, "subclass", id="class-statement"),
+    ],
+)
+def test_a_class_still_being_created_refuses_instances_and_subclasses(window, attempt, refusal):
+    outcomes = tried_while_its_class_is_created(window, attempt)
+
+    assert len(outcomes) == 1, outcomes
+    assert isinstance(outcomes[0], TypeError)
+    assert str(outcomes[0]) == f"cannot {refusal} 'Fielded' until its class has finished being created"
+
+
+@pytest.mark.parametrize("window", ["init_subclass", "set_name"])
+@pytest.mark.parametrize("on_the_instance", [False, True], ids=["class", "instance"])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "_struct_fields_",
+        "__struct_fields__",
+        "_struct_defaults_",
+        "__struct_defaults__",
+        "_struct_annotations_",
+        "__struct_annotations__",
+        "_struct_metadata_",
+        "__struct_metadata__",
+    ],
+)
+def test_a_class_still_being_created_has_no_field_tables_to_read(window, on_the_instance, name):
+    outcomes = tried_while_its_class_is_created(
+        window, lambda cls: getattr(cls.__new__(cls) if on_the_instance else cls, name)
+    )
+
+    assert len(outcomes) == 1, outcomes
+    assert isinstance(outcomes[0], AttributeError)
+    assert str(outcomes[0]) == "the fields of 'Fielded' cannot be read until its class has finished being created"
+
+
+@pytest.mark.parametrize(
+    ("read", "expected"),
+    [
+        (lambda self: type(self).__struct_fields__, ()),
+        (fields, ()),
+        (to_dict, {}),
+    ],
+    ids=["__struct_fields__", "fields", "to_dict"],
+)
+def test_the_post_init_of_a_frozen_fieldless_singleton_reads_its_finished_class(read, expected):
+    seen = []
+
+    class Tag(Struct, frozen=True):
+        def __post_init__(self):
+            seen.append(read(self))
+
+    assert Tag() is Tag()
+    assert seen == [expected]
+
+
+def outcome_on_another_thread(attempt):
+    outcomes = []
+
+    def record():
+        try:
+            outcomes.append(attempt())
+        except (TypeError, AttributeError) as error:
+            outcomes.append(error)
+
+    thread = threading.Thread(target=record)
+    thread.start()
+    thread.join()
+
+    assert len(outcomes) == 1, outcomes
+    return outcomes[0]
+
+
+def refused_as_unfinished(outcome):
+    return (
+        isinstance(outcome, (TypeError, AttributeError))
+        and "until its class has finished being created" in str(outcome)
+    )
+
+
+@starts_a_thread
+@pytest.mark.parametrize("copies_the_namespace", [False, True], ids=["namespace-passed-on", "namespace-copied"])
+def test_a_class_handed_to_a_metaclass_new_is_its_builders_alone_until_the_build_returns(copies_the_namespace):
+    inside = {}
+
+    class Peeking(type(Struct)):
+        def __new__(mcs, name, bases, namespace, **keywords):
+            cls = super().__new__(mcs, name, bases, dict(namespace) if copies_the_namespace else namespace, **keywords)
+
+            if name == "Fielded":
+                inside["builder"] = tuple(field.name for field in fields(cls))
+                inside["another thread"] = outcome_on_another_thread(lambda: fields(cls))
+
+            return cls
+
+    class Base(Struct, metaclass=Peeking):
+        pass
+
+    built = type(Struct)("Fielded", (Base,), {"__annotations__": {"count": int}, "count": 1})
+
+    assert inside["builder"] == ("count",)
+    assert refused_as_unfinished(inside["another thread"]), inside["another thread"]
+    assert outcome_on_another_thread(lambda: built().count) == 1
+
+
+@starts_a_thread
+def test_a_struct_class_built_inside_a_metaclass_new_is_created_once_the_outer_build_returns():
+    helpers = []
+
+    class Building(type(Struct)):
+        def __new__(mcs, name, bases, namespace, **keywords):
+            if name == "Outer":
+                helpers.append(type(Struct)("Helper", (Struct,), {"__annotations__": {"x": int}}))
+
+            return super().__new__(mcs, name, bases, namespace, **keywords)
+
+    class Base(Struct, metaclass=Building):
+        pass
+
+    type(Struct)("Outer", (Base,), {"__annotations__": {"count": int}})
+
+    assert len(helpers) == 1, helpers
+    assert outcome_on_another_thread(lambda: helpers[0](x=3).x) == 3
+
+
+@starts_a_thread
+def test_another_thread_cannot_call_a_singleton_class_until_its_singleton_is_stored():
+    during_post_init = []
+
+    class Tag(Struct, frozen=True):
+        def __post_init__(self):
+            if not during_post_init:
+                during_post_init.append(outcome_on_another_thread(type(self)))
+
+    assert refused_as_unfinished(during_post_init[0]), during_post_init
+    assert Tag() is Tag()
+
+
+@starts_a_thread
+def test_a_struct_class_built_inside_a_failing_metaclass_new_is_still_created():
+    helpers = []
+
+    class GivingUp(type(Struct)):
+        def __new__(mcs, name, bases, namespace, **keywords):
+            if name == "Outer":
+                helpers.append(type(Struct)("Helper", (Struct,), {"__annotations__": {"x": int}}))
+                raise LookupError("the metaclass gave up")
+
+            return super().__new__(mcs, name, bases, namespace, **keywords)
+
+    class Base(Struct, metaclass=GivingUp):
+        pass
+
+    with pytest.raises(LookupError):
+        type(Struct)("Outer", (Base,), {"__annotations__": {"count": int}})
+
+    assert len(helpers) == 1, helpers
+    assert outcome_on_another_thread(lambda: helpers[0](x=3).x) == 3
+
+
+def test_a_class_whose_build_failed_is_refused_even_on_the_thread_that_built_it():
+    escaped = []
+
+    class Escaping(Struct, frozen=True):
+        def __init_subclass__(cls, **keywords):
+            super().__init_subclass__(**keywords)
+            escaped.append(cls)
+
+    with pytest.raises(LookupError):
+
+        class Failing(Escaping):
+            def __post_init__(self):
+                raise LookupError("the singleton refused")
+
+    assert len(escaped) == 1, escaped
+
+    with pytest.raises(TypeError, match="until its class has finished being created"):
+        fields(escaped[0])

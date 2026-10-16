@@ -1,6 +1,7 @@
 #include <Python.h>
 #include <stdbool.h>
 
+#include "../../construct.h"
 #include "../../fields.h"
 #include "../settle/settle.h"
 #include "../meta.h"
@@ -9,6 +10,18 @@
 #include "../../result.h"
 #include "../../types.h"
 #include "create.h"
+
+struct pending_build {
+	PyObject * nested_classes;
+	struct pending_build * enclosing;
+};
+
+static thread_local struct pending_build * innermost_pending_build = NULL;
+
+static void finish_nested_classes(struct pending_build * build, StructType const * received);
+static void publish_created(StructType * struct_class);
+static void abandon(StructType * * struct_class);
+static enum result publish_or_hand_to_enclosing_build(StructType * struct_class);
 
 PyObject * build_struct_class(
 	PyTypeObject * const metatype,
@@ -19,6 +32,10 @@ PyObject * build_struct_class(
 	PyObject * const keywords,
 	struct salix_state * const state
 ) {
+	if (refuse_uncreated_struct_bases(bases) != RESULT_OK) {
+		return NULL;
+	}
+
 	struct base_survey const survey = survey_bases(bases);
 	struct options const inherited = inherited_options(survey.behaviour, survey.facts);
 	PY_MOVABLE(forwarded_options, NULL);
@@ -256,6 +273,11 @@ PyObject * build_struct_class(
 			inherited_equality.needs_derived_not_equal
 		)
 	);
+	struct pending_build this_build = {
+		.nested_classes = NULL,
+		.enclosing = innermost_pending_build,
+	};
+	innermost_pending_build = &this_build;
 	StructType * struct_class = (
 		namespace != NULL ? create_class(
 			metatype,
@@ -274,6 +296,8 @@ PyObject * build_struct_class(
 		) :
 		NULL
 	);
+	innermost_pending_build = this_build.enclosing;
+	finish_nested_classes(&this_build, struct_class);
 
 	if (struct_class != NULL) {
 		struct_class->struct_state = base != NULL ? base->struct_state : NULL;
@@ -308,7 +332,7 @@ PyObject * build_struct_class(
 		);
 
 		if (settled != RESULT_OK) {
-			Py_CLEAR(struct_class);
+			abandon(&struct_class);
 		} else {
 			int const defines_hash = dict_has_string(original_namespace, rebind_hash[0]);
 			int const defines_setattr = dict_has_string(original_namespace, "__setattr__");
@@ -318,7 +342,7 @@ PyObject * build_struct_class(
 				defines_setattr < 0 ||
 				refuse_rebound_class_names(struct_class, plan.declared_annotations) != RESULT_OK
 			) {
-				Py_CLEAR(struct_class);
+				abandon(&struct_class);
 			} else {
 				struct binding_plan const bindings = binding_plan(
 					request.options,
@@ -342,15 +366,24 @@ PyObject * build_struct_class(
 							request.options
 						) != RESULT_OK
 					) ||
-					(
-						install_constructor(
-							struct_class,
-							original_namespace,
-							bases_divert_setattro
-						) != RESULT_OK
-					)
+					install_constructor(struct_class, original_namespace) != RESULT_OK
 				) {
-					Py_CLEAR(struct_class);
+					abandon(&struct_class);
+				} else {
+					struct_class_advance_to(struct_class, STRUCT_INSTALLED_FOR_ITS_BUILDER);
+
+					if (
+						(
+							ensure_singleton(
+								struct_class,
+								original_namespace,
+								bases_divert_setattro
+							) != RESULT_OK
+						) ||
+						publish_or_hand_to_enclosing_build(struct_class) != RESULT_OK
+					) {
+						abandon(&struct_class);
+					}
 				}
 			}
 		}
@@ -359,4 +392,59 @@ PyObject * build_struct_class(
 	field_plan_clear(&plan);
 
 	return (PyObject *) struct_class;
+}
+
+static void finish_nested_classes(
+	struct pending_build * const build,
+	StructType const * const received
+) {
+	PY_OWNED(nested_classes, build->nested_classes);
+	build->nested_classes = NULL;
+
+	if (nested_classes == NULL) {
+		return;
+	}
+
+	for (Py_ssize_t i = 0; i < PyList_GET_SIZE(nested_classes); i += 1) {
+		StructType * const nested = (StructType *) PyList_GET_ITEM(nested_classes, i);
+
+		if (nested != received) {
+			publish_created(nested);
+		}
+	}
+}
+
+static enum result publish_or_hand_to_enclosing_build(StructType * const struct_class) {
+	struct pending_build * const enclosing = innermost_pending_build;
+
+	if (enclosing == NULL) {
+		publish_created(struct_class);
+
+		return RESULT_OK;
+	}
+
+	if (enclosing->nested_classes == NULL) {
+		enclosing->nested_classes = PyList_New(0);
+	}
+
+	return (
+		(
+			enclosing->nested_classes != NULL &&
+			PyList_Append(enclosing->nested_classes, (PyObject *) struct_class) == 0
+		) ? RESULT_OK :
+		RESULT_ERROR
+	);
+}
+
+static void publish_created(StructType * const struct_class) {
+	struct_class->heap_type.ht_type.tp_vectorcall = (
+		struct_class->struct_own_init ? NULL :
+		Struct_vectorcall
+	);
+	struct_class_advance_to(struct_class, STRUCT_CREATED);
+}
+
+static void abandon(StructType * * const struct_class) {
+	struct_class_advance_to(*struct_class, STRUCT_ABANDONED);
+	Py_CLEAR(*struct_class);
 }

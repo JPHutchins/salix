@@ -412,6 +412,10 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 		return NULL;
 	}
 
+	if (refused_until_created(type, "create an instance of")) {
+		return NULL;
+	}
+
 	if (
 		type->struct_own_init &&
 		!type->struct_family_owned &&

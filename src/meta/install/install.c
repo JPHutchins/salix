@@ -262,11 +262,23 @@ static enum result refuse_a_skipped_new(
 	Py_UNREACHABLE();
 }
 
-enum result install_constructor(
-	StructType * const struct_class,
-	PyObject * const namespace,
-	bool const bases_divert_setattro
+static struct field_lookup field_named(
+	StructType const * const struct_class,
+	char const * const name
 ) {
+	if (struct_class->struct_field_names == NULL) {
+		return (struct field_lookup){.tag = FIELD_LOOKUP_MISSING};
+	}
+
+	PY_OWNED(name_object, PyUnicode_FromString(name));
+
+	return (
+		name_object != NULL ? find_field(struct_class, name_object) :
+		(struct field_lookup){.tag = FIELD_LOOKUP_ERROR}
+	);
+}
+
+enum result install_constructor(StructType * const struct_class, PyObject * const namespace) {
 	bool const own_init = defines_own_init(struct_class, namespace);
 	struct_class->struct_own_init = own_init;
 
@@ -289,7 +301,10 @@ enum result install_constructor(
 	struct_class->struct_copies_through_reduce = through_reduce == 1;
 
 	if (own_init) {
-		initproc captured_init = struct_class->heap_type.ht_type.tp_init;
+		initproc captured_init = (
+			struct_class->struct_installed_init != NULL ? struct_class->struct_installed_init :
+			struct_class->heap_type.ht_type.tp_init
+		);
 
 		for (
 			PyTypeObject * chain = struct_class->heap_type.ht_type.tp_base;
@@ -305,60 +320,28 @@ enum result install_constructor(
 
 		struct_class->struct_installed_init = captured_init;
 		struct_class->heap_type.ht_type.tp_init = Struct_init_wrapper;
-		struct_class->heap_type.ht_type.tp_vectorcall = NULL;
-	} else {
-		if (!cannot_create && struct_class->heap_type.ht_type.tp_new == NULL) {
-			struct_class->heap_type.ht_type.tp_new = PyBaseObject_Type.tp_new;
-		}
-
-		struct_class->heap_type.ht_type.tp_vectorcall = Struct_vectorcall;
+	} else if (!cannot_create && struct_class->heap_type.ht_type.tp_new == NULL) {
+		struct_class->heap_type.ht_type.tp_new = PyBaseObject_Type.tp_new;
 	}
 
 	struct_class->struct_author_new = author_new_in_chain(&struct_class->heap_type.ht_type);
 	struct_class->struct_family_owned = family_owns_in_mro(&struct_class->heap_type.ht_type);
 	struct_class->struct_group_family = group_family_in_mro(&struct_class->heap_type.ht_type);
 
-	struct_class->struct_message_index = -1;
-	struct_class->struct_exceptions_index = -1;
+	struct field_lookup const message = field_named(struct_class, "message");
+	struct field_lookup const exceptions = field_named(struct_class, "exceptions");
 
-	if (struct_class->struct_field_names != NULL) {
-		PY_OWNED(message_name, PyUnicode_FromString("message"));
-		PY_OWNED(exceptions_name, PyUnicode_FromString("exceptions"));
-
-		if (message_name == NULL || exceptions_name == NULL) {
-			return RESULT_ERROR;
-		}
-
-		for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(struct_class->struct_field_names); ++i) {
-			PyObject * const name = PyTuple_GET_ITEM(struct_class->struct_field_names, i);
-
-			if (struct_class->struct_message_index < 0) {
-				int const matches = PyObject_RichCompareBool(name, message_name, Py_EQ);
-
-				if (matches < 0) {
-					return RESULT_ERROR;
-				}
-
-				struct_class->struct_message_index = matches == 1 ? i : -1;
-			}
-
-			if (struct_class->struct_exceptions_index < 0) {
-				int const matches = PyObject_RichCompareBool(name, exceptions_name, Py_EQ);
-
-				if (matches < 0) {
-					return RESULT_ERROR;
-				}
-
-				struct_class->struct_exceptions_index = matches == 1 ? i : -1;
-			}
-		}
-	}
-
-	if (install_post_init(struct_class) != RESULT_OK) {
+	if (message.tag == FIELD_LOOKUP_ERROR || exceptions.tag == FIELD_LOOKUP_ERROR) {
 		return RESULT_ERROR;
 	}
 
-	return ensure_singleton(struct_class, namespace, bases_divert_setattro);
+	struct_class->struct_message_index = message.tag == FIELD_LOOKUP_FOUND ? message.index : -1;
+	struct_class->struct_exceptions_index = (
+		exceptions.tag == FIELD_LOOKUP_FOUND ? exceptions.index :
+		-1
+	);
+
+	return install_post_init(struct_class);
 }
 
 enum result ensure_singleton(
@@ -399,7 +382,7 @@ enum result ensure_singleton(
 		return RESULT_OK;
 	}
 
-	PY_MOVABLE(singleton, PyObject_CallNoArgs((PyObject *) struct_class));
+	PY_MOVABLE(singleton, Struct_vectorcall((PyObject *) struct_class, NULL, 0, NULL));
 
 	if (singleton == NULL) {
 		return RESULT_ERROR;

@@ -357,7 +357,7 @@ PyObject * Struct_fields(PyObject * const module, PyObject * const class_or_inst
 
 	StructType * const type = (StructType *) struct_class;
 
-	if (!struct_class_created(type)) {
+	if (!struct_class_usable_here(type)) {
 		PyErr_Format(
 			PyExc_TypeError,
 			"fields() cannot read '%.200s' until its class has finished being created",
