@@ -1179,3 +1179,45 @@ def test_another_thread_cannot_call_a_singleton_class_until_its_singleton_is_sto
 
     assert refused_as_unfinished(during_post_init[0]), during_post_init
     assert Tag() is Tag()
+
+
+@starts_a_thread
+def test_a_struct_class_built_inside_a_failing_metaclass_new_is_still_created():
+    helpers = []
+
+    class GivingUp(type(Struct)):
+        def __new__(mcs, name, bases, namespace, **keywords):
+            if name == "Outer":
+                helpers.append(type(Struct)("Helper", (Struct,), {"__annotations__": {"x": int}}))
+                raise LookupError("the metaclass gave up")
+
+            return super().__new__(mcs, name, bases, namespace, **keywords)
+
+    class Base(Struct, metaclass=GivingUp):
+        pass
+
+    with pytest.raises(LookupError):
+        type(Struct)("Outer", (Base,), {"__annotations__": {"count": int}})
+
+    assert len(helpers) == 1, helpers
+    assert outcome_on_another_thread(lambda: helpers[0](x=3).x) == 3
+
+
+def test_a_class_whose_build_failed_is_refused_even_on_the_thread_that_built_it():
+    escaped = []
+
+    class Escaping(Struct, frozen=True):
+        def __init_subclass__(cls, **keywords):
+            super().__init_subclass__(**keywords)
+            escaped.append(cls)
+
+    with pytest.raises(LookupError):
+
+        class Failing(Escaping):
+            def __post_init__(self):
+                raise LookupError("the singleton refused")
+
+    assert len(escaped) == 1, escaped
+
+    with pytest.raises(TypeError, match="until its class has finished being created"):
+        fields(escaped[0])

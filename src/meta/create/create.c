@@ -20,6 +20,7 @@ static thread_local struct pending_build * innermost_pending_build = NULL;
 
 static void finish_nested_classes(struct pending_build * build, StructType const * received);
 static void publish_created(StructType * struct_class);
+static void abandon(StructType * * struct_class);
 static enum result publish_or_hand_to_enclosing_build(StructType * struct_class);
 
 PyObject * build_struct_class(
@@ -331,7 +332,7 @@ PyObject * build_struct_class(
 		);
 
 		if (settled != RESULT_OK) {
-			Py_CLEAR(struct_class);
+			abandon(&struct_class);
 		} else {
 			int const defines_hash = dict_has_string(original_namespace, rebind_hash[0]);
 			int const defines_setattr = dict_has_string(original_namespace, "__setattr__");
@@ -341,7 +342,7 @@ PyObject * build_struct_class(
 				defines_setattr < 0 ||
 				refuse_rebound_class_names(struct_class, plan.declared_annotations) != RESULT_OK
 			) {
-				Py_CLEAR(struct_class);
+				abandon(&struct_class);
 			} else {
 				struct binding_plan const bindings = binding_plan(
 					request.options,
@@ -367,7 +368,7 @@ PyObject * build_struct_class(
 					) ||
 					install_constructor(struct_class, original_namespace) != RESULT_OK
 				) {
-					Py_CLEAR(struct_class);
+					abandon(&struct_class);
 				} else {
 					struct_class_advance_to(struct_class, STRUCT_INSTALLED_FOR_ITS_BUILDER);
 
@@ -381,7 +382,7 @@ PyObject * build_struct_class(
 						) ||
 						publish_or_hand_to_enclosing_build(struct_class) != RESULT_OK
 					) {
-						Py_CLEAR(struct_class);
+						abandon(&struct_class);
 					}
 				}
 			}
@@ -400,7 +401,7 @@ static void finish_nested_classes(
 	PY_OWNED(nested_classes, build->nested_classes);
 	build->nested_classes = NULL;
 
-	if (nested_classes == NULL || received == NULL) {
+	if (nested_classes == NULL) {
 		return;
 	}
 
@@ -441,4 +442,9 @@ static void publish_created(StructType * const struct_class) {
 		Struct_vectorcall
 	);
 	struct_class_advance_to(struct_class, STRUCT_CREATED);
+}
+
+static void abandon(StructType * * const struct_class) {
+	struct_class_advance_to(*struct_class, STRUCT_ABANDONED);
+	Py_CLEAR(*struct_class);
 }

@@ -377,6 +377,7 @@ enum struct_creation_stage : int {
 	STRUCT_BEING_CREATED,
 	STRUCT_INSTALLED_FOR_ITS_BUILDER,
 	STRUCT_CREATED,
+	STRUCT_ABANDONED,
 };
 
 static inline bool struct_class_usable_here(StructType const * const type) {

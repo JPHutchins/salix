@@ -1,4 +1,5 @@
 #include <Python.h>
+#include <stdbool.h>
 
 #include "../construct.h"
 #include "../owned.h"
@@ -46,14 +47,16 @@ static PyObject * call_with_keywords(
 		PyTuple_SET_ITEM(stack, i, Py_NewRef(PyTuple_GET_ITEM(arguments, i)));
 	}
 
-	Py_ssize_t copied = 0;
+	bool changed_size = true;
 
 	STRUCT_BEGIN_CRITICAL_SECTION(keywords);
+	changed_size = PyDict_GET_SIZE(keywords) != keyword_count;
 	Py_ssize_t position = 0;
+	Py_ssize_t copied = 0;
 	PyObject * name = NULL;
 	PyObject * value = NULL;
 
-	while (copied < keyword_count && PyDict_Next(keywords, &position, &name, &value)) {
+	while (!changed_size && PyDict_Next(keywords, &position, &name, &value)) {
 		PyTuple_SET_ITEM(keyword_names, copied, Py_NewRef(name));
 		PyTuple_SET_ITEM(stack, positional_count + copied, Py_NewRef(value));
 		copied += 1;
@@ -61,12 +64,15 @@ static PyObject * call_with_keywords(
 	STRUCT_END_CRITICAL_SECTION();
 
 	return (
-		copied == keyword_count ? Struct_vectorcall(
+		changed_size ? PyErr_Format(
+			PyExc_RuntimeError,
+			"the keyword arguments changed size during the call"
+		) :
+		Struct_vectorcall(
 			struct_class,
 			PySequence_Fast_ITEMS(stack),
 			positional_count,
 			keyword_names
-		) :
-		PyErr_Format(PyExc_RuntimeError, "the keyword arguments changed size during the call")
+		)
 	);
 }
