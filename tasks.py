@@ -161,6 +161,26 @@ FREE_THREADED_ROOT = {"UV_PYTHON_INSTALL_DIR": ".free-threaded-python"}
 free_threaded = Parallel(
     Sequential(build, pytest), matrix={"PY": FREE_THREADED}, env=FREE_THREADED_ROOT
 )
+PATCHES_BEFORE_HEADER_GATES = ("3.13.11", "3.14.3")
+HEADER_GATE_RUN = "uv run --no-project --managed-python --python {BEFORE}"
+header_gates = Parallel(
+    Sequential(
+        Task(
+            HEADER_GATE_RUN + " --with setuptools python setup.py build_ext"
+            " --build-lib build/{BEFORE} --build-temp build/{BEFORE}-temp",
+            mutates=True,
+            env=STRICT_BUILD,
+        ),
+        Task(
+            HEADER_GATE_RUN + " --with pytest --with hypothesis --with packaging"
+            " python -m pytest -p no:cacheprovider --ignore=test_check_wheel.py",
+            cwd=Path("tests"),
+            env={"PYTHONPATH": "../build/{BEFORE}"},
+        ),
+    ),
+    matrix={"BEFORE": PATCHES_BEFORE_HEADER_GATES},
+)
+
 in_place_build = Task("uv run python setup.py build_ext --inplace", mutates=True, env=STRICT_BUILD)
 benchmark = Sequential(in_place_build, bench)
 CONFORMANCE_PYTHON = "3.14.6"
@@ -177,7 +197,9 @@ conformance = Sequential(
         when=".",
     ),
 )
-check = Parallel(test, free_threaded, format_check, lock_check, lint, analyze, c_test, type_check)
+check = Parallel(
+    test, free_threaded, header_gates, format_check, lock_check, lint, analyze, c_test, type_check
+)
 
 WHEEL_RUN = "uv run --no-cache --no-project --managed-python --python {PY}"
 wheel_guard = Task(
@@ -214,7 +236,15 @@ coverage = Parallel(
 )
 
 ci = Parallel(
-    flake_check, free_threaded, format_check, lock_check, lint, analyze, type_check, conformance
+    flake_check,
+    free_threaded,
+    header_gates,
+    format_check,
+    lock_check,
+    lint,
+    analyze,
+    type_check,
+    conformance,
 )
 
 _ = Config(default_task=check, github_task=ci, agent=Claude(fix=format, check=check))

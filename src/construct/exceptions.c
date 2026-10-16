@@ -151,7 +151,7 @@ enum result carry_group_members(
 			return RESULT_ERROR;
 		}
 
-#	if PY_VERSION_HEX >= 0x030D0C00
+#	if GROUP_DECLARES_EXCS_STR
 		if (group_layout_has_excs_str()) {
 			Py_XSETREF(group->excs_str, Py_XNewRef(excs_str));
 		}

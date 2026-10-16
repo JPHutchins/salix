@@ -59,8 +59,13 @@ typedef struct StructType {
 	Py_ssize_t struct_exceptions_index;
 } StructType;
 
+#define GROUP_DECLARES_EXCS_STR ( \
+	(PY_VERSION_HEX >= 0x030D0C00 && PY_VERSION_HEX < 0x030E0000) || \
+	PY_VERSION_HEX >= 0x030E0400 \
+)
+
 static inline bool group_layout_has_excs_str(void) {
-#if PY_VERSION_HEX >= 0x030D0C00
+#if GROUP_DECLARES_EXCS_STR
 	return ((PyTypeObject *) PyExc_BaseExceptionGroup)->tp_basicsize >=
 		(Py_ssize_t) (offsetof(PyBaseExceptionGroupObject, excs_str) + sizeof(PyObject *));
 #endif
@@ -69,7 +74,7 @@ static inline bool group_layout_has_excs_str(void) {
 }
 
 static inline PyObject * group_excs_str(PyObject * const source) {
-#if PY_VERSION_HEX >= 0x030D0C00
+#if GROUP_DECLARES_EXCS_STR
 	if (group_layout_has_excs_str()) {
 		return ((PyBaseExceptionGroupObject *) source)->excs_str;
 	}
