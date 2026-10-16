@@ -19,6 +19,7 @@ let
 
   nodot = lib.replaceStrings [ "." ] [ "" ] pythonMinor;
   moduleName = lib.replaceStrings [ "{nodot}" ] [ nodot ] platform.moduleName;
+  spaceThenFreeThreadedDefine = lib.optionalString (lib.hasSuffix "t" python.abiTag) " -DPy_GIL_DISABLED=1";
 
   distribution = fetchurl {
     url =
@@ -55,7 +56,7 @@ stdenvNoCC.mkDerivation {
 
     zig cc \
       -target ${platform.zigTarget} \
-      "''${cFlags[@]}"${lib.optionalString (lib.hasSuffix "t" python.abiTag) " -DPy_GIL_DISABLED=1"} \
+      "''${cFlags[@]}"${spaceThenFreeThreadedDefine} \
       -fPIC -shared \
       -I"$NIX_BUILD_TOP/python/include" \
       -I"$NIX_BUILD_TOP/python/include/python${pythonMinor}" \

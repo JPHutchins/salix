@@ -37,13 +37,13 @@ _UNTESTED_PYTHONS = re.search(
     r"untestedPythons = \[([^\]]*)\]", Path("flake.nix").read_text(encoding="utf-8")
 )
 assert _UNTESTED_PYTHONS is not None
+_PYTHON_TARGETS = Path("nix/python-targets.nix").read_text(encoding="utf-8")
+_PINNED_FREE_THREADED = re.findall(r'^    "([0-9.]+t)" = \{', _PYTHON_TARGETS, re.MULTILINE)
+assert _PINNED_FREE_THREADED
+assert len(_PINNED_FREE_THREADED) == _PYTHON_TARGETS.count('pbsVariant = "-freethreaded";')
 FREE_THREADED = tuple(
     python
-    for python in re.findall(
-        r'^    "([0-9.]+t)" = \{',
-        Path("nix/python-targets.nix").read_text(encoding="utf-8"),
-        re.MULTILINE,
-    )
+    for python in _PINNED_FREE_THREADED
     if python not in re.findall(r'"([^"]+)"', _UNTESTED_PYTHONS.group(1))
 )
 
