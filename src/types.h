@@ -66,11 +66,19 @@ struct group_layout_with_excs_str {
 	PyObject * excs;
 	PyObject * excs_str;
 };
+
+static_assert(
+	offsetof(PyBaseExceptionGroupObject, excs) == offsetof(struct group_layout_with_excs_str, excs)
+);
+static_assert(
+	sizeof(PyBaseExceptionGroupObject) == offsetof(struct group_layout_with_excs_str, excs_str) ||
+	sizeof(PyBaseExceptionGroupObject) == sizeof(struct group_layout_with_excs_str)
+);
 #endif
 
 static inline bool group_layout_has_excs_str(void) {
 #if PY_VERSION_HEX >= 0x030B0000
-	return ((PyTypeObject *) PyExc_BaseExceptionGroup)->tp_basicsize >=
+	return ((PyTypeObject *) PyExc_BaseExceptionGroup)->tp_basicsize ==
 		(Py_ssize_t) sizeof(struct group_layout_with_excs_str);
 #endif
 

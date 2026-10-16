@@ -162,8 +162,8 @@ free_threaded = Parallel(
     Sequential(build, pytest), matrix={"PY": FREE_THREADED}, env=FREE_THREADED_ROOT
 )
 HEADER_GATES = (
-    {"BEFORE": "3.13.11", "AFTER": "3.13"},
-    {"BEFORE": "3.14.3", "AFTER": "3.14"},
+    {"BEFORE": "3.13.11", "AFTER": "3.13.12"},
+    {"BEFORE": "3.14.3", "AFTER": "3.14.4"},
 )
 HEADER_GATE_BUILD = {"PYTHONPATH": "../build/{BEFORE}"}
 HEADER_GATE_TEST = (
