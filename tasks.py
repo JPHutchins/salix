@@ -39,7 +39,7 @@ _PINS = re.findall(
     r'      version = "([^"]+)";\n'
     r'      tag = "[^"]+";\n'
     r'      abiTag = "([^"]+)";\n'
-    r'      pbsVariant = "([^"]*)";$',
+    r'      pbsVariant = "([^"]*)";\r?$',
     _PYTHON_TARGETS,
     re.MULTILINE,
 )
@@ -49,16 +49,15 @@ assert all(
     for name, _, abi_tag, variant in _PINS
 )
 PINNED = {name: version for name, version, _, _ in _PINS}
-_PINNED_RELEASE = re.search(r'^  release = "([^"]+)";$', _PYTHON_TARGETS, re.MULTILINE)
-assert _PINNED_RELEASE is not None
+assert any(name.endswith("t") for name in PINNED)
 
 _UNTESTED_PYTHONS = re.search(
-    r"^ +untestedPythons = \[([^\]]*)\];$",
+    r"^ +untestedPythons = \[([^\]]*)\];\r?$",
     Path("flake.nix").read_text(encoding="utf-8"),
     re.MULTILINE,
 )
 assert _UNTESTED_PYTHONS is not None
-UNTESTED = tuple(re.findall(r'"([^"]+)"', _UNTESTED_PYTHONS.group(1)))
+UNTESTED = tuple(re.findall(r'"([^"]+)"', re.sub(r"/\*.*?\*/", "", _UNTESTED_PYTHONS.group(1))))
 assert set(UNTESTED) <= set(PINNED)
 FREE_THREADED = tuple(
     python for python in PINNED if python.endswith("t") and python not in UNTESTED
@@ -106,16 +105,19 @@ pytest = Task(
     env=ENVIRONMENT_PER_INTERPRETER,
     agent_format=JUNIT_FORMAT,
 )
+INTERPRETER_GUARD = (
+    ".venvs/{PY}/bin/python -c \"import platform, sysconfig;"
+    " assert platform.python_version()"
+    " + ('t' if sysconfig.get_config_var('Py_GIL_DISABLED') else '') == '{PYTHON}'\""
+)
+interpreter_guard = Task(INTERPRETER_GUARD)
 compile_flags = Task("uv run --no-sync python tools/compile_flags.py", mutates=True)
 
 clean = Task(
     "git clean -xdf -e .venv -e .venvs -e .free-threaded-python -e .camas -e .claude -e .cpython",
     mutates=True,
 )
-update_python_targets = Task(
-    "uv run python tools/update_python_targets.py --release " + _PINNED_RELEASE.group(1),
-    mutates=True,
-)
+update_python_targets = Task("uv run python tools/update_python_targets.py", mutates=True)
 
 c_format = Task("jphfmt -i {paths}", paths=C_SOURCES, mutates=True)
 c_format_check = Task("jphfmt --check {paths}", paths=C_SOURCES)
@@ -180,22 +182,38 @@ flake_evaluates = Task(
 flake_check = Sequential(flake_evaluates, Task("nix flake check", when=NIX_INPUTS))
 
 test = Parallel(
-    Sequential(build, pytest),
-    variants=tuple({"PY": python, "PYTHON": PINNED[python]} for python in PYTHONS),
+    Sequential(build, interpreter_guard, pytest),
+    variants=tuple({"PY": python, "PYTHON": PINNED.get(python, python)} for python in PYTHONS),
 )
 
 instructions = Parallel(
     Sequential(
         build,
+        interpreter_guard,
         Task("nix shell --inputs-from . nixpkgs#valgrind --command .venvs/{PY}/bin/python bench/instructions.py"),
     ),
-    variants=({"PY": NEWEST, "PYTHON": PINNED[NEWEST]},),
+    variants=({"PY": NEWEST, "PYTHON": PINNED.get(NEWEST, NEWEST)},),
 )
 
 FREE_THREADED_ROOT = {"UV_PYTHON_INSTALL_DIR": ".free-threaded-python"}
+
+
+def on_free_threaded_axes(command: str) -> str:
+    return command.replace("{PY}", "{FT}").replace("{PYTHON}", "{FT_PYTHON}")
+
+
 free_threaded = Parallel(
-    Sequential(build, pytest),
-    variants=tuple({"PY": python, "PYTHON": f"{PINNED[python]}t"} for python in FREE_THREADED),
+    Sequential(
+        Task(on_free_threaded_axes(MAKE_ENV), mutates=True),
+        Task(on_free_threaded_axes(BUILD), mutates=True, env=STRICT_BUILD),
+        Task(on_free_threaded_axes(INTERPRETER_GUARD)),
+        Task(
+            on_free_threaded_axes(PYTEST),
+            env={name: on_free_threaded_axes(value) for name, value in ENVIRONMENT_PER_INTERPRETER.items()},
+            agent_format=JUNIT_FORMAT,
+        ),
+    ),
+    variants=tuple({"FT": python, "FT_PYTHON": f"{PINNED[python]}t"} for python in FREE_THREADED),
     env=FREE_THREADED_ROOT,
 )
 HEADER_GATES = (

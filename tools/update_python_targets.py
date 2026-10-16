@@ -4,6 +4,7 @@ import argparse
 import json
 import re
 import subprocess
+import urllib.error
 import urllib.request
 from collections.abc import Iterator
 from pathlib import Path
@@ -156,16 +157,26 @@ def main() -> None:
             "digest, so nothing is downloaded to pin it."
         )
     )
-    parser.add_argument("--release", default=None)
+    parser.add_argument(
+        "--release",
+        default=None,
+        help="a python-build-standalone tag, or latest; defaults to the release the output records",
+    )
     parser.add_argument("--python-version", type=Path, default=Path(".python-version"))
     parser.add_argument("--output", type=Path, default=Path("nix/python-targets.nix"))
     arguments = parser.parse_args()
 
-    release = (
-        fetch(f"{RELEASES}/tags/{arguments.release}")
-        if arguments.release
-        else fetch(f"{RELEASES}/latest")
+    recorded = (
+        re.search(r'^  release = "([^"]+)";$', arguments.output.read_text(), re.MULTILINE)
+        if arguments.output.exists()
+        else None
     )
+    tag = arguments.release or (recorded.group(1) if recorded else "latest")
+
+    try:
+        release = fetch(f"{RELEASES}/latest" if tag == "latest" else f"{RELEASES}/tags/{tag}")
+    except urllib.error.HTTPError as error:
+        raise SystemExit(f"python-build-standalone release {tag}: {error}") from error
     wanted = arguments.python_version.read_text().split()
 
     assets = {}
