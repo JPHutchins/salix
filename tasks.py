@@ -161,6 +161,44 @@ FREE_THREADED_ROOT = {"UV_PYTHON_INSTALL_DIR": ".free-threaded-python"}
 free_threaded = Parallel(
     Sequential(build, pytest), matrix={"PY": FREE_THREADED}, env=FREE_THREADED_ROOT
 )
+HEADER_GATES = (
+    {"BEFORE": "3.13.11", "AFTER": "3.13.12"},
+    {"BEFORE": "3.14.3", "AFTER": "3.14.4"},
+)
+HEADER_GATE_BUILD = {"PYTHONPATH": "../build/{BEFORE}"}
+HEADER_GATE_TEST = (
+    " --with pytest --with hypothesis --with packaging"
+    " python -m pytest -p no:cacheprovider --ignore=test_check_wheel.py . ../README.md"
+)
+header_gates = Parallel(
+    Sequential(
+        Task(
+            "uv run --no-project --managed-python --python {BEFORE} --with setuptools"
+            " python setup.py build_ext --build-lib build/{BEFORE} --build-temp build/{BEFORE}-temp",
+            mutates=True,
+            env=STRICT_BUILD,
+        ),
+        Task(
+            "uv run --no-project --managed-python --python {BEFORE} python -c 'import salix'",
+            cwd=Path("tests"),
+            env=HEADER_GATE_BUILD,
+        ),
+        Parallel(
+            Task(
+                "uv run --no-project --managed-python --python {BEFORE}" + HEADER_GATE_TEST,
+                cwd=Path("tests"),
+                env=HEADER_GATE_BUILD,
+            ),
+            Task(
+                "uv run --no-project --managed-python --python {AFTER}" + HEADER_GATE_TEST,
+                cwd=Path("tests"),
+                env=HEADER_GATE_BUILD,
+            ),
+        ),
+    ),
+    variants=HEADER_GATES,
+)
+
 in_place_build = Task("uv run python setup.py build_ext --inplace", mutates=True, env=STRICT_BUILD)
 benchmark = Sequential(in_place_build, bench)
 CONFORMANCE_PYTHON = "3.14.6"
@@ -214,7 +252,15 @@ coverage = Parallel(
 )
 
 ci = Parallel(
-    flake_check, free_threaded, format_check, lock_check, lint, analyze, type_check, conformance
+    flake_check,
+    free_threaded,
+    header_gates,
+    format_check,
+    lock_check,
+    lint,
+    analyze,
+    type_check,
+    conformance,
 )
 
 _ = Config(default_task=check, github_task=ci, agent=Claude(fix=format, check=check))
