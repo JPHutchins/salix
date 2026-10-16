@@ -1,5 +1,6 @@
 import copy
 import copyreg
+import threading
 
 import pytest
 from values import COPIED_WHEN_EMPTY, NON_EMPTY
@@ -10,10 +11,6 @@ from salix import Struct, set_field
 class Point(Struct):
     x: int
     y: int
-
-
-class Mutable(Struct, frozen=False):
-    a: int
 
 
 class Defaulted(Struct):
@@ -107,11 +104,10 @@ def test_the_class_is_callable_through_the_slow_path_too():
 
 class TestMutableDefaults:
     """`xs: list = []` reads as an empty list per instance, and that is what it
-    gets. Exactly four builtins are copied at construction, and everything else
-    is shared -- which is cheaper and indistinguishable for a value that cannot
-    be mutated, and simply sharing for one that can. `array.array`, `deque`, a
-    writable `memoryview` and the subclasses of the four are all in the second
-    group; #51 argues for hashability as the test that would replace the list.
+    gets. The four builtins and a `frozen=False` struct are copied at
+    construction, and everything else is shared -- which is cheaper and indistinguishable for a value that cannot
+    be mutated, and simply sharing for one that can. `array.array`, `deque` and
+    a writable `memoryview` are in the second group; #51 argues for hashability as the test that would replace the list.
     """
 
     def test_a_list_default_is_not_shared(self):
@@ -283,15 +279,13 @@ class TestMutableDefaults:
         [
             pytest.param(__import__("array").array("i", [1, 2]), id="array"),
             pytest.param(__import__("collections").deque([1, 2]), id="deque"),
-            pytest.param(Mutable(1), id="a_mutable_struct"),
         ],
     )
     def test_a_mutable_container_outside_the_four_is_shared_and_not_refused(self, value):
         """The boundary is the four types and their subclasses, not mutability,
         so these are neither copied nor refused. Every one of these declares
         `__hash__` is None -- it says it does not hash before being asked --
-        which is what #51's rule leaves alone; salix's own `frozen=False`
-        struct included, since `eq` without `frozen` sets `__hash__` to None.
+        which is what #51's rule leaves alone.
 
         `hash(value)` rather than `isinstance(value, Hashable)`: the ABC asks
         whether `__hash__` is non-None, and a writable memoryview has one that
@@ -768,10 +762,11 @@ class TestMutableDefaults:
         assert first.inner is not second.inner
         assert first.inner.values is not second.inner.values
 
-    def test_a_struct_default_with_its_own_deepcopy_is_copied_by_it(self):
+    @pytest.mark.parametrize("frozen", [True, False], ids=["frozen", "mutable"])
+    def test_a_struct_default_with_its_own_deepcopy_is_copied_by_it(self, frozen):
         calls: list[object] = []
 
-        class Hooked(Struct):
+        class Hooked(Struct, frozen=frozen):
             values: list
 
             def __deepcopy__(self, memo: dict) -> "Hooked":
@@ -906,3 +901,91 @@ class TestMutableDefaults:
             inner: WithCoBase = WithCoBase([1])
 
         assert Holder().inner == copy.deepcopy(Holder._struct_defaults_[0])
+
+    @pytest.mark.parametrize(
+        "options",
+        [{}, {"eq": False}],
+        ids=["unhashable", "hashable_by_identity"],
+    )
+    def test_a_mutable_struct_default_is_copied_per_instance(self, options):
+        class Inner(Struct, frozen=False, **options):
+            x: int = 0
+            values: list = []  # noqa: RUF012
+
+        declared = Inner()
+
+        class Holder(Struct, frozen=False):
+            inner: Inner = declared
+
+        first, second = Holder(), Holder()
+        first.inner.x = 5
+        first.inner.values.append(1)
+
+        assert second.inner.x == 0
+        assert second.inner.values == []
+        assert first.inner is not declared
+        assert second.inner is not declared
+        assert Holder._struct_defaults_[0] is not declared
+
+    def test_a_supplied_mutable_struct_is_stored_as_given(self):
+        class Inner(Struct, frozen=False):
+            x: int = 0
+
+        class Holder(Struct, frozen=False):
+            inner: Inner = Inner()
+
+        given = Inner(3)
+
+        assert Holder(given).inner is given
+        assert Holder(inner=given).inner is given
+
+    def test_a_mutable_struct_default_nested_in_a_mutable_struct_default_is_not_shared(self):
+        class Run(Struct, frozen=False):
+            dir: str = "outputs"
+
+        class Job(Struct, frozen=False):
+            run: Run = Run()
+
+        class Config(Struct, frozen=False):
+            job: Job = Job()
+
+        first, second = Config(), Config()
+        first.job.run.dir = "elsewhere"
+
+        assert second.job.run.dir == "outputs"
+        assert first.job is not second.job
+        assert first.job.run is not second.job.run
+
+    def test_a_mutable_struct_default_a_deepcopy_cannot_carry_is_shared(self):
+        class Locked(Struct, frozen=False):
+            lock: object
+
+        declared = Locked(threading.Lock())
+
+        class Holder(Struct, frozen=False):
+            inner: Locked = declared
+
+        assert Holder().inner is Holder().inner
+        assert Holder._struct_defaults_[0] is declared
+
+    @pytest.mark.parametrize(("eq", "shared"), [(True, False), (False, True)], ids=["eq", "identity"])
+    def test_a_mutable_struct_nested_in_a_frozen_struct_default_follows_its_hash(self, eq, shared):
+        class Inner(Struct, frozen=False, eq=eq):
+            x: int = 0
+
+        class Outer(Struct):
+            inner: Inner = Inner()
+
+        class Holder(Struct, frozen=False):
+            outer: Outer = Outer()
+
+        assert (Holder().outer.inner is Holder().outer.inner) is shared
+
+    def test_a_frozen_struct_default_of_atoms_stays_shared(self):
+        class Inner(Struct):
+            x: int = 0
+
+        class Holder(Struct, frozen=False):
+            inner: Inner = Inner()
+
+        assert Holder().inner is Holder().inner

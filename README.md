@@ -89,6 +89,27 @@ instance, not shared:
 
 ```
 
+A `frozen=False` struct default is deep-copied per instance too:
+
+```python
+>>> class Settings(Struct, frozen=False):
+...     verbose: bool = False
+
+>>> class App(Struct):
+...     settings: Settings = Settings()
+
+>>> first, second = App(), App()
+>>> first.settings.verbose = True
+>>> second.settings.verbose
+False
+
+```
+
+Only the default itself is tested for being a `frozen=False` struct. One
+nested inside a frozen struct or a tuple default is copied when it makes the
+outer default unhashable, as `eq=True` does, and shared when it hashes by
+identity, as `eq=False` does.
+
 A default of the four (and their subclasses) is copied per instance: a
 non-empty one is deep-copied, so an inner list in `x: tuple = (1, [])` is
 not shared, and an empty one copies through the declared type's own
@@ -97,12 +118,13 @@ mutate the class-body object), preserving a subclass and falling back to a
 base-type copy when the constructor signature is not the iterable one — a
 `defaultdict` falls back and becomes a plain `dict`, its factory dropped.
 A value a deepcopy cannot carry (a writable memoryview — one uncarryable
-element shares the whole container) or one whose hash fails by recursing
-falls back to sharing the declared object. A type outside
-the four that declares `__hash__ = None` is shared. A field without a
+element shares the whole container, and one uncarryable field the whole
+`frozen=False` struct) or one whose hash fails by recursing falls back to
+sharing the declared object. A type outside the four that declares
+`__hash__ = None` is shared, unless it is a `frozen=False` struct. A field without a
 default cannot
 follow one that has it: append defaulted fields, or default the new field
-too. For the four, `__struct_defaults__` holds the
+too. For the four and a `frozen=False` struct, `__struct_defaults__` holds the
 class's own copy, severed from whatever the class body named: appending to
 the module-level object afterwards does not reach the class. The getters hand
 the stored objects out, not copies: do not mutate what `__struct_defaults__`

@@ -241,11 +241,19 @@ static enum default_probe probe_default(PyObject * const declared) {
 	return DEFAULT_PROBE_DEEPCOPY;
 }
 
+static bool is_mutable_struct(PyObject * const declared) {
+	return is_struct(declared) && !struct_type_of(declared)->struct_options.frozen;
+}
+
 PyObject * struct_default_copy(struct salix_state * const state, PyObject * const declared) {
 	default_copier const copy = copies_default(Py_TYPE(declared));
 
 	if (copy != NULL) {
 		return copy(state, declared);
+	}
+
+	if (is_mutable_struct(declared)) {
+		return deep_copy_or_share(state, declared);
 	}
 
 	switch (predicted_struct_probe(declared)) {
