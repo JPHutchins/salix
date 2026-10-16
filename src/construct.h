@@ -10,6 +10,8 @@ PyObject * Struct_vectorcall(
 	PyObject * keyword_names
 );
 
+PyObject * Struct_call(PyObject * struct_class, PyObject * arguments, PyObject * keywords);
+
 int Struct_init_wrapper(PyObject * self, PyObject * arguments, PyObject * keywords);
 
 PyObject * Struct_replace(

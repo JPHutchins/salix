@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "meta.h"
+#include "../construct.h"
 #include "../mixin.h"
 #include "../owned.h"
 #include "../result.h"
@@ -202,8 +203,8 @@ static PyObject * StructMeta_call(
 		return NULL;
 	}
 
-	PY_MOVABLE(result, type->tp_vectorcall != NULL ? PyVectorcall_Call(self, args, keywords) :
-		PyType_Type.tp_call(self, args, keywords));
+	PY_MOVABLE(result, ((StructType *) self)->struct_own_init ? PyType_Type.tp_call(self, args, keywords) :
+		Struct_call(self, args, keywords));
 
 	if (result != NULL && !PyObject_TypeCheck(result, type)) {
 		PyErr_Format(

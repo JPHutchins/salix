@@ -262,6 +262,22 @@ static enum result refuse_a_skipped_new(
 	Py_UNREACHABLE();
 }
 
+static struct field_lookup field_named(
+	StructType const * const struct_class,
+	char const * const name
+) {
+	if (struct_class->struct_field_names == NULL) {
+		return (struct field_lookup){.tag = FIELD_LOOKUP_MISSING};
+	}
+
+	PY_OWNED(name_object, PyUnicode_FromString(name));
+
+	return (
+		name_object != NULL ? find_field(struct_class, name_object) :
+		(struct field_lookup){.tag = FIELD_LOOKUP_ERROR}
+	);
+}
+
 enum result install_constructor(StructType * const struct_class, PyObject * const namespace) {
 	bool const own_init = defines_own_init(struct_class, namespace);
 	struct_class->struct_own_init = own_init;
@@ -312,15 +328,8 @@ enum result install_constructor(StructType * const struct_class, PyObject * cons
 	struct_class->struct_family_owned = family_owns_in_mro(&struct_class->heap_type.ht_type);
 	struct_class->struct_group_family = group_family_in_mro(&struct_class->heap_type.ht_type);
 
-	PY_OWNED(message_name, PyUnicode_FromString("message"));
-	PY_OWNED(exceptions_name, PyUnicode_FromString("exceptions"));
-
-	if (message_name == NULL || exceptions_name == NULL) {
-		return RESULT_ERROR;
-	}
-
-	struct field_lookup const message = find_field(struct_class, message_name);
-	struct field_lookup const exceptions = find_field(struct_class, exceptions_name);
+	struct field_lookup const message = field_named(struct_class, "message");
+	struct field_lookup const exceptions = field_named(struct_class, "exceptions");
 
 	if (message.tag == FIELD_LOOKUP_ERROR || exceptions.tag == FIELD_LOOKUP_ERROR) {
 		return RESULT_ERROR;
@@ -332,13 +341,7 @@ enum result install_constructor(StructType * const struct_class, PyObject * cons
 		-1
 	);
 
-	if (install_post_init(struct_class) != RESULT_OK) {
-		return RESULT_ERROR;
-	}
-
-	struct_class->heap_type.ht_type.tp_vectorcall = own_init ? NULL : Struct_vectorcall;
-
-	return RESULT_OK;
+	return install_post_init(struct_class);
 }
 
 enum result ensure_singleton(

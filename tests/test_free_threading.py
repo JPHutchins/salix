@@ -514,7 +514,7 @@ def test_a_class_is_unusable_from_another_thread_until_it_has_finished_being_cre
     def complete_or_refused(read, expected):
         try:
             assert read() == expected
-        except TypeError as error:
+        except (TypeError, AttributeError) as error:
             assert STILL_BEING_CREATED in str(error), error
 
     def write():
@@ -537,5 +537,8 @@ def test_a_class_is_unusable_from_another_thread_until_it_has_finished_being_cre
             complete_or_refused(lambda cls=cls: tuple(field.name for field in fields(cls)), ("count",))
             complete_or_refused(lambda escaped=escaped: to_dict(escaped), {"count": 5})
             complete_or_refused(lambda cls=cls: cls(count=5).count, 5)
+            complete_or_refused(lambda cls=cls: cls.__struct_defaults__, (1,))
+            complete_or_refused(lambda cls=cls: cls._struct_metadata_, ((),))
+            complete_or_refused(lambda cls=cls: cls.__struct_annotations__, (int,))
 
     run_in_roles((write, read))

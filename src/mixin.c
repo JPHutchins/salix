@@ -262,7 +262,7 @@ PyObject * Struct_get_signature(PyObject * const self, void * const closure) {
 		return NULL;
 	}
 
-	if (!struct_class_created(type)) {
+	if (!struct_class_usable_here(type)) {
 		PyErr_Format(
 			PyExc_AttributeError,
 			"the signature of '%.200s' cannot be read until its class has finished being created",

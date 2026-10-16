@@ -3,7 +3,7 @@ import copyreg
 import threading
 
 import pytest
-from platforms import recurses_through_c_until_recursion_error
+from platforms import recurses_through_c_until_recursion_error, starts_a_thread
 from values import COPIED_WHEN_EMPTY, NON_EMPTY
 
 from salix import Struct, fields, from_mapping, set_field, to_dict
@@ -1097,3 +1097,85 @@ def test_the_post_init_of_a_frozen_fieldless_singleton_reads_its_finished_class(
 
     assert Tag() is Tag()
     assert seen == [expected]
+
+
+def outcome_on_another_thread(attempt):
+    outcomes = []
+
+    def record():
+        try:
+            outcomes.append(attempt())
+        except (TypeError, AttributeError) as error:
+            outcomes.append(error)
+
+    thread = threading.Thread(target=record)
+    thread.start()
+    thread.join()
+
+    assert len(outcomes) == 1, outcomes
+    return outcomes[0]
+
+
+def refused_as_unfinished(outcome):
+    return (
+        isinstance(outcome, (TypeError, AttributeError))
+        and "until its class has finished being created" in str(outcome)
+    )
+
+
+@starts_a_thread
+@pytest.mark.parametrize("copies_the_namespace", [False, True], ids=["namespace-passed-on", "namespace-copied"])
+def test_a_class_handed_to_a_metaclass_new_is_its_builders_alone_until_the_build_returns(copies_the_namespace):
+    inside = {}
+
+    class Peeking(type(Struct)):
+        def __new__(mcs, name, bases, namespace, **keywords):
+            cls = super().__new__(mcs, name, bases, dict(namespace) if copies_the_namespace else namespace, **keywords)
+
+            if name == "Fielded":
+                inside["builder"] = tuple(field.name for field in fields(cls))
+                inside["another thread"] = outcome_on_another_thread(lambda: fields(cls))
+
+            return cls
+
+    class Base(Struct, metaclass=Peeking):
+        pass
+
+    built = type(Struct)("Fielded", (Base,), {"__annotations__": {"count": int}, "count": 1})
+
+    assert inside["builder"] == ("count",)
+    assert refused_as_unfinished(inside["another thread"]), inside["another thread"]
+    assert outcome_on_another_thread(lambda: built().count) == 1
+
+
+@starts_a_thread
+def test_a_struct_class_built_inside_a_metaclass_new_is_created_once_the_outer_build_returns():
+    helpers = []
+
+    class Building(type(Struct)):
+        def __new__(mcs, name, bases, namespace, **keywords):
+            if name == "Outer":
+                helpers.append(type(Struct)("Helper", (Struct,), {"__annotations__": {"x": int}}))
+
+            return super().__new__(mcs, name, bases, namespace, **keywords)
+
+    class Base(Struct, metaclass=Building):
+        pass
+
+    type(Struct)("Outer", (Base,), {"__annotations__": {"count": int}})
+
+    assert len(helpers) == 1, helpers
+    assert outcome_on_another_thread(lambda: helpers[0](x=3).x) == 3
+
+
+@starts_a_thread
+def test_another_thread_cannot_call_a_singleton_class_until_its_singleton_is_stored():
+    during_post_init = []
+
+    class Tag(Struct, frozen=True):
+        def __post_init__(self):
+            if not during_post_init:
+                during_post_init.append(outcome_on_another_thread(type(self)))
+
+    assert refused_as_unfinished(during_post_init[0]), during_post_init
+    assert Tag() is Tag()
