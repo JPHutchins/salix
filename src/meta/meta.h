@@ -218,8 +218,4 @@ enum result ensure_singleton(
 	PyObject * namespace,
 	bool bases_divert_setattro
 );
-enum result install_constructor(
-	StructType * struct_class,
-	PyObject * namespace,
-	bool bases_divert_setattro
-);
+enum result install_constructor(StructType * struct_class, PyObject * namespace);

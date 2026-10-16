@@ -488,13 +488,23 @@ CLASSES_CREATED = 2_000
 STILL_BEING_CREATED = "until its class has finished being created"
 
 
-def test_a_class_is_unusable_from_another_thread_until_it_has_finished_being_created():
+class Forwarding(type(Struct)):
+    def __new__(mcs, name, bases, namespace, **keywords):
+        return super().__new__(mcs, name, bases, namespace, **keywords)
+
+
+@pytest.mark.parametrize(
+    ("metaclass", "class_keywords"),
+    [(type(Struct), {}), (Forwarding, {"order": True})],
+    ids=["direct", "through-a-metaclass-new"],
+)
+def test_a_class_is_unusable_from_another_thread_until_it_has_finished_being_created(metaclass, class_keywords):
     published: list[tuple[type, Struct]] = []
     writers_left = [THREADS // 2]
     writers_done = threading.Event()
     claim = threading.Lock()
 
-    class Publishing(Struct, frozen=False):
+    class Publishing(Struct, metaclass=metaclass, frozen=False):
         def __init_subclass__(cls, **keywords: object) -> None:
             super().__init_subclass__(**keywords)
             escaped = cls.__new__(cls)
@@ -510,7 +520,7 @@ def test_a_class_is_unusable_from_another_thread_until_it_has_finished_being_cre
     def write():
         try:
             for _ in range(CLASSES_CREATED):
-                type("Fielded", (Publishing,), {"__annotations__": {"count": int}, "count": 1})
+                type(Struct)("Fielded", (Publishing,), {"__annotations__": {"count": int}, "count": 1}, **class_keywords)
         finally:
             with claim:
                 writers_left[0] -= 1

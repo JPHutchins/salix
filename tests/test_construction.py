@@ -6,7 +6,7 @@ import pytest
 from platforms import recurses_through_c_until_recursion_error
 from values import COPIED_WHEN_EMPTY, NON_EMPTY
 
-from salix import Struct, from_mapping, set_field
+from salix import Struct, fields, from_mapping, set_field, to_dict
 
 
 class Point(Struct):
@@ -1077,3 +1077,23 @@ def test_a_class_still_being_created_has_no_field_tables_to_read(window, on_the_
     assert len(outcomes) == 1, outcomes
     assert isinstance(outcomes[0], AttributeError)
     assert str(outcomes[0]) == "the fields of 'Fielded' cannot be read until its class has finished being created"
+
+
+@pytest.mark.parametrize(
+    ("read", "expected"),
+    [
+        (lambda self: type(self).__struct_fields__, ()),
+        (fields, ()),
+        (to_dict, {}),
+    ],
+    ids=["__struct_fields__", "fields", "to_dict"],
+)
+def test_the_post_init_of_a_frozen_fieldless_singleton_reads_its_finished_class(read, expected):
+    seen = []
+
+    class Tag(Struct, frozen=True):
+        def __post_init__(self):
+            seen.append(read(self))
+
+    assert Tag() is Tag()
+    assert seen == [expected]

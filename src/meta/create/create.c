@@ -346,17 +346,21 @@ PyObject * build_struct_class(
 							request.options
 						) != RESULT_OK
 					) ||
-					(
-						install_constructor(
-							struct_class,
-							original_namespace,
-							bases_divert_setattro
-						) != RESULT_OK
-					)
+					install_constructor(struct_class, original_namespace) != RESULT_OK
 				) {
 					Py_CLEAR(struct_class);
 				} else {
 					struct_class_mark_created(struct_class);
+
+					if (
+						ensure_singleton(
+							struct_class,
+							original_namespace,
+							bases_divert_setattro
+						) != RESULT_OK
+					) {
+						Py_CLEAR(struct_class);
+					}
 				}
 			}
 		}

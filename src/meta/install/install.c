@@ -262,11 +262,7 @@ static enum result refuse_a_skipped_new(
 	Py_UNREACHABLE();
 }
 
-enum result install_constructor(
-	StructType * const struct_class,
-	PyObject * const namespace,
-	bool const bases_divert_setattro
-) {
+enum result install_constructor(StructType * const struct_class, PyObject * const namespace) {
 	bool const own_init = defines_own_init(struct_class, namespace);
 	struct_class->struct_own_init = own_init;
 
@@ -287,10 +283,12 @@ enum result install_constructor(
 	}
 
 	struct_class->struct_copies_through_reduce = through_reduce == 1;
-	struct_class->heap_type.ht_type.tp_vectorcall = NULL;
 
 	if (own_init) {
-		initproc captured_init = struct_class->heap_type.ht_type.tp_init;
+		initproc captured_init = (
+			struct_class->struct_installed_init != NULL ? struct_class->struct_installed_init :
+			struct_class->heap_type.ht_type.tp_init
+		);
 
 		for (
 			PyTypeObject * chain = struct_class->heap_type.ht_type.tp_base;
@@ -314,51 +312,33 @@ enum result install_constructor(
 	struct_class->struct_family_owned = family_owns_in_mro(&struct_class->heap_type.ht_type);
 	struct_class->struct_group_family = group_family_in_mro(&struct_class->heap_type.ht_type);
 
-	struct_class->struct_message_index = -1;
-	struct_class->struct_exceptions_index = -1;
+	PY_OWNED(message_name, PyUnicode_FromString("message"));
+	PY_OWNED(exceptions_name, PyUnicode_FromString("exceptions"));
 
-	if (struct_class->struct_field_names != NULL) {
-		PY_OWNED(message_name, PyUnicode_FromString("message"));
-		PY_OWNED(exceptions_name, PyUnicode_FromString("exceptions"));
-
-		if (message_name == NULL || exceptions_name == NULL) {
-			return RESULT_ERROR;
-		}
-
-		for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(struct_class->struct_field_names); ++i) {
-			PyObject * const name = PyTuple_GET_ITEM(struct_class->struct_field_names, i);
-
-			if (struct_class->struct_message_index < 0) {
-				int const matches = PyObject_RichCompareBool(name, message_name, Py_EQ);
-
-				if (matches < 0) {
-					return RESULT_ERROR;
-				}
-
-				struct_class->struct_message_index = matches == 1 ? i : -1;
-			}
-
-			if (struct_class->struct_exceptions_index < 0) {
-				int const matches = PyObject_RichCompareBool(name, exceptions_name, Py_EQ);
-
-				if (matches < 0) {
-					return RESULT_ERROR;
-				}
-
-				struct_class->struct_exceptions_index = matches == 1 ? i : -1;
-			}
-		}
+	if (message_name == NULL || exceptions_name == NULL) {
+		return RESULT_ERROR;
 	}
+
+	struct field_lookup const message = find_field(struct_class, message_name);
+	struct field_lookup const exceptions = find_field(struct_class, exceptions_name);
+
+	if (message.tag == FIELD_LOOKUP_ERROR || exceptions.tag == FIELD_LOOKUP_ERROR) {
+		return RESULT_ERROR;
+	}
+
+	struct_class->struct_message_index = message.tag == FIELD_LOOKUP_FOUND ? message.index : -1;
+	struct_class->struct_exceptions_index = (
+		exceptions.tag == FIELD_LOOKUP_FOUND ? exceptions.index :
+		-1
+	);
 
 	if (install_post_init(struct_class) != RESULT_OK) {
 		return RESULT_ERROR;
 	}
 
-	if (!own_init) {
-		struct_class->heap_type.ht_type.tp_vectorcall = Struct_vectorcall;
-	}
+	struct_class->heap_type.ht_type.tp_vectorcall = own_init ? NULL : Struct_vectorcall;
 
-	return ensure_singleton(struct_class, namespace, bases_divert_setattro);
+	return RESULT_OK;
 }
 
 enum result ensure_singleton(
