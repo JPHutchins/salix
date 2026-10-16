@@ -19,6 +19,10 @@ PyObject * build_struct_class(
 	PyObject * const keywords,
 	struct salix_state * const state
 ) {
+	if (refuse_uncreated_struct_bases(bases) != RESULT_OK) {
+		return NULL;
+	}
+
 	struct base_survey const survey = survey_bases(bases);
 	struct options const inherited = inherited_options(survey.behaviour, survey.facts);
 	PY_MOVABLE(forwarded_options, NULL);
@@ -351,6 +355,8 @@ PyObject * build_struct_class(
 					)
 				) {
 					Py_CLEAR(struct_class);
+				} else {
+					struct_class_mark_created(struct_class);
 				}
 			}
 		}

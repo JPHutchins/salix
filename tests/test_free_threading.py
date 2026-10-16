@@ -481,3 +481,46 @@ def test_a_shared_struct_is_safe_to_read_as_a_dict_while_another_thread_writes_i
                 assert values["first"] >= values["second"]
 
     run_in_roles((write,) + (read,) * (THREADS - 1))
+
+
+CLASSES_CREATED = 2_000
+
+STILL_BEING_CREATED = "until its class has finished being created"
+
+
+def test_a_class_is_unusable_from_another_thread_until_it_has_finished_being_created():
+    published: list[tuple[type, Struct]] = []
+    writers_left = [THREADS // 2]
+    claim = threading.Lock()
+
+    class Publishing(Struct, frozen=False):
+        def __init_subclass__(cls, **keywords: object) -> None:
+            super().__init_subclass__(**keywords)
+            escaped = cls.__new__(cls)
+            escaped.__setstate__((None, {"count": 5}))
+            published.append((cls, escaped))
+
+    def complete_or_refused(read, expected):
+        try:
+            assert read() == expected
+        except TypeError as error:
+            assert STILL_BEING_CREATED in str(error), error
+
+    def write():
+        for _ in range(CLASSES_CREATED):
+            type("Fielded", (Publishing,), {"__annotations__": {"count": int}, "count": 1})
+
+        with claim:
+            writers_left[0] -= 1
+
+    def read():
+        while writers_left[0] > 0:
+            if not published:
+                continue
+
+            cls, escaped = published[-1]
+            complete_or_refused(lambda cls=cls: tuple(field.name for field in fields(cls)), ("count",))
+            complete_or_refused(lambda escaped=escaped: to_dict(escaped), {"count": 5})
+            complete_or_refused(lambda cls=cls: cls(count=5).count, 5)
+
+    run_in_roles((write, read))

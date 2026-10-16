@@ -180,6 +180,7 @@ PyObject * struct_create_root(
 	}
 
 	((StructType *) root)->struct_state = (struct salix_state *) PyModule_GetState(module);
+	struct_class_mark_created((StructType *) root);
 	Py_XSETREF(((PyHeapTypeObject *) root)->ht_module, Py_NewRef(module));
 
 	return root;
@@ -195,6 +196,10 @@ static PyObject * StructMeta_call(
 	if (((StructType *) self)->struct_cannot_create) {
 		PyErr_Format(PyExc_TypeError, "cannot create '%.100s' instances", type->tp_name);
 
+		return NULL;
+	}
+
+	if (refused_until_created((StructType *) self, "create an instance of")) {
 		return NULL;
 	}
 

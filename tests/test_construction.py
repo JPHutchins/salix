@@ -6,7 +6,7 @@ import pytest
 from platforms import recurses_through_c_until_recursion_error
 from values import COPIED_WHEN_EMPTY, NON_EMPTY
 
-from salix import Struct, set_field
+from salix import Struct, from_mapping, set_field
 
 
 class Point(Struct):
@@ -992,3 +992,62 @@ class TestMutableDefaults:
             inner: Inner = Inner()
 
         assert Holder().inner is Holder().inner
+
+
+def tried_while_its_class_is_created(window: str, attempt) -> list[object]:
+    outcomes: list[object] = []
+
+    def record(cls: type) -> None:
+        try:
+            outcomes.append(attempt(cls))
+        except TypeError as error:
+            outcomes.append(error)
+
+    if window == "init_subclass":
+
+        class Base(Struct, frozen=False):
+            def __init_subclass__(cls, **keywords: object) -> None:
+                super().__init_subclass__(**keywords)
+                record(cls)
+
+        class Fielded(Base):
+            count: int = 1
+
+    else:
+
+        class Hook:
+            def __set_name__(self, owner: type, name: str) -> None:
+                record(owner)
+
+        class Fielded(Struct, frozen=False):
+            count: int = 1
+            hook = Hook()
+
+    assert Fielded(count=5).count == 5
+
+    return outcomes
+
+
+def subclassed_by_a_class_statement(cls: type) -> type:
+    class Kid(cls):
+        pass
+
+    return Kid
+
+
+@pytest.mark.parametrize("window", ["init_subclass", "set_name"])
+@pytest.mark.parametrize(
+    ("attempt", "refusal"),
+    [
+        pytest.param(lambda cls: cls(), "create an instance of", id="call"),
+        pytest.param(lambda cls: cls(count=5), "create an instance of", id="call-with-a-field"),
+        pytest.param(lambda cls: from_mapping(cls, {"count": 5}), "create an instance of", id="from_mapping"),
+        pytest.param(lambda cls: type("Kid", (cls,), {}), "subclass", id="type"),
+        pytest.param(subclassed_by_a_class_statement, "subclass", id="class-statement"),
+    ],
+)
+def test_a_class_still_being_created_refuses_instances_and_subclasses(window, attempt, refusal):
+    [outcome] = tried_while_its_class_is_created(window, attempt)
+
+    assert isinstance(outcome, TypeError)
+    assert str(outcome) == f"cannot {refusal} 'Fielded' until its class has finished being created"

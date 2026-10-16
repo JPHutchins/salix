@@ -53,6 +53,7 @@ typedef struct StructType {
 	bool struct_group_family;
 	bool struct_own_init;
 	bool struct_cannot_create;
+	int struct_created;
 	bool struct_copies_through_reduce;
 	initproc struct_installed_init;
 	Py_ssize_t struct_message_index;
@@ -372,7 +373,19 @@ static inline enum parameter_kind struct_parameter_kind(
 }
 
 static inline bool struct_class_created(StructType const * const type) {
-	return type->struct_state != NULL;
+#if PY_VERSION_HEX >= 0x030D0000
+	return _Py_atomic_load_int_acquire(&type->struct_created) != 0;
+#else
+	return type->struct_created != 0;
+#endif
+}
+
+static inline void struct_class_mark_created(StructType * const type) {
+#if PY_VERSION_HEX >= 0x030D0000
+	_Py_atomic_store_int_release(&type->struct_created, 1);
+#else
+	type->struct_created = 1;
+#endif
 }
 
 static inline struct salix_state * created_struct_state_of(PyObject * const self) {

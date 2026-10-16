@@ -399,7 +399,7 @@ enum result ensure_singleton(
 		return RESULT_OK;
 	}
 
-	PY_MOVABLE(singleton, PyObject_CallNoArgs((PyObject *) struct_class));
+	PY_MOVABLE(singleton, Struct_vectorcall((PyObject *) struct_class, NULL, 0, NULL));
 
 	if (singleton == NULL) {
 		return RESULT_ERROR;
