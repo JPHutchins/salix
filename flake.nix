@@ -246,7 +246,8 @@
                   ${forSystem.${system}.wheels."3.14-manylinux-x86_64"}/*.whl
                 export PYTHONPATH=$PWD/site
                 export SALIX_REQUIRE_INSTALLED=1
-                python -m pytest -q -p no:cacheprovider --doctest-glob='*README.md' ${./tests} ${./README.md}
+                cp ${./README.md} README.md
+                python -m pytest -q -p no:cacheprovider --doctest-glob=README.md ${./tests} README.md
                 touch $out
               '';
         }

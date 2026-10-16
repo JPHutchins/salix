@@ -20,12 +20,10 @@ stdenv.mkDerivation {
     runHook preBuild
     set -o pipefail
 
-    python3 build_config.py c-flags --strict > c-flags
-    python3 build_config.py sources > sources
-    python3 build_config.py test-sources > test-sources
-    mapfile -t cFlags < c-flags
-    mapfile -t sources < sources
-    mapfile -t testSources < test-sources
+    source ${./read-build-config.sh}
+    readBuildConfig cFlags c-flags --strict
+    readBuildConfig sources sources
+    readBuildConfig testSources test-sources
 
     $CC -DTESTING \
       "''${cFlags[@]}" \

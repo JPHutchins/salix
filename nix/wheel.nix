@@ -49,8 +49,9 @@ stdenvNoCC.mkDerivation {
     mkdir -p "$NIX_BUILD_TOP/python"
     tar xzf ${distribution} --strip-components=1 -C "$NIX_BUILD_TOP/python"
 
-    mapfile -t cFlags < <(python3 build_config.py c-flags --strict --shipped)
-    mapfile -t sources < <(python3 build_config.py sources)
+    source ${./read-build-config.sh}
+    readBuildConfig cFlags c-flags --strict --shipped
+    readBuildConfig sources sources
 
     zig cc \
       -target ${platform.zigTarget} \

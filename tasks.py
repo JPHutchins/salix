@@ -189,7 +189,7 @@ wheel_guard = Task(
 wheel_test = Task(
     WHEEL_RUN + " --find-links ../result-wheels"
     f' --with "salix=={VERSION}" --with pytest --with hypothesis'
-    " python -m pytest .",
+    " python -m pytest . ../README.md",
     cwd=Path("tests"),
     env={"SALIX_REQUIRE_INSTALLED": "1"},
 )
