@@ -1,5 +1,6 @@
 import copy
 import copyreg
+import threading
 
 import pytest
 from values import COPIED_WHEN_EMPTY, NON_EMPTY
@@ -103,11 +104,10 @@ def test_the_class_is_callable_through_the_slow_path_too():
 
 class TestMutableDefaults:
     """`xs: list = []` reads as an empty list per instance, and that is what it
-    gets. Exactly four builtins are copied at construction, and everything else
-    is shared -- which is cheaper and indistinguishable for a value that cannot
-    be mutated, and simply sharing for one that can. `array.array`, `deque`, a
-    writable `memoryview` and the subclasses of the four are all in the second
-    group; #51 argues for hashability as the test that would replace the list.
+    gets. The four builtins and a `frozen=False` struct are copied at
+    construction, and everything else is shared -- which is cheaper and indistinguishable for a value that cannot
+    be mutated, and simply sharing for one that can. `array.array`, `deque` and
+    a writable `memoryview` are in the second group; #51 argues for hashability as the test that would replace the list.
     """
 
     def test_a_list_default_is_not_shared(self):
@@ -762,10 +762,11 @@ class TestMutableDefaults:
         assert first.inner is not second.inner
         assert first.inner.values is not second.inner.values
 
-    def test_a_struct_default_with_its_own_deepcopy_is_copied_by_it(self):
+    @pytest.mark.parametrize("frozen", [True, False], ids=["frozen", "mutable"])
+    def test_a_struct_default_with_its_own_deepcopy_is_copied_by_it(self, frozen):
         calls: list[object] = []
 
-        class Hooked(Struct):
+        class Hooked(Struct, frozen=frozen):
             values: list
 
             def __deepcopy__(self, memo: dict) -> "Hooked":
@@ -955,23 +956,30 @@ class TestMutableDefaults:
         assert first.job is not second.job
         assert first.job.run is not second.job.run
 
-    def test_a_mutable_struct_default_with_its_own_deepcopy_is_copied_by_it(self):
-        calls: list[object] = []
+    def test_a_mutable_struct_default_a_deepcopy_cannot_carry_is_shared(self):
+        class Locked(Struct, frozen=False):
+            lock: object
 
-        class Hooked(Struct, frozen=False):
-            x: int = 0
-
-            def __deepcopy__(self, memo: dict) -> "Hooked":
-                calls.append(self)
-                return Hooked(self.x)
+        declared = Locked(threading.Lock())
 
         class Holder(Struct, frozen=False):
-            inner: Hooked = Hooked()
+            inner: Locked = declared
 
-        calls.clear()
-        Holder()
+        assert Holder().inner is Holder().inner
+        assert Holder._struct_defaults_[0] is declared
 
-        assert len(calls) == 1
+    @pytest.mark.parametrize(("eq", "shared"), [(True, False), (False, True)], ids=["eq", "identity"])
+    def test_a_mutable_struct_nested_in_a_frozen_struct_default_follows_its_hash(self, eq, shared):
+        class Inner(Struct, frozen=False, eq=eq):
+            x: int = 0
+
+        class Outer(Struct):
+            inner: Inner = Inner()
+
+        class Holder(Struct, frozen=False):
+            outer: Outer = Outer()
+
+        assert (Holder().outer.inner is Holder().outer.inner) is shared
 
     def test_a_frozen_struct_default_of_atoms_stays_shared(self):
         class Inner(Struct):
