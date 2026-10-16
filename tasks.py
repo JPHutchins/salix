@@ -207,16 +207,29 @@ PYODIDE = (
 WITH_NODE = "nix shell --inputs-from .. nixpkgs#nodejs --command "
 pyodide = Sequential(
     Task(PYODIDE + " xbuildenv install " + PYODIDE_XBUILDENV, mutates=True),
-    Task(PYODIDE + " build --outdir dist", mutates=True),
-    Task(WITH_NODE + PYODIDE + " venv --clear pyodide-venv", cwd=Path("dist"), mutates=True),
+    Task(PYODIDE + " build --outdir dist", mutates=True, env=STRICT_BUILD),
     Task(
-        WITH_NODE + "sh -c 'pyodide-venv/bin/pip install *.whl pytest hypothesis packaging'",
+        "uv export --frozen --package salix-tests --no-hashes --no-emit-workspace"
+        " --output-file dist/pyodide-test-requirements.txt",
+        mutates=True,
+    ),
+    Task(
+        WITH_NODE + PYODIDE + " venv --clear pyodide-venv",
         cwd=Path("dist"),
+        when=".",
+        mutates=True,
+    ),
+    Task(
+        WITH_NODE + "sh -c 'pyodide-venv/bin/pip install"
+        f" salix-{VERSION}-*-pyemscripten_*.whl -r pyodide-test-requirements.txt'",
+        cwd=Path("dist"),
+        when=".",
         mutates=True,
     ),
     Task(
         WITH_NODE + "../dist/pyodide-venv/bin/python -m pytest -p no:cacheprovider . ../README.md",
         cwd=Path("tests"),
+        when=".",
         env={"SALIX_REQUIRE_INSTALLED": "1"},
     ),
 )
