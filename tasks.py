@@ -283,6 +283,11 @@ coverage = Parallel(
         {"OS": "macos-15-intel", "PY": NEWEST},
         {"OS": "windows-11-arm", "PY": WINDOWS_ARM_PYTHON.format(WINDOWS_ARM_OLDEST)},
         {"OS": "windows-11-arm", "PY": WINDOWS_ARM_PYTHON.format(NEWEST)},
+        *(
+            {"OS": runner, "PY": python}
+            for runner in ("ubuntu-latest", "macos-latest", "windows-latest", "macos-15-intel")
+            for python in FREE_THREADED
+        ),
     ),
 )
 
