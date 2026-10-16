@@ -151,11 +151,11 @@ enum result carry_group_members(
 			return RESULT_ERROR;
 		}
 
-#	if GROUP_DECLARES_EXCS_STR
-		if (group_layout_has_excs_str()) {
-			Py_XSETREF(group->excs_str, Py_XNewRef(excs_str));
+		PyObject * * const excs_str_slot = group_excs_str_slot(self);
+
+		if (excs_str_slot != NULL) {
+			Py_XSETREF(*excs_str_slot, Py_XNewRef(excs_str));
 		}
-#	endif
 	}
 #endif
 

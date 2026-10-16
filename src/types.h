@@ -59,28 +59,38 @@ typedef struct StructType {
 	Py_ssize_t struct_exceptions_index;
 } StructType;
 
-#define GROUP_DECLARES_EXCS_STR ( \
-	(PY_VERSION_HEX >= 0x030D0C00 && PY_VERSION_HEX < 0x030E0000) || \
-	PY_VERSION_HEX >= 0x030E0400 \
-)
+#if PY_VERSION_HEX >= 0x030B0000
+struct group_layout_with_excs_str {
+	PyException_HEAD
+	PyObject * msg;
+	PyObject * excs;
+	PyObject * excs_str;
+};
+#endif
 
 static inline bool group_layout_has_excs_str(void) {
-#if GROUP_DECLARES_EXCS_STR
+#if PY_VERSION_HEX >= 0x030B0000
 	return ((PyTypeObject *) PyExc_BaseExceptionGroup)->tp_basicsize >=
-		(Py_ssize_t) (offsetof(PyBaseExceptionGroupObject, excs_str) + sizeof(PyObject *));
+		(Py_ssize_t) sizeof(struct group_layout_with_excs_str);
 #endif
 
 	return false;
 }
 
-static inline PyObject * group_excs_str(PyObject * const source) {
-#if GROUP_DECLARES_EXCS_STR
+static inline PyObject * * group_excs_str_slot(PyObject * const group) {
+#if PY_VERSION_HEX >= 0x030B0000
 	if (group_layout_has_excs_str()) {
-		return ((PyBaseExceptionGroupObject *) source)->excs_str;
+		return &((struct group_layout_with_excs_str *) group)->excs_str;
 	}
 #endif
 
 	return NULL;
+}
+
+static inline PyObject * group_excs_str(PyObject * const source) {
+	PyObject * * const slot = group_excs_str_slot(source);
+
+	return slot != NULL ? *slot : NULL;
 }
 
 static inline bool is_exception_struct(PyTypeObject * const cls) {
