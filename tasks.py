@@ -33,26 +33,42 @@ _PROJECT_VERSION = re.search(
 assert _PROJECT_VERSION is not None
 VERSION = _PROJECT_VERSION.group(1)
 
+_PYTHON_TARGETS = Path("nix/python-targets.nix").read_text(encoding="utf-8")
+_PINS = re.findall(
+    r'^    "([0-9.]+t?)" = \{\n'
+    r'      version = "([^"]+)";\n'
+    r'      tag = "[^"]+";\n'
+    r'      abiTag = "([^"]+)";\n'
+    r'      pbsVariant = "([^"]*)";\r?$',
+    _PYTHON_TARGETS,
+    re.MULTILINE,
+)
+assert len(_PINS) == _PYTHON_TARGETS.count("pbsVariant = ")
+assert all(
+    name.endswith("t") == abi_tag.endswith("t") == (variant == "-freethreaded")
+    for name, _, abi_tag, variant in _PINS
+)
+PINNED = {name: version for name, version, _, _ in _PINS}
+assert any(name.endswith("t") for name in PINNED)
+
 _UNTESTED_PYTHONS = re.search(
-    r"untestedPythons = \[([^\]]*)\]", Path("flake.nix").read_text(encoding="utf-8")
+    r"^ +untestedPythons = \[([^\]]*)\];\r?$",
+    Path("flake.nix").read_text(encoding="utf-8"),
+    re.MULTILINE,
 )
 assert _UNTESTED_PYTHONS is not None
-_PYTHON_TARGETS = Path("nix/python-targets.nix").read_text(encoding="utf-8")
-_PINNED_FREE_THREADED = re.findall(r'^    "([0-9.]+t)" = \{', _PYTHON_TARGETS, re.MULTILINE)
-assert _PINNED_FREE_THREADED
-assert len(_PINNED_FREE_THREADED) == _PYTHON_TARGETS.count('pbsVariant = "-freethreaded";')
+UNTESTED = tuple(re.findall(r'"([^"]+)"', re.sub(r"/\*.*?\*/", "", _UNTESTED_PYTHONS.group(1))))
+assert set(UNTESTED) <= set(PINNED)
 FREE_THREADED = tuple(
-    python
-    for python in _PINNED_FREE_THREADED
-    if python not in re.findall(r'"([^"]+)"', _UNTESTED_PYTHONS.group(1))
+    python for python in PINNED if python.endswith("t") and python not in UNTESTED
 )
 
 PYTEST = (
-    "uv run --package salix-tests --managed-python --python {PY} python -m pytest"
+    "uv run --package salix-tests --managed-python --python {PYTHON} python -m pytest"
 )
 ENVIRONMENT_PER_INTERPRETER = {"UV_PROJECT_ENVIRONMENT": ".venvs/{PY}"}
 
-MAKE_ENV = "uv venv --clear --python {PY} --managed-python .venvs/{PY}"
+MAKE_ENV = "uv venv --clear --python {PYTHON} --managed-python .venvs/{PY}"
 make_env = Task(MAKE_ENV, mutates=True)
 
 BUILD = (
@@ -89,6 +105,12 @@ pytest = Task(
     env=ENVIRONMENT_PER_INTERPRETER,
     agent_format=JUNIT_FORMAT,
 )
+INTERPRETER_GUARD = (
+    ".venvs/{PY}/bin/python -c \"import platform, sysconfig;"
+    " assert platform.python_version()"
+    " + ('t' if sysconfig.get_config_var('Py_GIL_DISABLED') else '') == '{PYTHON}'\""
+)
+interpreter_guard = Task(INTERPRETER_GUARD)
 compile_flags = Task("uv run --no-sync python tools/compile_flags.py", mutates=True)
 
 clean = Task(
@@ -159,19 +181,40 @@ flake_evaluates = Task(
 )
 flake_check = Sequential(flake_evaluates, Task("nix flake check", when=NIX_INPUTS))
 
-test = Parallel(Sequential(build, pytest), matrix={"PY": PYTHONS})
+test = Parallel(
+    Sequential(build, interpreter_guard, pytest),
+    variants=tuple({"PY": python, "PYTHON": PINNED.get(python, python)} for python in PYTHONS),
+)
 
 instructions = Parallel(
     Sequential(
         build,
+        interpreter_guard,
         Task("nix shell --inputs-from . nixpkgs#valgrind --command .venvs/{PY}/bin/python bench/instructions.py"),
     ),
-    matrix={"PY": (NEWEST,)},
+    variants=({"PY": NEWEST, "PYTHON": PINNED.get(NEWEST, NEWEST)},),
 )
 
 FREE_THREADED_ROOT = {"UV_PYTHON_INSTALL_DIR": ".free-threaded-python"}
+
+
+def on_free_threaded_axes(command: str) -> str:
+    return command.replace("{PY}", "{FT}").replace("{PYTHON}", "{FT_PYTHON}")
+
+
 free_threaded = Parallel(
-    Sequential(build, pytest), matrix={"PY": FREE_THREADED}, env=FREE_THREADED_ROOT
+    Sequential(
+        Task(on_free_threaded_axes(MAKE_ENV), mutates=True),
+        Task(on_free_threaded_axes(BUILD), mutates=True, env=STRICT_BUILD),
+        Task(on_free_threaded_axes(INTERPRETER_GUARD)),
+        Task(
+            on_free_threaded_axes(PYTEST),
+            env={name: on_free_threaded_axes(value) for name, value in ENVIRONMENT_PER_INTERPRETER.items()},
+            agent_format=JUNIT_FORMAT,
+        ),
+    ),
+    variants=tuple({"FT": python, "FT_PYTHON": f"{PINNED[python]}t"} for python in FREE_THREADED),
+    env=FREE_THREADED_ROOT,
 )
 HEADER_GATES = (
     {"BEFORE": "3.13.11", "AFTER": "3.13.12"},
