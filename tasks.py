@@ -254,38 +254,28 @@ header_gates = Parallel(
     variants=HEADER_GATES,
 )
 
-PYODIDE_XBUILDENV = "314.0.7"
-PYODIDE = (
-    "env -u CC -u LDSHARED -u CXX uvx --python 3.14"
-    " --from pyodide-cli==0.5.0 --with pyodide-build==0.39.1 pyodide"
-)
-WITH_NODE = "nix shell --inputs-from .. nixpkgs#nodejs --command "
+PYODIDE_PIN = '"$(nix eval --raw --file nix/pyodide.nix {})"'
 pyodide = Sequential(
-    Task(PYODIDE + " xbuildenv install " + PYODIDE_XBUILDENV, mutates=True),
-    Task(PYODIDE + " build --outdir dist", mutates=True, env=STRICT_BUILD),
+    Task("nix build .#wheel-pyodide --out-link dist/wheel-pyodide", mutates=True),
+    Task("nix build .#pyodide-python --out-link dist/pyodide-python", mutates=True),
     Task(
         "uv export --frozen --package salix-tests --no-hashes --no-emit-workspace"
         " --output-file dist/pyodide-test-requirements.txt",
         mutates=True,
     ),
     Task(
-        WITH_NODE + PYODIDE + " venv --clear pyodide-venv",
-        cwd=Path("dist"),
-        when=".",
+        "sh -c 'rm -rf dist/pyodide-site && uvx --python 3.14 --from pip==26.2.1 pip install"
+        " --target dist/pyodide-site --no-deps --only-binary=:all:"
+        f" --platform {PYODIDE_PIN.format('platformTag')}"
+        f" --python-version {PYODIDE_PIN.format('python')}"
+        " -r dist/pyodide-test-requirements.txt dist/wheel-pyodide/salix-*.whl'",
         mutates=True,
     ),
     Task(
-        WITH_NODE + "sh -c 'pyodide-venv/bin/pip install"
-        f" salix-{VERSION}-*-pyemscripten_*.whl -r pyodide-test-requirements.txt'",
-        cwd=Path("dist"),
-        when=".",
-        mutates=True,
-    ),
-    Task(
-        WITH_NODE + "../dist/pyodide-venv/bin/python -m pytest -p no:cacheprovider . ../README.md",
+        "../dist/pyodide-python/bin/pyodide-python -m pytest -p no:cacheprovider . ../README.md",
         cwd=Path("tests"),
         when=".",
-        env={"SALIX_REQUIRE_INSTALLED": "1"},
+        env={"SALIX_REQUIRE_INSTALLED": "1", "PYTHONPATH": "../dist/pyodide-site"},
     ),
 )
 

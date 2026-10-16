@@ -96,9 +96,36 @@ def pe(data_directory_count: int, magic: int = 0x20B) -> bytes:
     )
 
 
+WASM_HEADER = b"\0asm\x01\0\0\0"
+
+
+def wasm_section(kind: int, *items: bytes) -> bytes:
+    body = bytes([len(items)]) + b"".join(items)
+    return bytes([kind, len(body)]) + body
+
+
+def wasm_name(name: str) -> bytes:
+    return bytes([len(name)]) + name.encode()
+
+
+def wasm_exporting(*names: str) -> bytes:
+    return WASM_HEADER + wasm_section(7, *(wasm_name(name) + b"\0\0" for name in names))
+
+
+WASM_SIDE_MODULE_EXPORTS = ("__wasm_call_ctors", "__wasm_apply_data_relocs", "PyInit_salix")
+
+WASM_WITH_A_SECTION_PAST_THE_END = WASM_HEADER + bytes([7, 16])
+
+WASM_WITH_AN_UNKNOWN_IMPORT_KIND = WASM_HEADER + wasm_section(2, wasm_name("env") + wasm_name("thing") + b"\x09")
+
+WASM_WITH_AN_ENDLESS_LEB128 = WASM_HEADER + bytes([7]) + b"\x80" * 10
+
+WASM_WITH_64_BIT_MEMORY = WASM_HEADER + wasm_section(2, wasm_name("env") + wasm_name("memory") + b"\x02\x04\x01")
+
 ELF = ("manylinux_2_17_x86_64", "salix/__init__.cpython-313-x86_64-linux-gnu.so")
 MACHO = ("macosx_10_13_x86_64", "salix/__init__.cpython-313-darwin.so")
 PE = ("win_amd64", "salix/__init__.cp313-win_amd64.pyd")
+WASM = ("pyemscripten_2026_0_wasm32", "salix/__init__.cpython-313-wasm32-emscripten.so")
 
 
 @pytest.mark.parametrize(
@@ -114,6 +141,9 @@ PE = ("win_amd64", "salix/__init__.cp313-win_amd64.pyd")
         (PE, pe(16), "no file-backed section"),
         (PE, pe(0), "declares no data directories"),
         (PE, pe(16, magic=0x10B), "not PE32+"),
+        (WASM, WASM_WITH_A_SECTION_PAST_THE_END, "has size 16"),
+        (WASM, WASM_WITH_AN_UNKNOWN_IMPORT_KIND, "9 is not a valid WasmImport"),
+        (WASM, WASM_WITH_AN_ENDLESS_LEB128, "longer than 64 bits"),
     ],
     ids=[
         "truncated-elf",
@@ -126,6 +156,9 @@ PE = ("win_amd64", "salix/__init__.cp313-win_amd64.pyd")
         "pe-rva-outside-sections",
         "pe-no-data-directories",
         "pe32",
+        "wasm-section-past-the-end",
+        "wasm-unknown-import-kind",
+        "wasm-endless-leb128",
     ],
 )
 def test_a_payload_that_cannot_be_read_fails_that_wheel_cleanly(target, payload, reason, tmp_path):
@@ -146,6 +179,32 @@ def test_a_payload_of_the_wrong_shape_reports_only_its_shape(tmp_path):
     assert "tag win_amd64 implies" in completed.stderr
     assert "exports" not in completed.stderr
     assert "could not be checked" not in completed.stderr
+
+
+def test_a_64_bit_side_module_does_not_pass_for_a_wasm32_tag(tmp_path):
+    completed = check(wheel(tmp_path, *WASM, WASM_WITH_64_BIT_MEMORY))
+
+    assert completed.returncode == 1
+    assert "is Shape(container='wasm', machine='wasm64'), tag pyemscripten_2026_0_wasm32 implies" in completed.stderr
+
+
+def test_a_side_module_exporting_its_init_beside_the_linkers_symbols_passes(tmp_path):
+    completed = check(wheel(tmp_path, *WASM, wasm_exporting(*WASM_SIDE_MODULE_EXPORTS)))
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.startswith("ok ")
+
+
+@pytest.mark.parametrize(
+    "exports",
+    [WASM_SIDE_MODULE_EXPORTS[:2], (*WASM_SIDE_MODULE_EXPORTS, "salix_internal")],
+    ids=["without-its-init", "with-an-internal-symbol"],
+)
+def test_a_side_module_exporting_anything_else_fails(exports, tmp_path):
+    completed = check(wheel(tmp_path, *WASM, wasm_exporting(*exports)))
+
+    assert completed.returncode == 1
+    assert "not PyInit_salix alone or with the linker's" in completed.stderr
 
 
 def test_a_wheel_that_is_not_a_zip_fails_alone(tmp_path):
