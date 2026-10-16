@@ -33,6 +33,20 @@ _PROJECT_VERSION = re.search(
 assert _PROJECT_VERSION is not None
 VERSION = _PROJECT_VERSION.group(1)
 
+_UNTESTED_PYTHONS = re.search(
+    r"untestedPythons = \[([^\]]*)\]", Path("flake.nix").read_text(encoding="utf-8")
+)
+assert _UNTESTED_PYTHONS is not None
+_PYTHON_TARGETS = Path("nix/python-targets.nix").read_text(encoding="utf-8")
+_PINNED_FREE_THREADED = re.findall(r'^    "([0-9.]+t)" = \{', _PYTHON_TARGETS, re.MULTILINE)
+assert _PINNED_FREE_THREADED
+assert len(_PINNED_FREE_THREADED) == _PYTHON_TARGETS.count('pbsVariant = "-freethreaded";')
+FREE_THREADED = tuple(
+    python
+    for python in _PINNED_FREE_THREADED
+    if python not in re.findall(r'"([^"]+)"', _UNTESTED_PYTHONS.group(1))
+)
+
 PYTEST = (
     "uv run --package salix-tests --managed-python --python {PY} python -m pytest"
 )
@@ -155,8 +169,6 @@ instructions = Parallel(
     matrix={"PY": (NEWEST,)},
 )
 
-FREE_THREADED = ("3.14t", "3.15t")
-
 FREE_THREADED_ROOT = {"UV_PYTHON_INSTALL_DIR": ".free-threaded-python"}
 free_threaded = Parallel(
     Sequential(build, pytest), matrix={"PY": FREE_THREADED}, env=FREE_THREADED_ROOT
@@ -256,7 +268,8 @@ WHEEL_RUN = "uv run --no-cache --no-project --managed-python --python {PY}"
 wheel_guard = Task(
     WHEEL_RUN + " --no-index --find-links ../result-wheels"
     f' --with "salix=={VERSION}"'
-    ' python -c "import salix"',
+    " python -c \"import salix, sysconfig;"
+    " assert bool(sysconfig.get_config_var('Py_GIL_DISABLED')) == '{PY}'.endswith('t')\"",
     cwd=Path("tests"),
 )
 wheel_test = Task(
@@ -271,18 +284,23 @@ WINDOWS_ARM_OLDEST = "3.11"
 
 WINDOWS_ARM_PYTHON = "cpython-{}-windows-aarch64"
 
+COVERAGE_RUNNERS = {
+    "ubuntu-latest": (*PYTHONS, *FREE_THREADED),
+    "macos-latest": (OLDEST, NEWEST, *FREE_THREADED),
+    "windows-latest": (OLDEST, NEWEST, *FREE_THREADED),
+    "macos-15-intel": (OLDEST, NEWEST, *FREE_THREADED),
+    "windows-11-arm": (
+        WINDOWS_ARM_PYTHON.format(WINDOWS_ARM_OLDEST),
+        WINDOWS_ARM_PYTHON.format(NEWEST),
+    ),
+}
+
 coverage = Parallel(
     Sequential(wheel_guard, wheel_test),
-    variants=(
-        *({"OS": "ubuntu-latest", "PY": python} for python in PYTHONS),
-        {"OS": "macos-latest", "PY": OLDEST},
-        {"OS": "macos-latest", "PY": NEWEST},
-        {"OS": "windows-latest", "PY": OLDEST},
-        {"OS": "windows-latest", "PY": NEWEST},
-        {"OS": "macos-15-intel", "PY": OLDEST},
-        {"OS": "macos-15-intel", "PY": NEWEST},
-        {"OS": "windows-11-arm", "PY": WINDOWS_ARM_PYTHON.format(WINDOWS_ARM_OLDEST)},
-        {"OS": "windows-11-arm", "PY": WINDOWS_ARM_PYTHON.format(NEWEST)},
+    variants=tuple(
+        {"OS": runner, "PY": python}
+        for runner, pythons in COVERAGE_RUNNERS.items()
+        for python in pythons
     ),
 )
 
