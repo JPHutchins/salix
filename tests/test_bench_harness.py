@@ -3,12 +3,14 @@ import sys
 from pathlib import Path
 
 import pytest
+from platforms import starts_a_subprocess
 
 SOURCE_TIERS = Path(__file__).resolve().parent.parent / "bench" / "source-tiers"
 
 pytestmark = [
     pytest.mark.skipif(not SOURCE_TIERS.exists(), reason="bench/ is not beside these tests"),
     pytest.mark.skipif(sys.platform == "win32", reason="the harness runs its children with a POSIX PATH"),
+    starts_a_subprocess,
 ]
 
 

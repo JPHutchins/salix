@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from platforms import starts_a_subprocess
 
 CHECK_TAG = Path(__file__).resolve().parent.parent / "tools" / "check_tag.py"
 
@@ -24,6 +25,7 @@ def check(tag: str, declared: str, where: Path) -> subprocess.CompletedProcess[s
     )
 
 
+@starts_a_subprocess
 @pytest.mark.parametrize(
     "declared",
     ["1.0.0", "0.1.0", "1.0", "1", "1.0.0rc1", "1.0.0a1", "1.0.0b2", "1.0.0.post1",
@@ -33,6 +35,7 @@ def test_a_canonical_version_matching_its_tag_passes(declared, tmp_path):
     assert check(f"v{declared}", declared, tmp_path).returncode == 0
 
 
+@starts_a_subprocess
 @pytest.mark.parametrize(
     "declared",
     ["1.0.0-rc1", "1.0.0.rc1", "01.0.0", "1.0.0.RELEASE", "1.0.0-1", "1.0.0.rev1",
@@ -46,6 +49,7 @@ def test_a_version_pypi_would_rename_is_refused(declared, tmp_path):
     assert "canonical PEP 440" in result.stderr
 
 
+@starts_a_subprocess
 def test_a_tag_that_names_another_version_is_refused(tmp_path):
     result = check("v1.0.1", "1.0.0", tmp_path)
 
@@ -54,6 +58,7 @@ def test_a_tag_that_names_another_version_is_refused(tmp_path):
     assert "1.0.0" in result.stderr
 
 
+@starts_a_subprocess
 def test_a_tag_without_the_v_is_refused(tmp_path):
     assert check("1.0.0", "1.0.0", tmp_path).returncode != 0
 
@@ -98,6 +103,7 @@ def test_the_pattern_accepts_exactly_what_packaging_calls_canonical():
     ] == []
 
 
+@starts_a_subprocess
 @pytest.mark.parametrize("declared", ["1.0", "1", "[\"1.0.0\"]", "true"])
 def test_a_version_that_is_not_a_string_is_refused_with_a_message(declared, tmp_path):
     (tmp_path / "pyproject.toml").write_text(f"[project]\nversion = {declared}\n")
@@ -115,6 +121,7 @@ def test_a_version_that_is_not_a_string_is_refused_with_a_message(declared, tmp_
     assert "Traceback" not in result.stderr
 
 
+@starts_a_subprocess
 def test_no_argument_is_refused(tmp_path):
     result = subprocess.run(
         [sys.executable, str(CHECK_TAG)], cwd=tmp_path, capture_output=True, text=True, check=False

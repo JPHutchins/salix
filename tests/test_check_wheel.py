@@ -7,10 +7,14 @@ import zipfile
 from pathlib import Path
 
 import pytest
+from platforms import starts_a_subprocess
 
 CHECK_WHEEL = Path(__file__).resolve().parent.parent / "tools" / "check_wheel.py"
 
-pytestmark = pytest.mark.skipif(not CHECK_WHEEL.exists(), reason="tools/ is not beside these tests")
+pytestmark = [
+    pytest.mark.skipif(not CHECK_WHEEL.exists(), reason="tools/ is not beside these tests"),
+    starts_a_subprocess,
+]
 
 DIST_INFO = "salix-0.1.0a1.dist-info"
 

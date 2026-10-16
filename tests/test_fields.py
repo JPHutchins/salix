@@ -10,6 +10,7 @@ from dataclasses import InitVar
 from typing import Annotated, ClassVar, Generic, TypeVar
 
 import pytest
+from platforms import starts_a_subprocess
 
 import salix
 from salix import MISSING, Field, Struct, fields
@@ -258,6 +259,7 @@ def test_a_class_its_records_reach_back_to_is_collected():
     assert collected() is None
 
 
+@starts_a_subprocess
 def test_fields_still_answer_after_the_module_leaves_sys_modules():
     package_parent = os.path.dirname(os.path.dirname(salix.__file__))
     probe = (
@@ -282,6 +284,7 @@ def test_fields_still_answer_after_the_module_leaves_sys_modules():
     assert result.stdout.strip() == "True"
 
 
+@starts_a_subprocess
 def test_reading_fields_imports_nothing():
     package_parent = os.path.dirname(os.path.dirname(salix.__file__))
     probe = (
