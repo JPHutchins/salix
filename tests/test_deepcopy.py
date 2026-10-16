@@ -2,6 +2,7 @@ import copy
 import weakref
 
 import pytest
+from platforms import recurses_through_c_until_recursion_error
 
 from salix import Struct
 
@@ -662,6 +663,7 @@ def test_a_list_subclass_field_is_copied_by_its_own_hook():
     assert copy.deepcopy(Bag(1, Hooked(), int, Point)).items == "hooked"
 
 
+@recurses_through_c_until_recursion_error
 def test_a_deeply_nested_list_field_raises_recursion_error_like_copy_dot_deepcopy():
     nested: list = []
     for _ in range(100_000):

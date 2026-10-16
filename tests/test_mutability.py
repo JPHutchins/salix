@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Generic, TypeVar
 
 import pytest
+from platforms import starts_a_subprocess
 from values import EVERY, identify
 
 import salix
@@ -66,6 +67,7 @@ def test_a_frozen_refusal_pickles_back_to_salix_s_class():
     assert (type(restored), restored.args) == (FrozenInstanceError, raised.value.args)
 
 
+@starts_a_subprocess
 def test_the_first_frozen_write_imports_nothing():
     package_parent = os.path.dirname(os.path.dirname(salix.__file__))
     probe = (

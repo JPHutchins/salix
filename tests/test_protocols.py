@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from typing import ClassVar, Protocol
 
 import pytest
+from platforms import recurses_through_c_until_recursion_error
 
 from salix import Struct, set_field
 
@@ -86,6 +87,7 @@ def test_an_unhashable_field_makes_the_struct_unhashable():
         hash(Nested([1]))
 
 
+@recurses_through_c_until_recursion_error
 def test_hash_of_a_struct_that_contains_itself():
     class Node(Struct):
         child: object = None

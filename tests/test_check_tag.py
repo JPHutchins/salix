@@ -3,12 +3,14 @@ import sys
 from pathlib import Path
 
 import pytest
+from platforms import starts_a_subprocess
 
 CHECK_TAG = Path(__file__).resolve().parent.parent / "tools" / "check_tag.py"
 
 pytestmark = [
     pytest.mark.skipif(not CHECK_TAG.exists(), reason="tools/ is not beside these tests"),
     pytest.mark.skipif(sys.version_info < (3, 11), reason="check_tag.py needs tomllib"),
+    starts_a_subprocess,
 ]
 
 

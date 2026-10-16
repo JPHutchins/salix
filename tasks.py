@@ -199,6 +199,28 @@ header_gates = Parallel(
     variants=HEADER_GATES,
 )
 
+PYODIDE_XBUILDENV = "314.0.7"
+PYODIDE = (
+    "env -u CC -u LDSHARED -u CXX uvx --python 3.14"
+    " --from pyodide-cli==0.5.0 --with pyodide-build==0.39.1 pyodide"
+)
+WITH_NODE = "nix shell --inputs-from .. nixpkgs#nodejs --command "
+pyodide = Sequential(
+    Task(PYODIDE + " xbuildenv install " + PYODIDE_XBUILDENV, mutates=True),
+    Task(PYODIDE + " build --outdir dist", mutates=True),
+    Task(WITH_NODE + PYODIDE + " venv --clear pyodide-venv", cwd=Path("dist"), mutates=True),
+    Task(
+        WITH_NODE + "sh -c 'pyodide-venv/bin/pip install *.whl pytest hypothesis packaging'",
+        cwd=Path("dist"),
+        mutates=True,
+    ),
+    Task(
+        WITH_NODE + "../dist/pyodide-venv/bin/python -m pytest -p no:cacheprovider . ../README.md",
+        cwd=Path("tests"),
+        env={"SALIX_REQUIRE_INSTALLED": "1"},
+    ),
+)
+
 in_place_build = Task("uv run python setup.py build_ext --inplace", mutates=True, env=STRICT_BUILD)
 benchmark = Sequential(in_place_build, bench)
 CONFORMANCE_PYTHON = "3.14.6"

@@ -5,6 +5,7 @@ import sys
 import sysconfig
 
 import pytest
+from platforms import starts_a_subprocess
 
 import salix
 from salix import Struct
@@ -74,6 +75,7 @@ def test_a_second_subinterpreter_import_does_not_corrupt_this_interpreter():
     assert isinstance(hash(instance), int)
 
 
+@starts_a_subprocess
 def test_a_bare_import_exits_cleanly():
     """The module state is cleared in m_free when the module deallocates, and
     a bare interpreter reaches that deallocation -- the suite does not,

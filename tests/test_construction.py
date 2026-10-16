@@ -3,6 +3,7 @@ import copyreg
 import threading
 
 import pytest
+from platforms import recurses_through_c_until_recursion_error
 from values import COPIED_WHEN_EMPTY, NON_EMPTY
 
 from salix import Struct, set_field
@@ -564,6 +565,7 @@ class TestMutableDefaults:
         assert calls == [1, 1, 1]
         assert Grandchild().v is Base().v
 
+    @recurses_through_c_until_recursion_error
     def test_a_value_that_holds_itself_is_shared_rather_than_refused(self):
         """A frozen struct pointing at itself, built through `set_field`, runs
         the hash out of stack instead of declining it -- so the probe never
@@ -582,6 +584,7 @@ class TestMutableDefaults:
 
         assert Holder().w is loop
 
+    @recurses_through_c_until_recursion_error
     def test_a_mutable_whose_own_hash_recurses_is_shared_too(self):
         """The price of sharing what the probe cannot classify, pinned rather
         than left to be discovered: this one really is the aliasing bug, and it
