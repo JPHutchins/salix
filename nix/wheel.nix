@@ -55,8 +55,7 @@ stdenvNoCC.mkDerivation {
 
     zig cc \
       -target ${platform.zigTarget} \
-      "''${cFlags[@]}" \
-      ${lib.optionalString (python.pbsVariant == "-freethreaded") "-DPy_GIL_DISABLED=1"} \
+      "''${cFlags[@]}"${lib.optionalString (lib.hasSuffix "t" python.abiTag) " -DPy_GIL_DISABLED=1"} \
       -fPIC -shared \
       -I"$NIX_BUILD_TOP/python/include" \
       -I"$NIX_BUILD_TOP/python/include/python${pythonMinor}" \
