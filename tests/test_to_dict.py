@@ -1,3 +1,5 @@
+import sys
+
 import pytest
 
 from salix import Struct, to_dict
@@ -51,6 +53,22 @@ def test_the_values_are_the_instance_values_not_copies():
 def test_an_unset_field_is_skipped():
     assert to_dict(Partial(1)) == {"x": 1}
     assert to_dict(Point.__new__(Point)) == {}
+
+
+@pytest.mark.parametrize("set_count", [1, 6, 11])
+def test_a_sparse_instance_gives_a_dict_sized_for_its_set_fields(set_count):
+    Wide = type("Wide", (Struct,), {"__annotations__": {f"field_{i}": object for i in range(30)}})
+    Narrow = type("Narrow", (Struct,), {"__annotations__": {f"field_{i}": object for i in range(set_count)}})
+    values = {f"field_{i}": i for i in range(set_count)}
+    sparse = Wide.__new__(Wide)
+    sparse.__setstate__((None, values))
+
+    built = to_dict(sparse)
+    _, slots = sparse.__reduce_ex__(4)[2]
+
+    assert built == values
+    assert sys.getsizeof(built) == sys.getsizeof(to_dict(Narrow(**values)))
+    assert sys.getsizeof(slots) == sys.getsizeof(built)
 
 
 def test_a_field_set_to_none_is_kept():
