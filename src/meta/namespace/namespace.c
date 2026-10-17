@@ -590,13 +590,12 @@ enum result refuse_unannotated_field_bindings(
 
 		PyErr_Format(
 			PyExc_TypeError,
-			"'%U' is a field '%U' inherits from '%s', and the body of '%U' binds an object "
+			"'%U' is a field '%U' inherits from '%s', and its class body binds an object "
 			"of type '%.100s' to that name without an annotation, which salix would drop; "
 			"to give the field a new default, redeclare it with its annotation",
 			field_name,
 			class_name,
-			base != NULL ? struct_type_name(base) : "its base",
-			class_name,
+			struct_type_name(base),
 			Py_TYPE(bound)->tp_name
 		);
 

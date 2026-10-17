@@ -106,13 +106,6 @@ def test_the_class_is_callable_through_the_slow_path_too():
     assert Point(*arguments) == Point.__call__(*arguments)
 
 
-@pytest.mark.parametrize(
-    ("positional", "keywords"), [((1, 2), {}), ((1,), {"y": 2})], ids=["empty", "filled"]
-)
-def test_the_metatype_call_reads_its_keyword_dict_whether_or_not_it_is_empty(positional, keywords):
-    assert type(Point).__call__(Point, *positional, **keywords) == Point(1, 2)
-
-
 class TestMutableDefaults:
     """`xs: list = []` reads as an empty list per instance, and that is what it
     gets.

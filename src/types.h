@@ -388,23 +388,34 @@ static inline enum struct_creation_stage struct_creation_stage_of(StructType con
 #endif
 }
 
-static inline bool struct_class_usable_here(StructType const * const type) {
-	enum struct_creation_stage const stage = struct_creation_stage_of(type);
+static inline char const * unusable_reason(StructType const * const type) {
+	char const * const unfinished = "until its class has finished being created";
 
-	return (
-		stage == STRUCT_CREATED ||
-		(
-			stage == STRUCT_INSTALLED_FOR_ITS_BUILDER &&
-			type->struct_builder_thread == PyThread_get_thread_ident()
-		)
-	);
+	switch (struct_creation_stage_of(type)) {
+		case STRUCT_BEING_CREATED:
+			return unfinished;
+		case STRUCT_INSTALLED_FOR_ITS_BUILDER: return (
+			type->struct_builder_thread == PyThread_get_thread_ident() ? NULL :
+			unfinished
+		);
+		case STRUCT_ABANDONED:
+			return "because its class failed to build";
+		case STRUCT_CREATED:
+			break;
+	}
+
+	return NULL;
+}
+
+static inline bool struct_class_usable_here(StructType const * const type) {
+	return unusable_reason(type) == NULL;
 }
 
 static inline void struct_class_advance_to(
 	StructType * const type,
 	enum struct_creation_stage const stage
 ) {
-	if (stage <= type->struct_creation_stage) {
+	if (stage <= struct_creation_stage_of(type)) {
 		return;
 	}
 
@@ -423,24 +434,21 @@ static inline struct salix_state * created_struct_state_of(PyObject * const self
 	return is_struct(self) ? struct_type_of(self)->struct_state : NULL;
 }
 
-static inline char const * why_unusable_here(StructType const * const type) {
-	switch (struct_creation_stage_of(type)) {
-		case STRUCT_ABANDONED:
-			return "because its class failed to build";
-		case STRUCT_BEING_CREATED:
-		case STRUCT_INSTALLED_FOR_ITS_BUILDER:
-		case STRUCT_CREATED:
-			break;
-	}
-
-	return "until its class has finished being created";
+static inline PyObject * dict_safe_to_read_unlocked(PyObject * const dict) {
+#ifdef Py_GIL_DISABLED
+	return PyDict_Copy(dict);
+#else
+	return Py_NewRef(dict);
+#endif
 }
 
 static inline bool refused_until_created(
 	StructType const * const type,
 	char const * const operation
 ) {
-	if (struct_class_usable_here(type)) {
+	char const * const unusable = unusable_reason(type);
+
+	if (unusable == NULL) {
 		return false;
 	}
 
@@ -449,7 +457,7 @@ static inline bool refused_until_created(
 		"cannot %s '%.200s' %s",
 		operation,
 		struct_type_name(type),
-		why_unusable_here(type)
+		unusable
 	);
 
 	return true;
@@ -475,12 +483,14 @@ static inline PyObject * struct_metadata(
 	StructType const * const type,
 	enum struct_metadata const which
 ) {
-	if (!struct_class_usable_here(type)) {
+	char const * const unusable = unusable_reason(type);
+
+	if (unusable != NULL) {
 		PyErr_Format(
 			PyExc_AttributeError,
 			"the fields of '%.200s' cannot be read %s",
 			struct_type_name(type),
-			why_unusable_here(type)
+			unusable
 		);
 
 		return NULL;

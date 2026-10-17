@@ -357,12 +357,14 @@ PyObject * Struct_fields(PyObject * const module, PyObject * const class_or_inst
 
 	StructType * const type = (StructType *) struct_class;
 
-	if (!struct_class_usable_here(type)) {
+	char const * const unusable = unusable_reason(type);
+
+	if (unusable != NULL) {
 		PyErr_Format(
 			PyExc_TypeError,
 			"fields() cannot read '%.200s' %s",
 			struct_type_name(type),
-			why_unusable_here(type)
+			unusable
 		);
 
 		return NULL;

@@ -203,7 +203,7 @@ PyObject * build_struct_class(
 	PyObject * name,
 	PyObject * bases,
 	PyObject * original_namespace,
-	PyObject * keywords,
+	PyObject * caller_keywords,
 	struct salix_state * state
 );
 enum result install_fields(
