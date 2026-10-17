@@ -767,6 +767,20 @@ class TestMutableDefaults:
 
         assert deepcopy_calls_from_outside_copy(Holder) == calls
 
+    def test_counting_deepcopy_calls_hands_the_profiler_back_to_the_one_it_found(self):
+        def outer_profile(frame: FrameType, event: str, argument: object) -> None:
+            pass
+
+        enclosing_profile = sys.getprofile()
+        sys.setprofile(outer_profile)
+        try:
+            deepcopy_calls_from_outside_copy(lambda: None)
+            restored = sys.getprofile()
+        finally:
+            sys.setprofile(enclosing_profile)
+
+        assert restored is outer_profile
+
     def test_a_registered_reductor_copies_a_set_default(self, monkeypatch):
         class Holder(Struct):
             v: set = {1, 2}  # noqa: RUF012
@@ -1121,11 +1135,12 @@ def deepcopy_calls_from_outside_copy(operation: Callable[[], object]) -> int:
         if event == "call" and frame.f_code is copy.deepcopy.__code__ and called_from_outside_copy:
             calls += 1
 
+    outer_profile = sys.getprofile()
     sys.setprofile(profile)
     try:
         operation()
     finally:
-        sys.setprofile(None)
+        sys.setprofile(outer_profile)
 
     return calls
 

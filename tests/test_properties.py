@@ -12,6 +12,11 @@ class Pair(Struct):
     y: object
 
 
+class RefusesItsHashWithValueError:
+    def __hash__(self) -> int:
+        raise ValueError("refuses its hash")
+
+
 IDENTIFIERS = st.from_regex(r"\A[a-z][a-z0-9_]{0,10}\Z")
 
 LEAVES = (
@@ -45,6 +50,7 @@ COPYABLE_UNHASHABLE_VALUES = (
     | st.dictionaries(LEAVES, LEAVES)
     | st.sets(LEAVES)
     | st.builds(bytearray, st.binary())
+    | st.builds(RefusesItsHashWithValueError)
 )
 DEFAULT_FIELD_VALUES = (
     VALUES | COPYABLE_UNHASHABLE_VALUES | st.tuples(COPYABLE_UNHASHABLE_VALUES, LEAVES)
