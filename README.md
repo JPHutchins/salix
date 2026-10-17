@@ -105,10 +105,17 @@ False
 
 ```
 
-Only the default itself is tested for being a `frozen=False` struct. One
-nested inside a frozen struct or a tuple default is copied when it makes the
-outer default unhashable, as `eq=True` does, and shared when it hashes by
-identity, as `eq=False` does.
+When a default is copied, each field gets its own copy, so two fields declared
+with one object get separate copies of it.
+
+A default that is neither one of the four nor a `frozen=False` struct is
+hashed. It is deep-copied per instance when the hash raises `TypeError` or
+`ValueError`, shared when the hash succeeds or recurses too deeply, and any
+other exception from the hash fails the class statement. A tuple, or a frozen
+struct under `eq=True`, hashes what it holds, so a list or an `eq=True`
+`frozen=False` struct inside it makes it unhashable, and it is copied with all
+it holds. An `eq=False` struct default hashes by identity, and a default whose
+type's `__hash__` is None is never hashed: either is shared with all it holds.
 
 A default of the four (and their subclasses) is copied per instance: a
 non-empty one is deep-copied, so an inner list in `x: tuple = (1, [])` is
@@ -119,16 +126,13 @@ base-type copy when the constructor signature is not the iterable one — a
 `defaultdict` falls back and becomes a plain `dict`, its factory dropped.
 A value a deepcopy cannot carry (a writable memoryview — one uncarryable
 element shares the whole container, and one uncarryable field the whole
-`frozen=False` struct) or one whose hash fails by recursing falls back to
-sharing the declared object. A type outside the four that declares
-`__hash__ = None` is shared, unless it is a `frozen=False` struct. A field without a
-default cannot
-follow one that has it: append defaulted fields, or default the new field
-too. For the four and a `frozen=False` struct, `__struct_defaults__` holds the
-class's own copy, severed from whatever the class body named: appending to
-the module-level object afterwards does not reach the class. The getters hand
-the stored objects out, not copies: do not mutate what `__struct_defaults__`
-returns.
+`frozen=False` struct) falls back to sharing the declared object. A field
+without a default cannot follow one that has it: append defaulted fields, or
+default the new field too. For the four and a `frozen=False` struct,
+`__struct_defaults__` holds the class's own copy, severed from whatever the
+class body named: appending to the module-level object afterwards does not
+reach the class. The getters hand the stored objects out, not copies: do not
+mutate what `__struct_defaults__` returns.
 
 ## ClassVar and InitVar
 
