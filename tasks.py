@@ -1,7 +1,7 @@
 import json
 import re
 from pathlib import Path
-from typing import TypedDict
+from typing import NamedTuple, TypedDict
 
 from camas import (
     AgentFormat,
@@ -42,9 +42,9 @@ class PythonPin(TypedDict):
     pbsVariant: str
 
 
-_PINS: dict[str, PythonPin] = json.loads(
-    Path("nix/python-targets.json").read_text(encoding="utf-8")
-)["pythons"]
+_TARGETS = json.loads(Path("nix/python-targets.json").read_text(encoding="utf-8"))
+_PINS: dict[str, PythonPin] = _TARGETS["pythons"]
+WHEEL_PLATFORMS = frozenset(_TARGETS["platforms"])
 assert all(
     name.endswith("t") == pin["abiTag"].endswith("t") == (pin["pbsVariant"] == "-freethreaded")
     for name, pin in _PINS.items()
@@ -315,23 +315,31 @@ WINDOWS_ARM_OLDEST = "3.11"
 
 WINDOWS_ARM_PYTHON = "cpython-{}-windows-aarch64"
 
+
+class CoverageRunner(NamedTuple):
+    wheel_platform: str
+    pythons: tuple[str, ...]
+
+
 COVERAGE_RUNNERS = {
-    "ubuntu-latest": (*PYTHONS, *FREE_THREADED),
-    "macos-latest": (OLDEST, NEWEST, *FREE_THREADED),
-    "windows-latest": (OLDEST, NEWEST, *FREE_THREADED),
-    "macos-15-intel": (OLDEST, NEWEST, *FREE_THREADED),
-    "windows-11-arm": (
-        WINDOWS_ARM_PYTHON.format(WINDOWS_ARM_OLDEST),
-        WINDOWS_ARM_PYTHON.format(NEWEST),
+    "ubuntu-latest": CoverageRunner("manylinux-x86_64", (*PYTHONS, *FREE_THREADED)),
+    "ubuntu-24.04-arm": CoverageRunner("manylinux-aarch64", (OLDEST, NEWEST, *FREE_THREADED)),
+    "macos-latest": CoverageRunner("macos-aarch64", (OLDEST, NEWEST, *FREE_THREADED)),
+    "windows-latest": CoverageRunner("windows-x86_64", (OLDEST, NEWEST, *FREE_THREADED)),
+    "macos-15-intel": CoverageRunner("macos-x86_64", (OLDEST, NEWEST, *FREE_THREADED)),
+    "windows-11-arm": CoverageRunner(
+        "windows-aarch64",
+        (WINDOWS_ARM_PYTHON.format(WINDOWS_ARM_OLDEST), WINDOWS_ARM_PYTHON.format(NEWEST)),
     ),
 }
+assert {runner.wheel_platform for runner in COVERAGE_RUNNERS.values()} == WHEEL_PLATFORMS
 
 coverage = Parallel(
     Sequential(wheel_guard, wheel_test),
     variants=tuple(
-        {"OS": runner, "PY": python}
-        for runner, pythons in COVERAGE_RUNNERS.items()
-        for python in pythons
+        {"OS": name, "PY": python}
+        for name, runner in COVERAGE_RUNNERS.items()
+        for python in runner.pythons
     ),
 )
 
