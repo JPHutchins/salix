@@ -38,25 +38,10 @@
 
       untestedPythons = lib.importJSON ./nix/untested-pythons.json;
 
-      testRequirements = map parseTestRequirement (
-        (lib.importTOML ./tests/pyproject.toml).project.dependencies
-      );
-      parseTestRequirement =
-        requirement:
-        let
-          parsed = builtins.match "([A-Za-z0-9][A-Za-z0-9._-]*) *([<>=!~][<>=!~,.*+ 0-9A-Za-z]*)?(; *python_version *< *['\"]([0-9.]+)['\"] *)?" requirement;
-        in
-        assert lib.assertMsg (parsed != null) (
-          "tests/pyproject.toml requires '${requirement}', but flake.nix maps only a name, "
-          + "a version specifier and a python_version < marker to a nixpkgs package"
-        );
-        {
-          inherit requirement;
-          name = builtins.elemAt parsed 0;
-          pythonBelow = builtins.elemAt parsed 3;
-        };
-      testPackages =
-        packages:
+      testRequirements = (lib.importTOML ./tests/pyproject.toml).project.dependencies;
+      testPackages = requirementPackages testRequirements;
+      requirementPackages =
+        requirements: packages:
         map
           (
             { requirement, name, ... }:
@@ -70,8 +55,26 @@
             lib.filter (
               { pythonBelow, ... }:
               pythonBelow == null || lib.versionOlder packages.python.pythonVersion pythonBelow
-            ) testRequirements
+            ) (map parseRequirement requirements)
           );
+      parseRequirement =
+        requirement:
+        let
+          clauses = lib.splitString ";" requirement;
+          name = builtins.match " *([A-Za-z0-9][A-Za-z0-9._-]*)( *[<>=!~(][^[@]*)? *" (builtins.head clauses);
+          bounds = map (builtins.match " *python_version *< *['\"]([0-9]+[.][0-9]+)['\"] *") (
+            builtins.tail clauses
+          );
+        in
+        assert lib.assertMsg (name != null && builtins.length bounds <= 1 && !(lib.elem null bounds)) (
+          "tests/pyproject.toml requires '${requirement}', but flake.nix maps only a name, an optional "
+          + "version specifier and an optional python_version < 'X.Y' marker to a nixpkgs package"
+        );
+        {
+          inherit requirement;
+          name = builtins.head name;
+          pythonBelow = if bounds == [ ] then null else builtins.head (builtins.head bounds);
+        };
 
       releasableWheelNames = map ({ pythonMinor, platformName }: "${pythonMinor}-${platformName}") (
         lib.filter (
@@ -275,6 +278,30 @@
         named
         // {
           c-tests = cTests;
+
+          test-requirements =
+            let
+              keptOn =
+                pythonVersion:
+                requirementPackages [ "plain>=1.0-1" "marked (>= 2); python_version < '3.11'" ] {
+                  python = { inherit pythonVersion; };
+                  plain = "plain";
+                  marked = "marked";
+                };
+            in
+            assert lib.assertMsg
+              (
+                keptOn "3.10" == [
+                  "plain"
+                  "marked"
+                ]
+                && keptOn "3.11" == [ "plain" ]
+              )
+              (
+                "requirementPackages keeps ${builtins.toJSON (keptOn "3.10")} on 3.10 and "
+                + "${builtins.toJSON (keptOn "3.11")} on 3.11, not the marked requirement on 3.10 only"
+              );
+            builtins.deepSeq (map parseRequirement testRequirements) pkgs.emptyFile;
 
           nixfmt = pkgs.runCommand "nixfmt-check" { nativeBuildInputs = [ pkgs.nixfmt ]; } ''
             nixfmt --check ${./flake.nix} ${./nix}/*.nix
