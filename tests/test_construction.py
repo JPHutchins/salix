@@ -106,7 +106,8 @@ def test_the_class_is_callable_through_the_slow_path_too():
 class TestMutableDefaults:
     """`xs: list = []` reads as an empty list per instance, and that is what it
     gets. The four builtins and a `frozen=False` struct are copied at
-    construction, and everything else is shared -- which is cheaper and indistinguishable for a value that cannot
+    construction, any other default is deep-copied when hashing it raises, and
+    everything else is shared -- which is cheaper and indistinguishable for a value that cannot
     be mutated, and simply sharing for one that can. `array.array`, `deque` and
     a writable `memoryview` are in the second group; #51 argues for hashability as the test that would replace the list.
     """
@@ -283,8 +284,9 @@ class TestMutableDefaults:
         ],
     )
     def test_a_mutable_container_outside_the_four_is_shared_and_not_refused(self, value):
-        """The boundary is the four types and their subclasses, not mutability,
-        so these are neither copied nor refused. Every one of these declares
+        """The copied kinds are the four types, their subclasses and a
+        `frozen=False` struct, not every mutable value, so these are neither
+        copied nor refused. Every one of these declares
         `__hash__` is None -- it says it does not hash before being asked --
         which is what #51's rule leaves alone.
 
@@ -960,16 +962,81 @@ class TestMutableDefaults:
         assert first.job.run is not second.job.run
 
     def test_a_mutable_struct_default_a_deepcopy_cannot_carry_is_shared(self):
+        attempts: list[object] = []
+
         class Locked(Struct, frozen=False):
             lock: object
+
+            def __deepcopy__(self, memo):
+                attempts.append(self)
+                raise TypeError("a lock cannot be deep-copied")
 
         declared = Locked(threading.Lock())
 
         class Holder(Struct, frozen=False):
             inner: Locked = declared
 
-        assert Holder().inner is Holder().inner
+        attempts_before_construction = len(attempts)
+        first, second = Holder(), Holder()
+
+        assert first.inner is second.inner is declared
         assert Holder._struct_defaults_[0] is declared
+        assert len(attempts) == attempts_before_construction + 2
+        assert all(attempt is declared for attempt in attempts)
+
+    def test_two_fields_declared_with_one_object_get_separate_copies(self):
+        class Settings(Struct, frozen=False):
+            verbose: bool = False
+
+        shared_settings = Settings()
+        shared_items = [1]
+
+        class Aliased(Struct, frozen=False):
+            first_settings: Settings = shared_settings
+            second_settings: Settings = shared_settings
+            first_items: list = shared_items
+            second_items: list = shared_items
+
+        aliased = Aliased()
+
+        assert aliased.first_settings is not aliased.second_settings
+        assert aliased.first_items is not aliased.second_items
+
+    def test_a_struct_default_that_declares_no_hash_is_shared_with_the_mutable_struct_it_holds(self):
+        class Inner(Struct, frozen=False):
+            x: int = 0
+
+        class Outer(Struct):
+            inner: Inner = Inner()
+            __hash__ = None
+
+        class Holder(Struct, frozen=False):
+            outer: Outer = Outer()
+
+        assert Holder().outer is Holder().outer
+
+    def test_a_list_beside_an_identity_hashed_mutable_struct_copies_both(self):
+        class Inner(Struct, frozen=False, eq=False):
+            x: int = 0
+
+        class Outer(Struct):
+            items: list = []  # noqa: RUF012
+            inner: Inner = Inner()
+
+        class Holder(Struct, frozen=False):
+            outer: Outer = Outer()
+
+        assert Holder().outer.inner is not Holder().outer.inner
+
+    @pytest.mark.parametrize(("eq", "shared"), [(True, False), (False, True)], ids=["eq", "identity"])
+    def test_a_mutable_struct_nested_in_a_tuple_default_follows_its_hash(self, eq, shared):
+        class Inner(Struct, frozen=False, eq=eq):
+            x: int = 0
+
+        class Holder(Struct, frozen=False):
+            pair: tuple = (1, Inner())
+
+        assert (Holder().pair[1] is Holder().pair[1]) is shared
 
     @pytest.mark.parametrize(("eq", "shared"), [(True, False), (False, True)], ids=["eq", "identity"])
     def test_a_mutable_struct_nested_in_a_frozen_struct_default_follows_its_hash(self, eq, shared):
