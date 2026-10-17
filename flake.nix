@@ -38,6 +38,15 @@
 
       untestedPythons = lib.importJSON ./nix/untested-pythons.json;
 
+      testRequirementNames =
+        map (requirement: builtins.head (builtins.match "([A-Za-z0-9_.-]+).*" requirement))
+          (
+            lib.filter (
+              requirement: !(lib.hasInfix "python_version <" requirement)
+            ) (lib.importTOML ./tests/pyproject.toml).project.dependencies
+          );
+      testPackages = packages: map (name: packages.${name}) testRequirementNames;
+
       releasableWheelNames = map ({ pythonMinor, platformName }: "${pythonMinor}-${platformName}") (
         lib.filter (
           { pythonMinor, ... }:
@@ -122,6 +131,7 @@
           cTests = pkgs.callPackage ./nix/c-tests.nix { src = testSource; };
 
           memcheck = pkgs.callPackage ./nix/memcheck.nix {
+            inherit testPackages;
             src = lib.fileset.toSource {
               root = ./.;
               fileset = lib.fileset.unions [
@@ -264,12 +274,7 @@
             pkgs.runCommand "wheel-smoke"
               {
                 nativeBuildInputs = [
-                  (pkgs.python314.withPackages (ps: [
-                    ps.pip
-                    ps.pytest
-                    ps.pytest-markdown-docs
-                    ps.hypothesis
-                  ]))
+                  (pkgs.python314.withPackages (ps: [ ps.pip ] ++ testPackages ps))
                 ];
               }
               ''
@@ -278,7 +283,8 @@
                 export PYTHONPATH=$PWD/site
                 export SALIX_REQUIRE_INSTALLED=1
                 cp ${./README.md} README.md
-                python -m pytest -q -p no:cacheprovider --markdown-docs ${./tests} README.md
+                python -m pytest -q -p no:cacheprovider ${./tests}
+                python -m pytest -q -p no:cacheprovider --markdown-docs README.md
                 touch $out
               '';
         }

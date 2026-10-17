@@ -89,5 +89,4 @@ select = [
 "tests/typing/rejected.py" = ["B015", "B018"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "README.md"]
-addopts = "--markdown-docs"
+testpaths = ["tests"]

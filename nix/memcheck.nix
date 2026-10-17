@@ -4,16 +4,11 @@
   python3,
   valgrind,
   src,
+  testPackages,
 }:
 
 let
-  testRequirements = (lib.importTOML (src + "/tests/pyproject.toml")).project.dependencies;
-  testPackageNames = map (
-    requirement: builtins.head (builtins.match "([A-Za-z0-9_.-]+).*" requirement)
-  ) (lib.filter (requirement: !(lib.hasInfix "python_version <" requirement)) testRequirements);
-  python = python3.withPackages (
-    packages: [ packages.setuptools ] ++ map (name: packages.${name}) testPackageNames
-  );
+  python = python3.withPackages (packages: [ packages.setuptools ] ++ testPackages packages);
 in
 stdenv.mkDerivation {
   pname = "salix-memcheck";
@@ -41,17 +36,23 @@ stdenv.mkDerivation {
     process_logs="$TMPDIR/memcheck"
     mkdir "$process_logs"
 
+    under_memcheck() {
+      valgrind \
+        --tool=memcheck \
+        --main-stacksize=$(($(ulimit -s) * 1024)) \
+        --trace-children=yes \
+        --leak-check=full \
+        --show-leak-kinds=definite,indirect \
+        --errors-for-leak-kinds=definite \
+        --suppressions=${./memcheck.supp} \
+        --log-file="$process_logs/%p.log" \
+        "$@"
+    }
+
     pytest_status=0
-    valgrind \
-      --tool=memcheck \
-      --main-stacksize=$(($(ulimit -s) * 1024)) \
-      --trace-children=yes \
-      --leak-check=full \
-      --show-leak-kinds=definite,indirect \
-      --errors-for-leak-kinds=definite \
-      --suppressions=${./memcheck.supp} \
-      --log-file="$process_logs/%p.log" \
-      python -m pytest -q -p no:cacheprovider | tee $out || pytest_status=$?
+    under_memcheck python -m pytest -q -p no:cacheprovider | tee $out || pytest_status=$?
+    readme_status=0
+    under_memcheck python -m pytest -q -p no:cacheprovider --markdown-docs README.md | tee -a $out || readme_status=$?
 
     cat "$process_logs"/*.log | tee -a $out
     processes_with_errors=$(grep --files-without-match "ERROR SUMMARY: 0 errors" "$process_logs"/*.log || true)
@@ -60,6 +61,7 @@ stdenv.mkDerivation {
       exit 1
     fi
     [ "$pytest_status" -eq 0 ]
+    [ "$readme_status" -eq 0 ]
 
     runHook postBuild
   '';
