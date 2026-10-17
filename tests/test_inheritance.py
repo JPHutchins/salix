@@ -59,8 +59,8 @@ def test_a_redefaulted_inherited_field_is_not_shadowed_by_its_class_variable():
 def test_a_bare_binding_over_an_inherited_field_is_refused():
     with pytest.raises(
         TypeError,
-        match=r"'y' is a field this class inherits, and the class body binds a int to that "
-        r"name without an annotation.*redeclare it with its annotation",
+        match=r"^'y' is a field 'Bound' inherits from 'Base', and the body of 'Bound' binds an object "
+        r"of type 'int' to that name without an annotation.*redeclare it with its annotation$",
     ):
 
         class Bound(Base):

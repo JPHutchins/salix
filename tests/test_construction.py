@@ -106,6 +106,13 @@ def test_the_class_is_callable_through_the_slow_path_too():
     assert Point(*arguments) == Point.__call__(*arguments)
 
 
+@pytest.mark.parametrize(
+    ("positional", "keywords"), [((1, 2), {}), ((1,), {"y": 2})], ids=["empty", "filled"]
+)
+def test_the_metatype_call_reads_its_keyword_dict_whether_or_not_it_is_empty(positional, keywords):
+    assert type(Point).__call__(Point, *positional, **keywords) == Point(1, 2)
+
+
 class TestMutableDefaults:
     """`xs: list = []` reads as an empty list per instance, and that is what it
     gets.
@@ -1353,5 +1360,10 @@ def test_a_class_whose_build_failed_is_refused_even_on_the_thread_that_built_it(
 
     assert len(escaped) == 1, escaped
 
-    with pytest.raises(TypeError, match="until its class has finished being created"):
+    with pytest.raises(TypeError, match=r"^fields\(\) cannot read 'Failing' because its class failed to build$"):
         fields(escaped[0])
+
+    with pytest.raises(
+        TypeError, match=r"^cannot create an instance of 'Failing' because its class failed to build$"
+    ):
+        escaped[0]()

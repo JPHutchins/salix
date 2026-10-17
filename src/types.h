@@ -380,16 +380,23 @@ enum struct_creation_stage : int {
 	STRUCT_ABANDONED,
 };
 
-static inline bool struct_class_usable_here(StructType const * const type) {
+static inline enum struct_creation_stage struct_creation_stage_of(StructType const * const type) {
 #if PY_VERSION_HEX >= 0x030D0000
-	int const stage = _Py_atomic_load_int_acquire(&type->struct_creation_stage);
+	return _Py_atomic_load_int_acquire(&type->struct_creation_stage);
 #else
-	int const stage = type->struct_creation_stage;
+	return type->struct_creation_stage;
 #endif
+}
 
-	return stage == STRUCT_CREATED || (
-		stage == STRUCT_INSTALLED_FOR_ITS_BUILDER &&
-		type->struct_builder_thread == PyThread_get_thread_ident()
+static inline bool struct_class_usable_here(StructType const * const type) {
+	enum struct_creation_stage const stage = struct_creation_stage_of(type);
+
+	return (
+		stage == STRUCT_CREATED ||
+		(
+			stage == STRUCT_INSTALLED_FOR_ITS_BUILDER &&
+			type->struct_builder_thread == PyThread_get_thread_ident()
+		)
 	);
 }
 
@@ -416,6 +423,19 @@ static inline struct salix_state * created_struct_state_of(PyObject * const self
 	return is_struct(self) ? struct_type_of(self)->struct_state : NULL;
 }
 
+static inline char const * why_unusable_here(StructType const * const type) {
+	switch (struct_creation_stage_of(type)) {
+		case STRUCT_ABANDONED:
+			return "because its class failed to build";
+		case STRUCT_BEING_CREATED:
+		case STRUCT_INSTALLED_FOR_ITS_BUILDER:
+		case STRUCT_CREATED:
+			break;
+	}
+
+	return "until its class has finished being created";
+}
+
 static inline bool refused_until_created(
 	StructType const * const type,
 	char const * const operation
@@ -426,9 +446,10 @@ static inline bool refused_until_created(
 
 	PyErr_Format(
 		PyExc_TypeError,
-		"cannot %s '%.200s' until its class has finished being created",
+		"cannot %s '%.200s' %s",
 		operation,
-		struct_type_name(type)
+		struct_type_name(type),
+		why_unusable_here(type)
 	);
 
 	return true;
@@ -457,8 +478,9 @@ static inline PyObject * struct_metadata(
 	if (!struct_class_usable_here(type)) {
 		PyErr_Format(
 			PyExc_AttributeError,
-			"the fields of '%.200s' cannot be read until its class has finished being created",
-			struct_type_name(type)
+			"the fields of '%.200s' cannot be read %s",
+			struct_type_name(type),
+			why_unusable_here(type)
 		);
 
 		return NULL;
