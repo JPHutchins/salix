@@ -247,21 +247,26 @@ static inline struct slot_pair struct_slot_pair_ref(
 	return (struct slot_pair){.mine = mine, .theirs = theirs};
 }
 
-static inline void struct_slots_ref_into(
+static inline Py_ssize_t struct_slots_ref_into(
 	StructType const * const type,
 	PyObject * const self,
 	PyObject * const values,
 	PyObject * const missing
 ) {
+	Py_ssize_t set_count = 0;
+
 	STRUCT_BEGIN_CRITICAL_SECTION(self);
 
 	for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
 		PyObject * const value = *struct_slot(type, self, i);
 
+		set_count += value != NULL;
 		PyTuple_SET_ITEM(values, i, value != NULL ? Py_NewRef(value) : Py_XNewRef(missing));
 	}
 
 	STRUCT_END_CRITICAL_SECTION();
+
+	return set_count;
 }
 
 static inline PyObject * struct_slots_by_name(
@@ -274,15 +279,7 @@ static inline PyObject * struct_slots_by_name(
 		return NULL;
 	}
 
-	struct_slots_ref_into(type, self, values, NULL);
-
-	Py_ssize_t set_count = 0;
-
-	for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
-		set_count += PyTuple_GET_ITEM(values, i) != NULL;
-	}
-
-	PyObject * by_name = _PyDict_NewPresized(set_count);
+	PyObject * by_name = _PyDict_NewPresized(struct_slots_ref_into(type, self, values, NULL));
 
 	for (Py_ssize_t i = 0; by_name != NULL && i < type->struct_field_count; ++i) {
 		PyObject * const value = PyTuple_GET_ITEM(values, i);
