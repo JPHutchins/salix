@@ -45,6 +45,19 @@ static int write_value_repr(repr_writer * const writer, PyObject * const value) 
 }
 #endif
 
+static char const fields_open[] = "(";
+static char const fields_close[] = ")";
+static char const field_separator[] = ", ";
+static char const name_value_separator[] = "=";
+static char const unset_value[] = "<unset>";
+
+static int write_value(repr_writer * const writer, PyObject * const value) {
+	return (
+		value != NULL ? write_value_repr(writer, value) :
+		write_ascii(writer, unset_value, sizeof unset_value - 1)
+	);
+}
+
 static enum result write_field(
 	repr_writer * const writer,
 	StructType const * const type,
@@ -52,20 +65,17 @@ static enum result write_field(
 	Py_ssize_t const index
 ) {
 	PY_OWNED(value, struct_slot_ref(type, self, index));
-
-	return (
-		(
-			(index == 0 || write_ascii(writer, ", ", 2) == 0) &&
-			write_text(writer, PyTuple_GET_ITEM(type->struct_field_names, index)) == 0 &&
-			write_ascii(writer, "=", 1) == 0 &&
-			(
-					value != NULL ? write_value_repr(writer, value) :
-					write_ascii(writer, "<unset>", 7)
-				) ==
-				0
-		) ? RESULT_OK :
-		RESULT_ERROR
+	bool const separated = (
+		index == 0 ||
+		write_ascii(writer, field_separator, sizeof field_separator - 1) == 0
 	);
+	bool const named = (
+		separated &&
+		write_text(writer, PyTuple_GET_ITEM(type->struct_field_names, index)) == 0 &&
+		write_ascii(writer, name_value_separator, sizeof name_value_separator - 1) == 0
+	);
+
+	return named && write_value(writer, value) == 0 ? RESULT_OK : RESULT_ERROR;
 }
 
 static enum result write_struct(
@@ -74,7 +84,10 @@ static enum result write_struct(
 	PyObject * const self,
 	PyObject * const qualname
 ) {
-	if (write_text(writer, qualname) < 0 || write_ascii(writer, "(", 1) < 0) {
+	if (
+		write_text(writer, qualname) < 0 ||
+		write_ascii(writer, fields_open, sizeof fields_open - 1) < 0
+	) {
 		return RESULT_ERROR;
 	}
 
@@ -84,7 +97,10 @@ static enum result write_struct(
 		}
 	}
 
-	return write_ascii(writer, ")", 1) == 0 ? RESULT_OK : RESULT_ERROR;
+	return (
+		write_ascii(writer, fields_close, sizeof fields_close - 1) == 0 ? RESULT_OK :
+		RESULT_ERROR
+	);
 }
 
 #if PY_VERSION_HEX >= 0x030E0000
@@ -133,20 +149,15 @@ PyObject * Struct_repr(PyObject * const self) {
 		return PyBaseObject_Type.tp_repr(self);
 	}
 
-	StructType * const type = struct_type_of(self);
-	PY_OWNED(qualname, struct_type_qualname(type));
-
-	if (qualname == NULL) {
-		return NULL;
-	}
-
 	int const recursive = Py_ReprEnter(self);
 
 	if (recursive != 0) {
 		return recursive < 0 ? NULL : PyUnicode_FromString("...");
 	}
 
-	PyObject * const rendered = written_repr(type, self, qualname);
+	StructType * const type = struct_type_of(self);
+	PY_OWNED(qualname, struct_type_qualname(type));
+	PyObject * const rendered = qualname != NULL ? written_repr(type, self, qualname) : NULL;
 
 	Py_ReprLeave(self);
 
