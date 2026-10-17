@@ -43,7 +43,9 @@ stdenv.mkDerivation {
       --tool=memcheck \
       --main-stacksize=$(($(ulimit -s) * 1024)) \
       --trace-children=yes \
-      --errors-for-leak-kinds=none \
+      --leak-check=full \
+      --show-leak-kinds=definite \
+      --errors-for-leak-kinds=definite \
       --error-exitcode=99 \
       python -m pytest -q -p no:cacheprovider | tee $out
 
