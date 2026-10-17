@@ -21,7 +21,7 @@ Point(x=1.0, y=2.0)
 pip install salix
 ```
 
-`nix/python-targets.nix` is the wheel matrix — Windows, macOS, and glibc
+`nix/python-targets.json` is the wheel matrix — Windows, macOS, and glibc
 Linux on x86_64 and arm64, across the supported CPythons — and wheels are
 published for its cells once the interpreter's ABI is frozen. A pre-release
 interpreter's wheels are built and tested but held back until its rc, and a
