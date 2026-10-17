@@ -799,3 +799,19 @@ def test_a_base_class_duplicating_hook_runs_while_the_class_is_created(window, d
         assert duplicate(instance) == expected
 
     made_while_its_class_is_created(window, (Struct, DuplicatingHooks), answered_by_the_base)
+
+
+@pytest.mark.parametrize("window", ["init_subclass", "set_name"])
+def test_a_copyreg_reducer_answers_while_the_class_is_created(window):
+    def answered_by_copyreg(instance: object) -> None:
+        cls = type(instance)
+        copyreg.pickle(cls, lambda value: (str, ("reduced by copyreg",)))
+
+        try:
+            assert [copy.copy(instance), copy.deepcopy(instance), round_trip(instance)] == [
+                "reduced by copyreg"
+            ] * 3
+        finally:
+            del copyreg.dispatch_table[cls]
+
+    made_while_its_class_is_created(window, (Struct,), answered_by_copyreg)

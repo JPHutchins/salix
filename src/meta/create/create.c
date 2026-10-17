@@ -29,10 +29,19 @@ PyObject * build_struct_class(
 	PyObject * const name,
 	PyObject * const bases,
 	PyObject * const original_namespace,
-	PyObject * const keywords,
+	PyObject * const caller_keywords,
 	struct salix_state * const state
 ) {
 	if (refuse_uncreated_struct_bases(bases) != RESULT_OK) {
+		return NULL;
+	}
+
+	PY_OWNED(
+		keywords,
+		caller_keywords != NULL ? dict_safe_to_read_unlocked(caller_keywords) : NULL
+	);
+
+	if (keywords == NULL && caller_keywords != NULL) {
 		return NULL;
 	}
 
@@ -211,7 +220,8 @@ PyObject * build_struct_class(
 			refuse_unannotated_field_bindings(
 				original_namespace,
 				plan.all_names,
-				plan.declared_annotations
+				plan.declared_annotations,
+				name
 			) != RESULT_OK
 		) ||
 		refuse_mixin_method_fields(plan.all_names) != RESULT_OK ||

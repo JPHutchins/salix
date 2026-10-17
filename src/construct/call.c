@@ -17,9 +17,7 @@ PyObject * Struct_call(
 	PyObject * const keywords
 ) {
 	return (
-		keywords == NULL || PyDict_GET_SIZE(
-			keywords
-		) == 0 ? Struct_vectorcall(
+		keywords == NULL ? Struct_vectorcall(
 			struct_class,
 			PySequence_Fast_ITEMS(arguments),
 			PyTuple_GET_SIZE(arguments),

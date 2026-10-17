@@ -1,5 +1,7 @@
 import copy
 import copyreg
+import pickle
+import re
 import sys
 import threading
 from collections.abc import Callable
@@ -9,7 +11,7 @@ import pytest
 from platforms import recurses_through_c_until_recursion_error, starts_a_thread
 from values import COPIED_WHEN_EMPTY, NON_EMPTY
 
-from salix import Struct, fields, from_mapping, set_field, to_dict
+from salix import Struct, fields, from_mapping, replace, set_field, to_dict
 
 
 class Point(Struct):
@@ -1128,6 +1130,25 @@ def deepcopy_calls_from_outside_copy(operation: Callable[[], object]) -> int:
     return calls
 
 
+def class_whose_build_failed() -> type:
+    escaped: list[type] = []
+
+    class Escaping(Struct, frozen=True):
+        def __init_subclass__(cls, **keywords: object) -> None:
+            super().__init_subclass__(**keywords)
+            escaped.append(cls)
+
+    with pytest.raises(LookupError):
+
+        class Failing(Escaping):
+            def __post_init__(self) -> None:
+                raise LookupError("the singleton refused")
+
+    [failing] = escaped
+
+    return failing
+
+
 def tried_while_its_class_is_created(window: str, attempt) -> list[object]:
     outcomes: list[object] = []
 
@@ -1337,21 +1358,35 @@ def test_a_struct_class_built_inside_a_failing_metaclass_new_is_still_created():
     assert outcome_on_another_thread(lambda: helpers[0](x=3).x) == 3
 
 
-def test_a_class_whose_build_failed_is_refused_even_on_the_thread_that_built_it():
-    escaped = []
-
-    class Escaping(Struct, frozen=True):
-        def __init_subclass__(cls, **keywords):
-            super().__init_subclass__(**keywords)
-            escaped.append(cls)
-
-    with pytest.raises(LookupError):
-
-        class Failing(Escaping):
-            def __post_init__(self):
-                raise LookupError("the singleton refused")
-
-    assert len(escaped) == 1, escaped
-
-    with pytest.raises(TypeError, match="until its class has finished being created"):
-        fields(escaped[0])
+@pytest.mark.parametrize(
+    ("attempt", "error", "refusal"),
+    [
+        pytest.param(fields, TypeError, "fields() cannot read 'Failing'", id="fields"),
+        pytest.param(lambda cls: cls(), TypeError, "cannot create an instance of 'Failing'", id="construct"),
+        pytest.param(lambda cls: type("Kid", (cls,), {}), TypeError, "cannot subclass 'Failing'", id="subclass"),
+        pytest.param(
+            lambda cls: cls.__signature__,
+            AttributeError,
+            "the signature of 'Failing' cannot be read",
+            id="signature",
+        ),
+        pytest.param(
+            lambda cls: cls.__struct_defaults__,
+            AttributeError,
+            "the fields of 'Failing' cannot be read",
+            id="defaults",
+        ),
+        pytest.param(lambda cls: copy.copy(cls.__new__(cls)), TypeError, "cannot copy 'Failing'", id="copy"),
+        pytest.param(
+            lambda cls: copy.deepcopy(cls.__new__(cls)), TypeError, "cannot deepcopy 'Failing'", id="deepcopy"
+        ),
+        pytest.param(lambda cls: pickle.dumps(cls.__new__(cls)), TypeError, "cannot pickle 'Failing'", id="pickle"),
+        pytest.param(lambda cls: replace(cls.__new__(cls)), TypeError, "cannot replace 'Failing'", id="replace"),
+        pytest.param(
+            lambda cls: to_dict(cls.__new__(cls)), TypeError, "cannot read the fields of 'Failing'", id="to_dict"
+        ),
+    ],
+)
+def test_a_class_whose_build_failed_is_refused_even_on_the_thread_that_built_it(attempt, error, refusal):
+    with pytest.raises(error, match=f"^{re.escape(refusal)} because its class failed to build$"):
+        attempt(class_whose_build_failed())

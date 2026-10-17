@@ -439,7 +439,11 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 		return NULL;
 	}
 
-	PyObject * const dict_values = PyDict_Check(values) ? values : NULL;
+	PY_OWNED(dict_values, PyDict_Check(values) ? dict_safe_to_read_unlocked(values) : NULL);
+
+	if (dict_values == NULL && PyErr_Occurred()) {
+		return NULL;
+	}
 	PY_MOVABLE(items, NULL);
 
 	if (dict_values == NULL) {

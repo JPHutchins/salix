@@ -562,7 +562,8 @@ enum result refuse_colliding_methods(
 enum result refuse_unannotated_field_bindings(
 	PyObject * const original_namespace,
 	PyObject * const all_names,
-	PyObject * const declared_annotations
+	PyObject * const declared_annotations,
+	PyObject * const class_name
 ) {
 	for (Py_ssize_t i = 0; i < PyList_GET_SIZE(all_names); ++i) {
 		PyObject * const field_name = PyList_GET_ITEM(all_names, i);
@@ -588,10 +589,11 @@ enum result refuse_unannotated_field_bindings(
 
 		PyErr_Format(
 			PyExc_TypeError,
-			"'%U' is a field this class inherits, and the class body binds a %.100s to "
-			"that name without an annotation, which salix would drop; to give the field "
-			"a new default, redeclare it with its annotation",
+			"'%U' is a field that '%U' inherits, and the class body binds an object of type "
+			"'%.100s' to that name without an annotation, which salix would drop; to give "
+			"the field a new default, redeclare it with its annotation",
 			field_name,
+			class_name,
 			Py_TYPE(bound)->tp_name
 		);
 
