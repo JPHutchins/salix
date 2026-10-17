@@ -269,11 +269,20 @@ static inline PyObject * struct_slots_by_name(
 	PyObject * const self
 ) {
 	PyObject * const values = PyTuple_New(type->struct_field_count);
-	PyObject * by_name = values != NULL ? _PyDict_NewPresized(type->struct_field_count) : NULL;
 
-	if (by_name != NULL) {
-		struct_slots_ref_into(type, self, values, NULL);
+	if (values == NULL) {
+		return NULL;
 	}
+
+	struct_slots_ref_into(type, self, values, NULL);
+
+	Py_ssize_t set_count = 0;
+
+	for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
+		set_count += PyTuple_GET_ITEM(values, i) != NULL;
+	}
+
+	PyObject * by_name = _PyDict_NewPresized(set_count);
 
 	for (Py_ssize_t i = 0; by_name != NULL && i < type->struct_field_count; ++i) {
 		PyObject * const value = PyTuple_GET_ITEM(values, i);
