@@ -38,14 +38,40 @@
 
       untestedPythons = lib.importJSON ./nix/untested-pythons.json;
 
-      testRequirementNames =
-        map (requirement: builtins.head (builtins.match "([A-Za-z0-9_.-]+).*" requirement))
+      testRequirements = map parseTestRequirement (
+        (lib.importTOML ./tests/pyproject.toml).project.dependencies
+      );
+      parseTestRequirement =
+        requirement:
+        let
+          parsed = builtins.match "([A-Za-z0-9][A-Za-z0-9._-]*) *([<>=!~][<>=!~,.*+ 0-9A-Za-z]*)?(; *python_version *< *['\"]([0-9.]+)['\"] *)?" requirement;
+        in
+        assert lib.assertMsg (parsed != null) (
+          "tests/pyproject.toml requires '${requirement}', but flake.nix maps only a name, "
+          + "a version specifier and a python_version < marker to a nixpkgs package"
+        );
+        {
+          inherit requirement;
+          name = builtins.elemAt parsed 0;
+          pythonBelow = builtins.elemAt parsed 3;
+        };
+      testPackages =
+        packages:
+        map
+          (
+            { requirement, name, ... }:
+            assert lib.assertMsg (packages ? ${name}) (
+              "tests/pyproject.toml requires '${requirement}', but nixpkgs' python${packages.python.pythonVersion} "
+              + "package set has no attribute '${name}'"
+            );
+            packages.${name}
+          )
           (
             lib.filter (
-              requirement: !(lib.hasInfix "python_version <" requirement)
-            ) (lib.importTOML ./tests/pyproject.toml).project.dependencies
+              { pythonBelow, ... }:
+              pythonBelow == null || lib.versionOlder packages.python.pythonVersion pythonBelow
+            ) testRequirements
           );
-      testPackages = packages: map (name: packages.${name}) testRequirementNames;
 
       releasableWheelNames = map ({ pythonMinor, platformName }: "${pythonMinor}-${platformName}") (
         lib.filter (
