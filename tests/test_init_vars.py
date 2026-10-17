@@ -201,9 +201,9 @@ def test_a_mutable_struct_init_var_default_reaches_post_init_as_a_fresh_copy(
     options: dict[str, bool],
 ) -> None:
     class Settings(Struct, frozen=False, **options):
-        verbose: bool = False
+        labels: list[str] = []  # noqa: RUF012
 
-    declared = Settings()
+    declared = Settings(["declared"])
     seen: list[Settings] = []
 
     class Configured(Struct):
@@ -216,8 +216,10 @@ def test_a_mutable_struct_init_var_default_reaches_post_init_as_a_fresh_copy(
     Configured()
 
     assert seen[0] is not seen[1]
+    assert seen[0].labels is not seen[1].labels
     assert all(received is not declared for received in seen)
-    assert all(received.verbose is False for received in seen)
+    assert all(received.labels is not declared.labels for received in seen)
+    assert all(received.labels == ["declared"] for received in seen)
 
 
 def test_a_bare_init_var_is_an_init_var() -> None:

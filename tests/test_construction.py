@@ -105,11 +105,7 @@ def test_the_class_is_callable_through_the_slow_path_too():
 
 class TestMutableDefaults:
     """`xs: list = []` reads as an empty list per instance, and that is what it
-    gets. The four builtins and a `frozen=False` struct are copied at
-    construction, any other default is deep-copied when hashing it raises, and
-    everything else is shared -- which is cheaper and indistinguishable for a value that cannot
-    be mutated, and simply sharing for one that can. `array.array`, `deque` and
-    a writable `memoryview` are in the second group; #51 argues for hashability as the test that would replace the list.
+    gets.
     """
 
     def test_a_list_default_is_not_shared(self):
@@ -284,11 +280,10 @@ class TestMutableDefaults:
         ],
     )
     def test_a_mutable_container_outside_the_four_is_shared_and_not_refused(self, value):
-        """The copied kinds are the four types, their subclasses and a
-        `frozen=False` struct, not every mutable value, so these are neither
-        copied nor refused. Every one of these declares
+        """Mutability alone copies nothing. Every one of these declares
         `__hash__` is None -- it says it does not hash before being asked --
-        which is what #51's rule leaves alone.
+        which is what #51's rule leaves alone, so they are neither copied nor
+        refused.
 
         `hash(value)` rather than `isinstance(value, Hashable)`: the ABC asks
         whether `__hash__` is non-None, and a writable memoryview has one that
@@ -997,10 +992,23 @@ class TestMutableDefaults:
             first_items: list = shared_items
             second_items: list = shared_items
 
-        aliased = Aliased()
+        stored = Aliased._struct_defaults_
+        first, second = Aliased(), Aliased()
 
-        assert aliased.first_settings is not aliased.second_settings
-        assert aliased.first_items is not aliased.second_items
+        assert stored[0] is not stored[1]
+        assert stored[2] is not stored[3]
+        assert first.first_settings is not first.second_settings
+        assert first.first_items is not first.second_items
+        assert first.first_settings is not second.first_settings
+        assert first.first_items is not second.first_items
+        assert all(
+            settings is not shared_settings
+            for settings in (stored[0], stored[1], first.first_settings, first.second_settings)
+        )
+        assert all(
+            items is not shared_items
+            for items in (stored[2], stored[3], first.first_items, first.second_items)
+        )
 
     def test_a_struct_default_that_declares_no_hash_is_shared_with_the_mutable_struct_it_holds(self):
         class Inner(Struct, frozen=False):
@@ -1026,7 +1034,22 @@ class TestMutableDefaults:
         class Holder(Struct, frozen=False):
             outer: Outer = Outer()
 
-        assert Holder().outer.inner is not Holder().outer.inner
+        first, second = Holder(), Holder()
+
+        assert first.outer.inner is not second.outer.inner
+        assert first.outer.items is not second.outer.items
+
+    def test_an_identity_hashed_struct_default_is_shared_with_the_list_it_holds(self):
+        class Outer(Struct, eq=False):
+            items: list = []  # noqa: RUF012
+
+        class Holder(Struct, frozen=False):
+            outer: Outer = Outer()
+
+        first, second = Holder(), Holder()
+
+        assert first.outer is second.outer
+        assert first.outer.items is second.outer.items
 
     @pytest.mark.parametrize(("eq", "shared"), [(True, False), (False, True)], ids=["eq", "identity"])
     def test_a_mutable_struct_nested_in_a_tuple_default_follows_its_hash(self, eq, shared):
