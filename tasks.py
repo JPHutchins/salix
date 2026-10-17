@@ -75,6 +75,8 @@ FREE_THREADED = tuple(
 PYTEST = (
     "uv run --package salix-tests --managed-python --python {PYTHON} python -m pytest"
 )
+README_FENCES = " --markdown-docs README.md"
+README_FENCES_FROM_TESTS = " --markdown-docs ../README.md"
 ENVIRONMENT_PER_INTERPRETER = {"UV_PROJECT_ENVIRONMENT": ".venvs/{PY}"}
 
 MAKE_ENV = "uv venv --clear --python {PYTHON} --managed-python .venvs/{PY}"
@@ -111,6 +113,11 @@ FULL_SUITE_JUNIT = 1_000_000
 JUNIT_FORMAT = AgentFormat("--junitxml {report}", "junit", limit=FULL_SUITE_JUNIT)
 pytest = Task(
     PYTEST,
+    env=ENVIRONMENT_PER_INTERPRETER,
+    agent_format=JUNIT_FORMAT,
+)
+readme_fences = Task(
+    PYTEST + README_FENCES,
     env=ENVIRONMENT_PER_INTERPRETER,
     agent_format=JUNIT_FORMAT,
 )
@@ -191,7 +198,7 @@ flake_evaluates = Task(
 flake_check = Sequential(flake_evaluates, Task("nix flake check", when=NIX_INPUTS))
 
 test = Parallel(
-    Sequential(build, interpreter_guard, pytest),
+    Sequential(build, interpreter_guard, Parallel(pytest, readme_fences)),
     variants=tuple({"PY": python, "PYTHON": PINNED.get(python, python)} for python in PYTHONS),
 )
 
@@ -216,10 +223,15 @@ free_threaded = Parallel(
         Task(on_free_threaded_axes(MAKE_ENV), mutates=True),
         Task(on_free_threaded_axes(BUILD), mutates=True, env=STRICT_BUILD),
         Task(on_free_threaded_axes(INTERPRETER_GUARD)),
-        Task(
-            on_free_threaded_axes(PYTEST),
-            env={name: on_free_threaded_axes(value) for name, value in ENVIRONMENT_PER_INTERPRETER.items()},
-            agent_format=JUNIT_FORMAT,
+        Parallel(
+            *(
+                Task(
+                    on_free_threaded_axes(command),
+                    env={name: on_free_threaded_axes(value) for name, value in ENVIRONMENT_PER_INTERPRETER.items()},
+                    agent_format=JUNIT_FORMAT,
+                )
+                for command in (PYTEST, PYTEST + README_FENCES)
+            )
         ),
     ),
     variants=tuple({"FT": python, "FT_PYTHON": f"{PINNED[python]}t"} for python in FREE_THREADED),
@@ -230,9 +242,13 @@ HEADER_GATES = (
     {"BEFORE": "3.14.3", "AFTER": "3.14.4"},
 )
 HEADER_GATE_BUILD = {"PYTHONPATH": "../build/{BEFORE}"}
-HEADER_GATE_TEST = (
+HEADER_GATE_SUITE = (
     " --with pytest --with hypothesis --with packaging"
-    " python -m pytest -p no:cacheprovider --ignore=test_check_wheel.py . ../README.md"
+    " python -m pytest -p no:cacheprovider --ignore=test_check_wheel.py ."
+)
+HEADER_GATE_README = (
+    " --with pytest --with pytest-markdown-docs python -m pytest -p no:cacheprovider"
+    + README_FENCES_FROM_TESTS
 )
 header_gates = Parallel(
     Sequential(
@@ -248,16 +264,15 @@ header_gates = Parallel(
             env=HEADER_GATE_BUILD,
         ),
         Parallel(
-            Task(
-                "uv run --no-project --managed-python --python {BEFORE}" + HEADER_GATE_TEST,
-                cwd=Path("tests"),
-                env=HEADER_GATE_BUILD,
-            ),
-            Task(
-                "uv run --no-project --managed-python --python {AFTER}" + HEADER_GATE_TEST,
-                cwd=Path("tests"),
-                env=HEADER_GATE_BUILD,
-            ),
+            *(
+                Task(
+                    "uv run --no-project --managed-python --python " + interpreter + run,
+                    cwd=Path("tests"),
+                    env=HEADER_GATE_BUILD,
+                )
+                for interpreter in ("{BEFORE}", "{AFTER}")
+                for run in (HEADER_GATE_SUITE, HEADER_GATE_README)
+            )
         ),
     ),
     variants=HEADER_GATES,
@@ -280,11 +295,16 @@ pyodide = Sequential(
         " -r dist/pyodide-test-requirements.txt dist/wheel-pyodide/salix-*.whl'",
         mutates=True,
     ),
-    Task(
-        "../dist/pyodide-python/bin/pyodide-python -m pytest -p no:cacheprovider . ../README.md",
-        cwd=Path("tests"),
-        when=".",
-        env={"SALIX_REQUIRE_INSTALLED": "1", "PYTHONPATH": "../dist/pyodide-site"},
+    Parallel(
+        *(
+            Task(
+                "../dist/pyodide-python/bin/pyodide-python -m pytest -p no:cacheprovider" + run,
+                cwd=Path("tests"),
+                when=".",
+                env={"SALIX_REQUIRE_INSTALLED": "1", "PYTHONPATH": "../dist/pyodide-site"},
+            )
+            for run in (" .", README_FENCES_FROM_TESTS)
+        )
     ),
 )
 
@@ -317,10 +337,14 @@ wheel_guard = Task(
     " assert any(tag.endswith('-{ABI_TAG}-{PLATFORM_TAG}') for tag in tags), tags\"",
     cwd=Path("tests"),
 )
+WHEEL_PYTEST = WHEEL_RUN + f' --find-links ../result-wheels --with "salix=={VERSION}" --with pytest'
 wheel_test = Task(
-    WHEEL_RUN + " --find-links ../result-wheels"
-    f' --with "salix=={VERSION}" --with pytest --with hypothesis'
-    " python -m pytest . ../README.md",
+    WHEEL_PYTEST + " --with hypothesis python -m pytest .",
+    cwd=Path("tests"),
+    env={"SALIX_REQUIRE_INSTALLED": "1"},
+)
+wheel_readme_fences = Task(
+    WHEEL_PYTEST + " --with pytest-markdown-docs python -m pytest" + README_FENCES_FROM_TESTS,
     cwd=Path("tests"),
     env={"SALIX_REQUIRE_INSTALLED": "1"},
 )
@@ -379,7 +403,7 @@ assert _COVERED_PLATFORMS == WHEEL_PLATFORMS, {
 assert all(COVERAGE_SAMPLES.values()), [name for name, pins in COVERAGE_SAMPLES.items() if not pins]
 
 coverage = Parallel(
-    Sequential(wheel_guard, wheel_test),
+    Sequential(wheel_guard, Parallel(wheel_test, wheel_readme_fences)),
     variants=tuple(
         {
             "OS": name,
