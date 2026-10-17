@@ -1,5 +1,7 @@
+import json
 import re
 from pathlib import Path
+from typing import TypedDict
 
 from camas import (
     AgentFormat,
@@ -33,32 +35,28 @@ _PROJECT_VERSION = re.search(
 assert _PROJECT_VERSION is not None
 VERSION = _PROJECT_VERSION.group(1)
 
-_PYTHON_TARGETS = Path("nix/python-targets.nix").read_text(encoding="utf-8")
-_PINS = re.findall(
-    r'^    "([0-9.]+t?)" = \{\n'
-    r'      version = "([^"]+)";\n'
-    r'      tag = "[^"]+";\n'
-    r'      abiTag = "([^"]+)";\n'
-    r'      pbsVariant = "([^"]*)";\r?$',
-    _PYTHON_TARGETS,
-    re.MULTILINE,
-)
-assert len(_PINS) == _PYTHON_TARGETS.count("pbsVariant = ")
+
+class PythonPin(TypedDict):
+    version: str
+    abiTag: str
+    pbsVariant: str
+
+
+_PINS: dict[str, PythonPin] = json.loads(
+    Path("nix/python-targets.json").read_text(encoding="utf-8")
+)["pythons"]
 assert all(
-    name.endswith("t") == abi_tag.endswith("t") == (variant == "-freethreaded")
-    for name, _, abi_tag, variant in _PINS
+    name.endswith("t") == pin["abiTag"].endswith("t") == (pin["pbsVariant"] == "-freethreaded")
+    for name, pin in _PINS.items()
 )
-PINNED = {name: version for name, version, _, _ in _PINS}
+PINNED = {name: pin["version"] for name, pin in _PINS.items()}
 assert any(name.endswith("t") for name in PINNED)
 
-_UNTESTED_PYTHONS = re.search(
-    r"^ +untestedPythons = \[([^\]]*)\];\r?$",
-    Path("flake.nix").read_text(encoding="utf-8"),
-    re.MULTILINE,
-)
-assert _UNTESTED_PYTHONS is not None
-UNTESTED = tuple(re.findall(r'"([^"]+)"', re.sub(r"/\*.*?\*/", "", _UNTESTED_PYTHONS.group(1))))
-assert set(UNTESTED) <= set(PINNED)
+_UNTESTED_PYTHONS = json.loads(Path("nix/untested-pythons.json").read_text(encoding="utf-8"))
+assert isinstance(_UNTESTED_PYTHONS, list)
+assert all(isinstance(python, str) for python in _UNTESTED_PYTHONS)
+UNTESTED: tuple[str, ...] = tuple(_UNTESTED_PYTHONS)
+assert set(UNTESTED) <= {python for python in PINNED if python.endswith("t")}
 FREE_THREADED = tuple(
     python for python in PINNED if python.endswith("t") and python not in UNTESTED
 )

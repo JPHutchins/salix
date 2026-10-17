@@ -15,7 +15,7 @@
       ];
       forAllSystems = lib.genAttrs systems;
 
-      matrix = import ./nix/python-targets.nix;
+      matrix = lib.importJSON ./nix/python-targets.json;
       pyodide = import ./nix/pyodide.nix;
 
       declaredPythons = lib.sort (a: b: a < b) (
@@ -36,7 +36,7 @@
 
       abiIsFrozen = version: builtins.match "[0-9]+\\.[0-9]+\\.[0-9]+(rc[0-9]+)?" version != null;
 
-      untestedPythons = [ "3.13t" ];
+      untestedPythons = lib.importJSON ./nix/untested-pythons.json;
 
       releasableWheelNames = map ({ pythonMinor, platformName }: "${pythonMinor}-${platformName}") (
         lib.filter (
@@ -143,9 +143,8 @@
           };
 
           release =
-            assert lib.assertMsg (
-              releasableWheelNames != [ ]
-            ) "no releasable wheels: every pinned interpreter is a pre-release, so nothing has a frozen ABI";
+            assert lib.assertMsg (releasableWheelNames != [ ])
+              "no releasable wheels: every pinned interpreter is a pre-release or listed in nix/untested-pythons.json";
             pkgs.symlinkJoin {
               name = "salix-release";
               paths =
@@ -170,9 +169,20 @@
       forSystem = forAllSystems perSystem;
     in
     assert lib.assertMsg (declaredPythons == pinnedBaseline) (
-      ".python-version lists ${toString declaredPythons} but nix/python-targets.nix pins "
+      ".python-version lists ${toString declaredPythons} but nix/python-targets.json pins "
       + "${toString pinnedPythons}; regenerate with tools/update_python_targets.py"
     );
+    assert lib.assertMsg
+      (
+        builtins.isList untestedPythons
+        && lib.all (
+          python: builtins.isString python && lib.hasSuffix "t" python && matrix.pythons ? ${python}
+        ) untestedPythons
+      )
+      (
+        "nix/untested-pythons.json is ${builtins.toJSON untestedPythons}, but it must be a list of "
+        + "free-threaded interpreters nix/python-targets.json pins: ${toString pinnedPythons}"
+      );
     {
       packages = forAllSystems (
         system:

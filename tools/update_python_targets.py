@@ -6,7 +6,6 @@ import re
 import subprocess
 import urllib.error
 import urllib.request
-from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -117,42 +116,47 @@ def nodot_of(minor: str) -> str:
     return minor.replace(".", "")
 
 
-def indent(depth: int) -> str:
-    return "  " * depth
+def platform_entry(platform: Platform) -> dict[str, object]:
+    return {
+        "pbsTriple": platform.triple,
+        "zigTarget": platform.zig_target,
+        "platformTag": platform.platform_tag,
+        "moduleName": platform.module_name,
+        "extraFlags": list(platform.extra_flags),
+        "linkPythonLibrary": platform.link_python_library,
+    }
 
 
-def render_platform(name: str, platform: Platform) -> Iterator[str]:
-    flags = "".join(f'\n{indent(4)}"{flag}"' for flag in platform.extra_flags)
-
-    yield f"{indent(2)}{name} = {{"
-    yield f'{indent(3)}pbsTriple = "{platform.triple}";'
-    yield f'{indent(3)}zigTarget = "{platform.zig_target}";'
-    yield f'{indent(3)}platformTag = "{platform.platform_tag}";'
-    yield f'{indent(3)}moduleName = "{platform.module_name}";'
-    yield f"{indent(3)}extraFlags = [{flags + chr(10) + indent(3) if flags else ' '}];"
-    yield f"{indent(3)}linkPythonLibrary = {str(platform.link_python_library).lower()};"
-    yield f"{indent(2)}}};"
+def python_entry(target: Target, version: str, hashes: dict[str, str]) -> dict[str, object]:
+    return {
+        "version": version,
+        "tag": f"cp{nodot_of(target.minor)}",
+        "abiTag": f"cp{nodot_of(target.name)}",
+        "pbsVariant": target.variant,
+        "hashes": hashes,
+    }
 
 
-def render_python(target: Target, version: str, hashes: dict[str, str]) -> Iterator[str]:
-    yield f'{indent(2)}"{target.name}" = {{'
-    yield f'{indent(3)}version = "{version}";'
-    yield f'{indent(3)}tag = "cp{nodot_of(target.minor)}";'
-    yield f'{indent(3)}abiTag = "cp{nodot_of(target.name)}";'
-    yield f'{indent(3)}pbsVariant = "{target.variant}";'
-    yield f"{indent(3)}hashes = {{"
+def recorded_release(output: Path) -> str | None:
+    if not output.exists():
+        return None
 
-    for name, digest in hashes.items():
-        yield f'{indent(4)}{name} = "{digest}";'
+    try:
+        recorded = json.loads(output.read_text())
+    except json.JSONDecodeError as error:
+        raise SystemExit(f"{output} is not JSON ({error}); pass --release") from error
 
-    yield f"{indent(3)}}};"
-    yield f"{indent(2)}}};"
+    match recorded:
+        case {"release": str(release)} if release:
+            return release
+        case _:
+            raise SystemExit(f"{output} records no release tag; pass --release")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Regenerate nix/python-targets.nix from a python-build-standalone release. "
+            "Regenerate nix/python-targets.json from a python-build-standalone release. "
             "Interpreters come from .python-version; the GitHub API serves each asset's "
             "digest, so nothing is downloaded to pin it."
         )
@@ -163,21 +167,20 @@ def main() -> None:
         help="a python-build-standalone tag, or latest; defaults to the release the output records",
     )
     parser.add_argument("--python-version", type=Path, default=Path(".python-version"))
-    parser.add_argument("--output", type=Path, default=Path("nix/python-targets.nix"))
+    parser.add_argument("--output", type=Path, default=Path("nix/python-targets.json"))
     arguments = parser.parse_args()
 
-    recorded = (
-        re.search(r'^  release = "([^"]+)";$', arguments.output.read_text(), re.MULTILINE)
-        if arguments.output.exists()
-        else None
-    )
-    tag = arguments.release or (recorded.group(1) if recorded else "latest")
+    wanted = arguments.python_version.read_text().split()
+
+    if not wanted:
+        raise SystemExit(f"{arguments.python_version} lists no interpreters")
+
+    tag = arguments.release or recorded_release(arguments.output) or "latest"
 
     try:
         release = fetch(f"{RELEASES}/latest" if tag == "latest" else f"{RELEASES}/tags/{tag}")
     except urllib.error.HTTPError as error:
         raise SystemExit(f"python-build-standalone release {tag}: {error}") from error
-    wanted = arguments.python_version.read_text().split()
 
     assets = {}
     for asset in release["assets"]:
@@ -219,28 +222,22 @@ def main() -> None:
             )
             print(f"skipping {target.name}/{name}: {reason}")
 
-    lines = [
-        "{",
-        f'{indent(1)}release = "{release["tag_name"]}";',
-        "",
-        f"{indent(1)}platforms = {{",
-    ]
-
-    for name, platform in PLATFORMS.items():
-        lines.extend(render_platform(name, platform))
-
-    lines.extend([f"{indent(1)}}};", "", f"{indent(1)}pythons = {{"])
-
-    for target, platforms in available.items():
-        version = assets[(target.minor, next(iter(platforms.values())).triple, target.variant)][0]
-        hashes = {
-            name: to_sri(assets[(target.minor, platform.triple, target.variant)][1])
-            for name, platform in platforms.items()
-        }
-        lines.extend(render_python(target, version, hashes))
-
-    lines.extend([f"{indent(1)}}};", "}", ""])
-    arguments.output.write_text("\n".join(lines))
+    targets_document = {
+        "release": release["tag_name"],
+        "platforms": {name: platform_entry(platform) for name, platform in PLATFORMS.items()},
+        "pythons": {
+            target.name: python_entry(
+                target,
+                assets[(target.minor, next(iter(platforms.values())).triple, target.variant)][0],
+                {
+                    name: to_sri(assets[(target.minor, platform.triple, target.variant)][1])
+                    for name, platform in platforms.items()
+                },
+            )
+            for target, platforms in available.items()
+        },
+    }
+    arguments.output.write_text(json.dumps(targets_document, indent=2) + "\n")
 
     wheels = sum(len(platforms) for platforms in available.values())
     print(f"{arguments.output}: {len(available)} interpreters, {wheels} wheels")
