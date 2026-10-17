@@ -1,5 +1,6 @@
 import json
 import re
+from enum import Enum, auto
 from pathlib import Path
 from typing import NamedTuple, TypedDict
 
@@ -24,8 +25,14 @@ NIX_SOURCES = by_suffix(
     default=tuple(sorted(str(p) for p in (*Path(".").glob("*.nix"), *Path("nix").glob("*.nix")))),
 )
 PYTHONS = tuple(Path(".python-version").read_text().split())
-OLDEST = min(PYTHONS, key=lambda python: tuple(map(int, python.split("."))))
-NEWEST = max(PYTHONS, key=lambda python: tuple(map(int, python.split("."))))
+
+
+def release_order(python: str) -> tuple[int, ...]:
+    return tuple(map(int, python.split(".")))
+
+
+OLDEST = min(PYTHONS, key=release_order)
+NEWEST = max(PYTHONS, key=release_order)
 
 _PROJECT_VERSION = re.search(
     r'^version = "([^"]+)"',
@@ -40,11 +47,15 @@ class PythonPin(TypedDict):
     version: str
     abiTag: str
     pbsVariant: str
+    hashes: dict[str, str]
 
 
 _TARGETS = json.loads(Path("nix/python-targets.json").read_text(encoding="utf-8"))
 _PINS: dict[str, PythonPin] = _TARGETS["pythons"]
-WHEEL_PLATFORMS = frozenset(_TARGETS["platforms"])
+PLATFORM_TAGS: dict[str, str] = {
+    name: platform["platformTag"] for name, platform in _TARGETS["platforms"].items()
+}
+WHEEL_PLATFORMS = frozenset(platform for pin in _PINS.values() for platform in pin["hashes"])
 assert all(
     name.endswith("t") == pin["abiTag"].endswith("t") == (pin["pbsVariant"] == "-freethreaded")
     for name, pin in _PINS.items()
@@ -299,8 +310,11 @@ WHEEL_RUN = "uv run --no-cache --no-project --managed-python --python {PY}"
 wheel_guard = Task(
     WHEEL_RUN + " --no-index --find-links ../result-wheels"
     f' --with "salix=={VERSION}"'
-    " python -c \"import salix, sysconfig;"
-    " assert bool(sysconfig.get_config_var('Py_GIL_DISABLED')) == '{PY}'.endswith('t')\"",
+    " python -c \"import salix, sysconfig; from importlib.metadata import distribution;"
+    " assert bool(sysconfig.get_config_var('Py_GIL_DISABLED')) == '{ABI_TAG}'.endswith('t');"
+    " tags = [line for line in (distribution('salix').read_text('WHEEL') or '').splitlines()"
+    " if line.startswith('Tag: ')];"
+    " assert any(tag.endswith('-{ABI_TAG}-{PLATFORM_TAG}') for tag in tags), tags\"",
     cwd=Path("tests"),
 )
 wheel_test = Task(
@@ -311,35 +325,70 @@ wheel_test = Task(
     env={"SALIX_REQUIRE_INSTALLED": "1"},
 )
 
-WINDOWS_ARM_OLDEST = "3.11"
 
-WINDOWS_ARM_PYTHON = "cpython-{}-windows-aarch64"
+class Sample(Enum):
+    EVERY_PIN = auto()
+    OLDEST_NEWEST_AND_FREE_THREADED = auto()
 
 
 class CoverageRunner(NamedTuple):
-    wheel_platform: str
-    pythons: tuple[str, ...]
+    platform: str
+    sample: Sample
+    interpreter_request: str = "{}"
 
 
 COVERAGE_RUNNERS = {
-    "ubuntu-latest": CoverageRunner("manylinux-x86_64", (*PYTHONS, *FREE_THREADED)),
-    "ubuntu-24.04-arm": CoverageRunner("manylinux-aarch64", (OLDEST, NEWEST, *FREE_THREADED)),
-    "macos-latest": CoverageRunner("macos-aarch64", (OLDEST, NEWEST, *FREE_THREADED)),
-    "windows-latest": CoverageRunner("windows-x86_64", (OLDEST, NEWEST, *FREE_THREADED)),
-    "macos-15-intel": CoverageRunner("macos-x86_64", (OLDEST, NEWEST, *FREE_THREADED)),
+    "ubuntu-latest": CoverageRunner("manylinux-x86_64", Sample.EVERY_PIN),
+    "ubuntu-24.04-arm": CoverageRunner("manylinux-aarch64", Sample.OLDEST_NEWEST_AND_FREE_THREADED),
+    "macos-latest": CoverageRunner("macos-aarch64", Sample.OLDEST_NEWEST_AND_FREE_THREADED),
+    "windows-latest": CoverageRunner("windows-x86_64", Sample.OLDEST_NEWEST_AND_FREE_THREADED),
+    "macos-15-intel": CoverageRunner("macos-x86_64", Sample.OLDEST_NEWEST_AND_FREE_THREADED),
     "windows-11-arm": CoverageRunner(
-        "windows-aarch64",
-        (WINDOWS_ARM_PYTHON.format(WINDOWS_ARM_OLDEST), WINDOWS_ARM_PYTHON.format(NEWEST)),
+        "windows-aarch64", Sample.OLDEST_NEWEST_AND_FREE_THREADED, "cpython-{}-windows-aarch64"
     ),
 }
-assert {runner.wheel_platform for runner in COVERAGE_RUNNERS.values()} == WHEEL_PLATFORMS
+
+
+def has_wheel(pin: str, platform: str) -> bool:
+    return pin in _PINS and platform in _PINS[pin]["hashes"]
+
+
+def sampled_pins(runner: CoverageRunner) -> tuple[str, ...]:
+    gil_pins = tuple(pin for pin in PYTHONS if has_wheel(pin, runner.platform))
+    free_threaded_pins = tuple(pin for pin in FREE_THREADED if has_wheel(pin, runner.platform))
+
+    match runner.sample:
+        case Sample.EVERY_PIN:
+            return (*gil_pins, *free_threaded_pins)
+        case Sample.OLDEST_NEWEST_AND_FREE_THREADED:
+            bounds = (
+                (min(gil_pins, key=release_order), max(gil_pins, key=release_order))
+                if gil_pins
+                else ()
+            )
+            return (*dict.fromkeys(bounds), *free_threaded_pins)
+
+
+COVERAGE_SAMPLES = {name: sampled_pins(runner) for name, runner in COVERAGE_RUNNERS.items()}
+_COVERED_PLATFORMS = frozenset(runner.platform for runner in COVERAGE_RUNNERS.values())
+assert PLATFORM_TAGS.keys() >= WHEEL_PLATFORMS, sorted(WHEEL_PLATFORMS - PLATFORM_TAGS.keys())
+assert _COVERED_PLATFORMS == WHEEL_PLATFORMS, {
+    "runners without wheels": sorted(_COVERED_PLATFORMS - WHEEL_PLATFORMS),
+    "wheels without runners": sorted(WHEEL_PLATFORMS - _COVERED_PLATFORMS),
+}
+assert all(COVERAGE_SAMPLES.values()), [name for name, pins in COVERAGE_SAMPLES.items() if not pins]
 
 coverage = Parallel(
     Sequential(wheel_guard, wheel_test),
     variants=tuple(
-        {"OS": name, "PY": python}
+        {
+            "OS": name,
+            "PY": runner.interpreter_request.format(pin),
+            "ABI_TAG": _PINS[pin]["abiTag"],
+            "PLATFORM_TAG": PLATFORM_TAGS[runner.platform],
+        }
         for name, runner in COVERAGE_RUNNERS.items()
-        for python in runner.pythons
+        for pin in COVERAGE_SAMPLES[name]
     ),
 )
 
