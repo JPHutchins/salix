@@ -7,11 +7,13 @@ import struct
 import sys
 import zipfile
 from collections.abc import Callable, Iterator
+from enum import IntEnum
 from pathlib import Path
 from typing import NamedTuple
 
 ELF_MAGIC = b"\x7fELF"
 MACHO_64_MAGIC = b"\xcf\xfa\xed\xfe"
+WASM_MAGIC = b"\0asm\x01\0\0\0"
 
 
 class Shape(NamedTuple):
@@ -26,6 +28,7 @@ EXPECTED: dict[str, Shape] = {
     "macosx_11_0_arm64": Shape("macho", "aarch64"),
     "win_amd64": Shape("pe", "x86-64"),
     "win_arm64": Shape("pe", "aarch64"),
+    "pyemscripten_2026_0_wasm32": Shape("wasm", "wasm32"),
 }
 
 ELF_MACHINES = {0x3E: "x86-64", 0xB7: "aarch64"}
@@ -41,7 +44,16 @@ MACHO_REQUIRED_COMMANDS = {MACHO_LOAD_SYMTAB: ("LC_SYMTAB", 24), MACHO_LOAD_DYSY
 PE32_PLUS_MAGIC = 0x20B
 PE32_PLUS_DATA_DIRECTORY_COUNT = 108
 PE32_PLUS_DATA_DIRECTORIES = 112
-LINKER_EXPORTS: dict[str, frozenset[str]] = {"macho": frozenset({"__dso_handle", "_mh_dylib_header"})}
+WASM_SECTION_IMPORT = 2
+WASM_SECTION_MEMORY = 5
+WASM_SECTION_EXPORT = 7
+WASM_LIMITS_HAS_MAXIMUM = 0x01
+WASM_LIMITS_64_BIT = 0x04
+WASM_LIMITS_HAS_PAGE_SIZE = 0x08
+LINKER_EXPORTS: dict[str, frozenset[str]] = {
+    "macho": frozenset({"__dso_handle", "_mh_dylib_header"}),
+    "wasm": frozenset({"__wasm_call_ctors", "__wasm_apply_data_relocs"}),
+}
 
 
 class Failure(NamedTuple):
@@ -61,6 +73,9 @@ def identify(binary: bytes) -> Shape:
     if binary.startswith(b"MZ"):
         (machine,) = struct.unpack_from("<H", binary, pe_header(binary) + 4)
         return Shape("pe", PE_MACHINES.get(machine, hex(machine)))
+
+    if binary.startswith(WASM_MAGIC):
+        return Shape("wasm", wasm_machine(binary))
 
     return Shape("unknown", "unknown")
 
@@ -285,10 +300,121 @@ def pe_exports(binary: bytes) -> frozenset[str]:
     )
 
 
+def wasm_machine(binary: bytes) -> str:
+    return "wasm64" if any(flags & WASM_LIMITS_64_BIT for flags in wasm_memories(binary)) else "wasm32"
+
+
+class WasmImport(IntEnum):
+    FUNCTION = 0x00
+    TABLE = 0x01
+    MEMORY = 0x02
+    GLOBAL = 0x03
+    TAG = 0x04
+
+
+class WasmSection(NamedTuple):
+    kind: int
+    start: int
+
+
+def leb128(binary: bytes, offset: int) -> tuple[int, int]:
+    value = 0
+
+    for shift in range(0, 64, 7):
+        byte = binary[offset]
+        value |= (byte & 0x7F) << shift
+        offset += 1
+
+        if byte < 0x80:
+            return value, offset
+
+    raise ValueError(f"LEB128 at {offset} is longer than 64 bits")
+
+
+def wasm_sections(binary: bytes) -> Iterator[WasmSection]:
+    offset = len(WASM_MAGIC)
+
+    while offset < len(binary):
+        size, start = leb128(binary, offset + 1)
+
+        if start + size > len(binary):
+            raise ValueError(f"section {binary[offset]} at {offset} has size {size}")
+
+        yield WasmSection(binary[offset], start)
+        offset = start + size
+
+
+def wasm_name(binary: bytes, offset: int) -> tuple[str, int]:
+    length, start = leb128(binary, offset)
+    return binary[start : start + length].decode(), start + length
+
+
+def wasm_limits(binary: bytes, offset: int) -> tuple[int, int]:
+    flags = binary[offset]
+    _, offset = leb128(binary, offset + 1)
+
+    if flags & WASM_LIMITS_HAS_MAXIMUM:
+        _, offset = leb128(binary, offset)
+
+    if flags & WASM_LIMITS_HAS_PAGE_SIZE:
+        _, offset = leb128(binary, offset)
+
+    return flags, offset
+
+
+def wasm_memories(binary: bytes) -> Iterator[int]:
+    for section in wasm_sections(binary):
+        if section.kind == WASM_SECTION_MEMORY:
+            count, offset = leb128(binary, section.start)
+
+            for _ in range(count):
+                flags, offset = wasm_limits(binary, offset)
+                yield flags
+
+        if section.kind == WASM_SECTION_IMPORT:
+            count, offset = leb128(binary, section.start)
+
+            for _ in range(count):
+                _, offset = wasm_name(binary, offset)
+                _, offset = wasm_name(binary, offset)
+
+                match WasmImport(binary[offset]):
+                    case WasmImport.FUNCTION:
+                        _, offset = leb128(binary, offset + 1)
+                    case WasmImport.TABLE:
+                        _, offset = wasm_limits(binary, offset + 2)
+                    case WasmImport.MEMORY:
+                        flags, offset = wasm_limits(binary, offset + 1)
+                        yield flags
+                    case WasmImport.GLOBAL:
+                        offset += 3
+                    case WasmImport.TAG:
+                        _, offset = leb128(binary, offset + 2)
+
+
+def wasm_exports(binary: bytes) -> frozenset[str]:
+    return frozenset(
+        name
+        for section in wasm_sections(binary)
+        if section.kind == WASM_SECTION_EXPORT
+        for name in wasm_export_names(binary, section.start)
+    )
+
+
+def wasm_export_names(binary: bytes, start: int) -> Iterator[str]:
+    count, offset = leb128(binary, start)
+
+    for _ in range(count):
+        name, offset = wasm_name(binary, offset)
+        _, offset = leb128(binary, offset + 1)
+        yield name
+
+
 EXPORT_READERS: dict[str, Callable[[bytes], frozenset[str]]] = {
     "elf": elf_exports,
     "macho": macho_exports,
     "pe": pe_exports,
+    "wasm": wasm_exports,
 }
 
 

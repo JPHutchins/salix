@@ -16,6 +16,7 @@
       forAllSystems = lib.genAttrs systems;
 
       matrix = import ./nix/python-targets.nix;
+      pyodide = import ./nix/pyodide.nix;
 
       declaredPythons = lib.sort (a: b: a < b) (
         lib.splitString "\n" (lib.removeSuffix "\n" (lib.fileContents ./.python-version + "\n"))
@@ -75,21 +76,31 @@
 
           baseWheel = pkgs.callPackage ./nix/base-wheel.nix { src = buildSource; };
 
-          wheels = lib.listToAttrs (
-            map (
-              { pythonMinor, platformName }:
-              lib.nameValuePair "${pythonMinor}-${platformName}" (
-                pkgs.callPackage ./nix/wheel.nix {
-                  src = buildSource;
-                  inherit baseWheel;
-                  inherit (matrix) release;
-                  inherit pythonMinor platformName;
-                  python = matrix.pythons.${pythonMinor};
-                  platform = matrix.platforms.${platformName};
-                }
-              )
-            ) wheelIds
-          );
+          wheels =
+            lib.listToAttrs (
+              map (
+                { pythonMinor, platformName }:
+                lib.nameValuePair "${pythonMinor}-${platformName}" (
+                  pkgs.callPackage ./nix/wheel.nix {
+                    src = buildSource;
+                    inherit baseWheel;
+                    inherit (matrix) release;
+                    inherit pythonMinor platformName;
+                    python = matrix.pythons.${pythonMinor};
+                    platform = matrix.platforms.${platformName};
+                  }
+                )
+              ) wheelIds
+            )
+            // pyodideWheels;
+
+          pyodideWheels = lib.optionalAttrs (system == "x86_64-linux") {
+            pyodide = pkgs.callPackage ./nix/pyodide-wheel.nix {
+              src = buildSource;
+              inherit baseWheel pyodide emscripten;
+              xbuildenv = pyodideXbuildenv;
+            };
+          };
 
           all = pkgs.symlinkJoin {
             name = "salix-wheels";
@@ -99,6 +110,12 @@
           named = lib.mapAttrs' (
             name: wheel: lib.nameValuePair "wheel-${lib.replaceStrings [ "." ] [ "" ] name}" wheel
           ) wheels;
+
+          pyodideXbuildenv = pkgs.callPackage ./nix/pyodide-xbuildenv.nix { inherit pyodide; };
+
+          emscripten = pkgs.callPackage ./nix/emscripten.nix { inherit pyodide; };
+
+          pyodidePython = pkgs.callPackage ./nix/pyodide-python.nix { xbuildenv = pyodideXbuildenv; };
 
           jphfmt = pkgs.callPackage ./nix/jphfmt.nix { };
 
@@ -131,7 +148,8 @@
             ) "no releasable wheels: every pinned interpreter is a pre-release, so nothing has a frozen ABI";
             pkgs.symlinkJoin {
               name = "salix-release";
-              paths = map (name: wheels.${name}) releasableWheelNames ++ [ sdist ];
+              paths =
+                map (name: wheels.${name}) releasableWheelNames ++ lib.attrValues pyodideWheels ++ [ sdist ];
             };
         in
         {
@@ -145,6 +163,7 @@
             memcheck
             sdist
             release
+            pyodidePython
             ;
         };
 
@@ -161,6 +180,7 @@
         // {
           default = forSystem.${system}.all;
           c-tests = forSystem.${system}.cTests;
+          pyodide-python = forSystem.${system}.pyodidePython;
           inherit (forSystem.${system}) sdist release;
         }
         // lib.optionalAttrs (lib.hasSuffix "-linux" system) {
