@@ -6,7 +6,7 @@ from typing import NamedTuple
 
 import pytest
 
-from salix import Struct
+from salix import Struct, replace
 
 
 class MessageError(Exception, Struct, frozen=True):
@@ -451,6 +451,64 @@ def test_a_group_copy_reprs_as_its_source_and_the_source_as_a_plain_group(build,
     assert repr(error).removeprefix("MembersGroup") == repr(plain).removeprefix("PlainMembersGroup")
 
 
+class Unrepresentable(ValueError):
+    def __repr__(self) -> str:
+        raise LookupError("no repr")
+
+
+class Relabeled(ValueError):
+    def __deepcopy__(self, memo: dict) -> BaseException:
+        return ValueError("copied")
+
+
+def raised_by(attempt):
+    try:
+        attempt()
+    except LookupError as error:
+        return type(error)
+
+    return None
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
+@pytest.mark.parametrize("build", [built_positionally, built_by_keyword])
+@pytest.mark.parametrize("make_members", [members_list, members_tuple, Members])
+def test_a_replaced_group_keeps_its_new_members_as_given(build, make_members):
+    replaced = replace(build(make_members(ValueError("x"))), exceptions=make_members(ValueError("y")))
+    plain = PlainMembersGroup("m", make_members(ValueError("y")))
+
+    assert type(replaced.args[1]) is type(plain.args[1])
+    assert repr(replaced).removeprefix("MembersGroup") == repr(plain).removeprefix("PlainMembersGroup")
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
+@pytest.mark.parametrize("build", [built_positionally, built_by_keyword])
+@pytest.mark.parametrize("make_members", [members_list, members_tuple, Members])
+def test_a_member_whose_repr_raises_fails_where_it_fails_a_plain_group(build, make_members):
+    assert raised_by(lambda: build(make_members(Unrepresentable()))) is raised_by(
+        lambda: PlainMembersGroup("m", make_members(Unrepresentable()))
+    )
+    assert raised_by(lambda: repr(build(make_members(Unrepresentable())))) is LookupError
+    assert raised_by(lambda: repr(PlainMembersGroup("m", make_members(Unrepresentable())))) is LookupError
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
+@pytest.mark.parametrize("make_members", [members_list, members_tuple])
+def test_a_non_exception_member_is_refused_before_any_member_is_repred(make_members):
+    with pytest.raises(ValueError, match="Item 1 of second argument"):
+        built_by_keyword(make_members(Unrepresentable(), 5))
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
+@pytest.mark.parametrize("build", [built_positionally, built_by_keyword])
+@pytest.mark.parametrize("make_members", [members_list, members_tuple, Members])
+def test_a_deep_copied_group_reprs_its_copied_members(build, make_members):
+    error = copy.deepcopy(build(make_members(Relabeled("source"))))
+    plain = copy.deepcopy(PlainMembersGroup("m", make_members(Relabeled("source"))))
+
+    assert repr(error).removeprefix("MembersGroup") == repr(plain).removeprefix("PlainMembersGroup")
+
+
 class KwNew(Exception, Struct, frozen=False):
     x: int = 0
 
@@ -873,6 +931,14 @@ def test_group_args_are_the_members_whatever_the_field_order():
 
     assert restored.message == "m"
     assert str(restored) == "m (1 sub-exception)"
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
+def test_a_group_whose_args_hold_only_its_members_reprs_them():
+    group = ExceptionsOnly(exceptions=[ValueError("x")])
+
+    assert len(group.args) == 1
+    assert "[ValueError('x')]" in repr(group)
 
 
 @pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")

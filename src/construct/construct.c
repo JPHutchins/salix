@@ -201,8 +201,17 @@ PyObject * Struct_vectorcall(
 				fallback_allocated = true;
 				self = python_class->tp_alloc(python_class, 0);
 
-				if (self != NULL) {
-					set_exception_args_from_positionals(python_class, self, positionals);
+				if (
+					self != NULL &&
+					(
+						set_exception_args_from_positionals(
+							python_class,
+							self,
+							positionals
+						) != RESULT_OK
+					)
+				) {
+					Py_CLEAR(self);
 				}
 			}
 		}
@@ -376,11 +385,16 @@ int Struct_init_wrapper(
 		args = Py_XNewRef(((PyBaseExceptionObject *) self)->args);
 		STRUCT_END_CRITICAL_SECTION();
 
-		if (args == NULL) {
-			set_exception_args_from_positionals(cls, self, arguments);
-		}
+		bool const stored = (
+			args != NULL ||
+			set_exception_args_from_positionals(cls, self, arguments) == RESULT_OK
+		);
 
 		Py_XDECREF(args);
+
+		if (!stored) {
+			return -1;
+		}
 	}
 
 	return type->struct_installed_init(self, arguments, keywords);
@@ -674,7 +688,7 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 	} else
 #endif
 	if (
-		type->struct_post_init != NULL &&
+		(type->struct_post_init != NULL || type->struct_group_family) &&
 		set_exception_args_from_fields(type, built, explicit_count) != RESULT_OK
 	) {
 		return NULL;
