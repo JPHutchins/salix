@@ -496,6 +496,13 @@ PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 	PY_MOVABLE(dict, NULL);
 	struct_slots_copy_into(type, self, copy, &dict);
 
+	if (
+		(dict != NULL && struct_dict_copy_merged(dict, copy) < 0) ||
+		set_exception_args_from_original(type, copy, self, NULL, NULL) != RESULT_OK
+	) {
+		return NULL;
+	}
+
 #if PY_VERSION_HEX >= 0x030B0000
 	if (type->struct_group_family) {
 		PyBaseExceptionGroupObject * const source_group = (PyBaseExceptionGroupObject *) self;
@@ -506,7 +513,7 @@ PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 				copy,
 				source_group->msg,
 				source_group->excs,
-				group_excs_str(self),
+				self,
 				NULL,
 				NULL
 			) != RESULT_OK
@@ -515,13 +522,6 @@ PyObject * Struct_copy(PyObject * const self, PyObject * const noargs) {
 		}
 	}
 #endif
-
-	if (
-		(dict != NULL && struct_dict_copy_merged(dict, copy) < 0) ||
-		set_exception_args_from_original(type, copy, self, NULL, NULL) != RESULT_OK
-	) {
-		return NULL;
-	}
 
 	return py_move(&copy);
 }

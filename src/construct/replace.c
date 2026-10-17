@@ -277,12 +277,10 @@ PyObject * Struct_replace(
 						}
 					} else if (allocated_route) {
 						if (
-							carry_group_members(
+							set_exception_args_from_original(
 								type,
 								replaced,
-								source_group->msg,
-								source_group->excs,
-								group_excs_str(self),
+								self,
 								NULL,
 								NULL
 							) != RESULT_OK
@@ -291,9 +289,11 @@ PyObject * Struct_replace(
 						}
 
 						if (
-							set_exception_args_from_original(
+							carry_group_members(
 								type,
 								replaced,
+								source_group->msg,
+								source_group->excs,
 								self,
 								NULL,
 								NULL
@@ -446,7 +446,7 @@ PyObject * Struct_replace(
 				copy,
 				source_group->msg,
 				source_group->excs,
-				group_excs_str(self),
+				self,
 				NULL,
 				NULL
 			) != RESULT_OK

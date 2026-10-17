@@ -76,7 +76,7 @@ enum result carry_group_members(
 	PyObject * self,
 	PyObject * msg,
 	PyObject * excs,
-	PyObject * excs_str,
+	PyObject * source,
 	PyObject * deepcopier,
 	PyObject * memo
 );
@@ -101,7 +101,7 @@ enum result set_exception_args_from_original(
 	PyObject * memo
 );
 
-void set_exception_args_from_positionals(
+enum result set_exception_args_from_positionals(
 	PyTypeObject * cls,
 	PyObject * self,
 	PyObject * positionals

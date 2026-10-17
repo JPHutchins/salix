@@ -6,6 +6,15 @@
 #include "../result.h"
 #include "../types.h"
 
+static enum result derive_members_string(PyObject * self);
+#if PY_VERSION_HEX >= 0x030B0000
+static enum result store_args_from_member_fields(
+	StructType * type,
+	PyObject * self,
+	PyObject * msg
+);
+#endif
+
 int change_names_touch(
 	StructType * const type,
 	PyObject * const keyword_names,
@@ -60,18 +69,9 @@ enum result group_members_from_fields(
 	}
 
 	PY_MOVABLE(excs, NULL);
-	PY_MOVABLE(excs_str, NULL);
 
 	if (type->struct_exceptions_index >= 0) {
 		PyObject * const bound = *struct_slot(type, self, type->struct_exceptions_index);
-
-		if (bound != NULL && group_layout_has_excs_str()) {
-			excs_str = PyObject_Repr(bound);
-
-			if (excs_str == NULL) {
-				return RESULT_ERROR;
-			}
-		}
 
 		if (bound != NULL) {
 			excs = PyTuple_Check(bound) ? Py_NewRef(bound) : PySequence_Tuple(bound);
@@ -102,15 +102,10 @@ enum result group_members_from_fields(
 		}
 	}
 
-	if (excs_str == NULL && group_layout_has_excs_str()) {
-		excs_str = PyObject_Repr(excs);
-
-		if (excs_str == NULL) {
-			return RESULT_ERROR;
-		}
-	}
-
-	return carry_group_members(type, self, msg, excs, excs_str, NULL, NULL);
+	return (
+		store_args_from_member_fields(type, self, msg) != RESULT_OK ? RESULT_ERROR :
+		carry_group_members(type, self, msg, excs, NULL, NULL, NULL)
+	);
 }
 #endif
 
@@ -119,7 +114,7 @@ enum result carry_group_members(
 	PyObject * self,
 	PyObject * const msg,
 	PyObject * const excs,
-	PyObject * const excs_str,
+	PyObject * const source,
 	PyObject * const deepcopier,
 	PyObject * const memo
 ) {
@@ -154,15 +149,21 @@ enum result carry_group_members(
 		PyObject * * const excs_str_slot = group_excs_str_slot(self);
 
 		if (excs_str_slot != NULL) {
-			Py_XSETREF(*excs_str_slot, Py_XNewRef(excs_str));
+			Py_XSETREF(*excs_str_slot, (
+				source != NULL && group->excs == ((PyBaseExceptionGroupObject *) source)->excs ?
+				Py_XNewRef(group_excs_str(source)) :
+				NULL
+			));
 		}
+
+		return derive_members_string(self);
 	}
 #endif
 
 	return RESULT_OK;
 }
 
-static void store_exception_args(PyObject * const self, PyObject * const args) {
+static enum result store_exception_args(PyObject * const self, PyObject * const args) {
 	PyObject * old;
 
 	STRUCT_BEGIN_CRITICAL_SECTION(self);
@@ -171,6 +172,65 @@ static void store_exception_args(PyObject * const self, PyObject * const args) {
 	STRUCT_END_CRITICAL_SECTION();
 
 	Py_XDECREF(old);
+
+	return derive_members_string(self);
+}
+
+static PyObject * exception_args_of(PyObject * const self) {
+	PyObject * args;
+
+	STRUCT_BEGIN_CRITICAL_SECTION(self);
+	args = Py_XNewRef(((PyBaseExceptionObject *) self)->args);
+	STRUCT_END_CRITICAL_SECTION();
+
+	return args;
+}
+
+static enum result derive_members_string(PyObject * const self) {
+#if PY_VERSION_HEX >= 0x030B0000
+	StructType const * const type = struct_type_of(self);
+
+	if (!type->struct_group_family) {
+		return RESULT_OK;
+	}
+
+	PyBaseExceptionGroupObject * const group = (PyBaseExceptionGroupObject *) self;
+	PyObject * * const excs_str_slot = group_excs_str_slot(self);
+
+	if (excs_str_slot == NULL || *excs_str_slot != NULL || group->excs == NULL) {
+		return RESULT_OK;
+	}
+
+	PY_OWNED(args, exception_args_of(self));
+
+	if (args == NULL) {
+		return RESULT_OK;
+	}
+
+	PyObject * const given = (
+		type->struct_exceptions_index >= 0 ? *struct_slot(
+			type,
+			self,
+			type->struct_exceptions_index
+		) :
+		NULL
+	);
+	bool const given_is_custom = given != NULL && !PyList_Check(given) && !PyTuple_Check(given);
+
+	if (!given_is_custom && PyTuple_GET_SIZE(args) >= 2) {
+		return RESULT_OK;
+	}
+
+	PyObject * const members_string = PyObject_Repr(given != NULL ? given : group->excs);
+
+	if (members_string == NULL) {
+		return RESULT_ERROR;
+	}
+
+	Py_XSETREF(*excs_str_slot, members_string);
+#endif
+
+	return RESULT_OK;
 }
 
 enum result install_empty_exception_payload(StructType * const type, PyObject * const self) {
@@ -178,22 +238,15 @@ enum result install_empty_exception_payload(StructType * const type, PyObject * 
 		return RESULT_OK;
 	}
 
-	PyObject * const no_args = PyTuple_New(0);
+	PY_OWNED(no_args, PyTuple_New(0));
 
-	if (no_args == NULL) {
-		return RESULT_ERROR;
-	}
-
-	store_exception_args(self, no_args);
-
-	bool const caches_members_str = type->struct_group_family && group_layout_has_excs_str();
-	PY_OWNED(no_members_str, caches_members_str ? PyObject_Repr(no_args) : NULL);
-
-	if (caches_members_str && no_members_str == NULL) {
-		return RESULT_ERROR;
-	}
-
-	return carry_group_members(type, self, NULL, no_args, no_members_str, NULL, NULL);
+	return (
+		(
+			no_args == NULL ||
+			carry_group_members(type, self, NULL, no_args, NULL, NULL, NULL) != RESULT_OK
+		) ? RESULT_ERROR :
+		store_exception_args(self, Py_NewRef(no_args))
+	);
 }
 
 #if PY_VERSION_HEX >= 0x030B0000
@@ -202,39 +255,30 @@ enum result store_group_args(
 	PyObject * const self,
 	bool const from_fields
 ) {
+	if (from_fields) {
+		return store_args_from_member_fields(
+			type,
+			self,
+			((PyBaseExceptionGroupObject *) self)->msg
+		);
+	}
+
 	bool const has_message = type->struct_message_index >= 0;
 	bool const has_exceptions = type->struct_exceptions_index >= 0;
 	PY_MOVABLE(packed, NULL);
 
-	if (from_fields) {
-		PyObject * const message = (
-			has_message ? *struct_slot(type, self, type->struct_message_index) :
-			NULL
-		);
-		PyObject * const exceptions = (
+	{
+		PyBaseExceptionGroupObject * const group = (PyBaseExceptionGroupObject *) self;
+		PyObject * const given = (
 			has_exceptions ? *struct_slot(type, self, type->struct_exceptions_index) :
 			NULL
 		);
-
-		if (message != NULL && exceptions != NULL) {
-			packed = PyTuple_Pack(2, message, exceptions);
-		} else if (message != NULL) {
-			packed = PyTuple_Pack(1, message);
-		} else if (exceptions != NULL && type->struct_field_count >= 2) {
-			PyBaseExceptionGroupObject * const group = (PyBaseExceptionGroupObject *) self;
-			packed = PyTuple_Pack(2, group->msg, exceptions);
-		} else if (exceptions != NULL) {
-			packed = PyTuple_Pack(1, exceptions);
-		} else {
-			return RESULT_OK;
-		}
-	} else {
-		PyBaseExceptionGroupObject * const group = (PyBaseExceptionGroupObject *) self;
+		PyObject * const members = given != NULL ? given : group->excs;
 
 		if (has_exceptions && type->struct_field_count >= 2) {
-			packed = PyTuple_Pack(2, group->msg, group->excs);
+			packed = PyTuple_Pack(2, group->msg, members);
 		} else if (has_exceptions) {
-			packed = PyTuple_Pack(1, group->excs);
+			packed = PyTuple_Pack(1, members);
 		} else if (has_message) {
 			packed = PyTuple_Pack(1, group->msg);
 		} else {
@@ -246,9 +290,43 @@ enum result store_group_args(
 		return RESULT_ERROR;
 	}
 
-	store_exception_args(self, py_move(&packed));
+	return store_exception_args(self, py_move(&packed));
+}
+#endif
 
-	return RESULT_OK;
+#if PY_VERSION_HEX >= 0x030B0000
+static enum result store_args_from_member_fields(
+	StructType * const type,
+	PyObject * const self,
+	PyObject * const msg
+) {
+	PyObject * const message = (
+		type->struct_message_index >= 0 ? *struct_slot(type, self, type->struct_message_index) :
+		NULL
+	);
+	PyObject * const exceptions = (
+		type->struct_exceptions_index >= 0 ? *struct_slot(
+			type,
+			self,
+			type->struct_exceptions_index
+		) :
+		NULL
+	);
+	PY_MOVABLE(packed, NULL);
+
+	if (message != NULL && exceptions != NULL) {
+		packed = PyTuple_Pack(2, message, exceptions);
+	} else if (message != NULL) {
+		packed = PyTuple_Pack(1, message);
+	} else if (exceptions != NULL && type->struct_field_count >= 2) {
+		packed = PyTuple_Pack(2, msg, exceptions);
+	} else if (exceptions != NULL) {
+		packed = PyTuple_Pack(1, exceptions);
+	} else {
+		return RESULT_OK;
+	}
+
+	return packed == NULL ? RESULT_ERROR : store_exception_args(self, py_move(&packed));
 }
 #endif
 
@@ -279,9 +357,7 @@ enum result set_exception_args_from_fields(
 		PyTuple_SET_ITEM(args, i, Py_NewRef(*struct_slot(type, self, i)));
 	}
 
-	store_exception_args(self, py_move(&args));
-
-	return RESULT_OK;
+	return store_exception_args(self, py_move(&args));
 }
 
 enum result set_exception_args_from_original(
@@ -297,12 +373,7 @@ enum result set_exception_args_from_original(
 		return RESULT_OK;
 	}
 
-	PyObject * args;
-
-	STRUCT_BEGIN_CRITICAL_SECTION(original);
-	args = Py_XNewRef(((PyBaseExceptionObject *) original)->args);
-	STRUCT_END_CRITICAL_SECTION();
-
+	PyObject * const args = exception_args_of(original);
 	PY_MOVABLE(copied_args, NULL);
 
 	if (args == NULL) {
@@ -318,21 +389,18 @@ enum result set_exception_args_from_original(
 		return RESULT_ERROR;
 	}
 
-	store_exception_args(copy, py_move(&copied_args));
-
-	return RESULT_OK;
+	return store_exception_args(copy, py_move(&copied_args));
 }
 
-void set_exception_args_from_positionals(
+enum result set_exception_args_from_positionals(
 	PyTypeObject * const cls,
 	PyObject * const self,
 	PyObject * const positionals
 ) {
-	if (!is_exception_struct(cls)) {
-		return;
-	}
-
-	store_exception_args(self, Py_XNewRef(positionals));
+	return (
+		is_exception_struct(cls) ? store_exception_args(self, Py_XNewRef(positionals)) :
+		RESULT_OK
+	);
 }
 
 Py_ssize_t explicit_field_prefix(
@@ -558,12 +626,13 @@ static void test_the_group_members_carry_writes_the_bound_fields(void) {
 	TEST_ASSERT_TRUE(PyTuple_Check(group->excs));
 	TEST_ASSERT_EQUAL_INT(1, PyTuple_GET_SIZE(group->excs));
 	TEST_ASSERT_TRUE(PyExceptionInstance_Check(PyTuple_GET_ITEM(group->excs, 0)));
-	TEST_ASSERT_TRUE(
-		!group_layout_has_excs_str() || (
-			group_excs_str(shell) != NULL &&
-			PyUnicode_CompareWithASCIIString(group_excs_str(shell), "[ValueError()]") == 0
-		)
-	);
+	TEST_ASSERT_NULL(group_excs_str(shell));
+
+	TEST_ASSERT_EQUAL_INT(RESULT_OK, store_group_args(type, shell, true));
+
+	TEST_ASSERT_EQUAL_INT(2, PyTuple_GET_SIZE(((PyBaseExceptionObject *) shell)->args));
+	TEST_ASSERT_EQUAL_PTR(exceptions, PyTuple_GET_ITEM(((PyBaseExceptionObject *) shell)->args, 1));
+	TEST_ASSERT_NULL(group_excs_str(shell));
 
 	Py_DECREF(exceptions);
 	Py_DECREF(message);
@@ -577,7 +646,7 @@ static void test_a_group_built_without_member_fields_caches_its_members_string(v
 
 	TEST_ASSERT_NOT_NULL(instance);
 	TEST_ASSERT_EQUAL_INT(1, PyTuple_GET_SIZE(((PyBaseExceptionObject *) instance)->args));
-	TEST_ASSERT_TRUE(!group_layout_has_excs_str() || group_excs_str(instance) != NULL);
+	TEST_ASSERT_EQUAL(group_layout_has_excs_str(), group_excs_str(instance) != NULL);
 
 	Py_DECREF(fixtures);
 }
@@ -590,10 +659,24 @@ static void test_an_empty_group_payload_caches_its_members_string(void) {
 	TEST_ASSERT_NOT_NULL(shell);
 	TEST_ASSERT_EQUAL_INT(RESULT_OK, install_empty_exception_payload(type, shell));
 	TEST_ASSERT_EQUAL_INT(0, PyTuple_GET_SIZE(((PyBaseExceptionObject *) shell)->args));
-	TEST_ASSERT_TRUE(!group_layout_has_excs_str() || group_excs_str(shell) != NULL);
+	TEST_ASSERT_EQUAL(group_layout_has_excs_str(), group_excs_str(shell) != NULL);
+	TEST_ASSERT_TRUE(
+		!group_layout_has_excs_str() ||
+		PyUnicode_CompareWithASCIIString(group_excs_str(shell), "()") == 0
+	);
 
 	Py_DECREF(shell);
 	Py_DECREF(instance);
+}
+
+static void test_the_group_layout_probe_matches_the_interpreter(void) {
+	TEST_ASSERT_EQUAL(
+		(
+			(PY_VERSION_HEX >= 0x030D0C00 && PY_VERSION_HEX < 0x030E0000) ||
+			PY_VERSION_HEX >= 0x030E0400
+		),
+		group_layout_has_excs_str()
+	);
 }
 
 #	endif
@@ -609,6 +692,7 @@ void exceptions_tests(void) {
 	RUN_TEST(test_the_group_members_carry_writes_the_bound_fields);
 	RUN_TEST(test_a_group_built_without_member_fields_caches_its_members_string);
 	RUN_TEST(test_an_empty_group_payload_caches_its_members_string);
+	RUN_TEST(test_the_group_layout_probe_matches_the_interpreter);
 #	endif
 }
 

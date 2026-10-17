@@ -272,6 +272,10 @@ PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) {
 		}
 	}
 
+	if (set_exception_args_from_original(type, copy, self, deepcopy, memo) != RESULT_OK) {
+		return memo_failure(memo, key);
+	}
+
 #if PY_VERSION_HEX >= 0x030B0000
 	if (type->struct_group_family) {
 		PyBaseExceptionGroupObject * const source_group = (PyBaseExceptionGroupObject *) self;
@@ -282,7 +286,7 @@ PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) {
 				copy,
 				source_group->msg,
 				source_group->excs,
-				group_excs_str(self),
+				self,
 				deepcopy,
 				memo
 			) != RESULT_OK
@@ -291,10 +295,6 @@ PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) {
 		}
 	}
 #endif
-
-	if (set_exception_args_from_original(type, copy, self, deepcopy, memo) != RESULT_OK) {
-		return memo_failure(memo, key);
-	}
 
 	return py_move(&copy);
 }
