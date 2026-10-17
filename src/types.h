@@ -407,10 +407,6 @@ static inline char const * unusable_reason(StructType const * const type) {
 	return NULL;
 }
 
-static inline bool struct_class_usable_here(StructType const * const type) {
-	return unusable_reason(type) == NULL;
-}
-
 static inline void struct_class_advance_to(
 	StructType * const type,
 	enum struct_creation_stage const stage

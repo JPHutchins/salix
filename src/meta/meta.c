@@ -143,14 +143,19 @@ PyObject * StructMeta_new(
 		return NULL;
 	}
 
-	return build_struct_class(
-		metatype,
-		base,
-		name,
-		bases,
-		original_namespace,
-		keywords,
-		base->struct_state
+	PY_OWNED(namespace, dict_safe_to_read_unlocked(original_namespace));
+
+	return (
+		namespace != NULL ? build_struct_class(
+			metatype,
+			base,
+			name,
+			bases,
+			namespace,
+			keywords,
+			base->struct_state
+		) :
+		NULL
 	);
 }
 

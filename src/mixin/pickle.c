@@ -612,6 +612,14 @@ PyObject * Struct_setstate(PyObject * const self, PyObject * const state) {
 		return NULL;
 	}
 
+	PY_OWNED(slots, parts.slots != NULL ? dict_safe_to_read_unlocked(parts.slots) : NULL);
+
+	if (slots == NULL && parts.slots != NULL) {
+		return NULL;
+	}
+
+	parts.slots = slots;
+
 	if (!is_struct(self)) {
 		return restore_impostor(self, parts) == RESULT_OK ? Py_NewRef(Py_None) : NULL;
 	}
