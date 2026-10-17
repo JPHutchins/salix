@@ -231,7 +231,7 @@ HEADER_GATES = (
 )
 HEADER_GATE_BUILD = {"PYTHONPATH": "../build/{BEFORE}"}
 HEADER_GATE_TEST = (
-    " --with pytest --with hypothesis --with packaging"
+    " --with pytest --with pytest-markdown-docs --with hypothesis --with packaging"
     " python -m pytest -p no:cacheprovider --ignore=test_check_wheel.py . ../README.md"
 )
 header_gates = Parallel(
@@ -319,7 +319,7 @@ wheel_guard = Task(
 )
 wheel_test = Task(
     WHEEL_RUN + " --find-links ../result-wheels"
-    f' --with "salix=={VERSION}" --with pytest --with hypothesis'
+    f' --with "salix=={VERSION}" --with pytest --with pytest-markdown-docs --with hypothesis'
     " python -m pytest . ../README.md",
     cwd=Path("tests"),
     env={"SALIX_REQUIRE_INSTALLED": "1"},

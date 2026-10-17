@@ -267,6 +267,7 @@
                   (pkgs.python314.withPackages (ps: [
                     ps.pip
                     ps.pytest
+                    ps.pytest-markdown-docs
                     ps.hypothesis
                   ]))
                 ];
@@ -277,7 +278,7 @@
                 export PYTHONPATH=$PWD/site
                 export SALIX_REQUIRE_INSTALLED=1
                 cp ${./README.md} README.md
-                python -m pytest -q -p no:cacheprovider --doctest-glob=README.md ${./tests} README.md
+                python -m pytest -q -p no:cacheprovider --markdown-docs ${./tests} README.md
                 touch $out
               '';
         }

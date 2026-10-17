@@ -6,6 +6,7 @@ dependencies = [
     "pytest>=9",
     "hypothesis>=6",
     "packaging>=24",
+    "pytest-markdown-docs>=0.9",
     "tomli>=2; python_version < '3.11'",
 ]
 

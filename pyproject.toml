@@ -90,4 +90,4 @@ select = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "README.md"]
-addopts = "--doctest-glob=README.md"
+addopts = "--markdown-docs"

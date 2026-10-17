@@ -4,15 +4,15 @@ A C-backed, inheritable `Struct` base class for Python, for programs that pay
 for their imports.
 
 ```python
->>> from salix import Struct
+from salix import Struct
 
->>> class Point(Struct):
-...     x: float
-...     y: float = 0.0
 
->>> Point(1.0, 2.0)
-Point(x=1.0, y=2.0)
+class Point(Struct):
+    x: float
+    y: float = 0.0
 
+
+assert repr(Point(1.0, 2.0)) == "Point(x=1.0, y=2.0)"
 ```
 
 ## Install
@@ -77,32 +77,35 @@ An empty default of `list`, `dict`, `set`, or `bytearray` is copied per
 instance, not shared:
 
 ```python
->>> from salix import Struct
+from salix import Struct
 
->>> class Box(Struct):
-...     items: list = []
 
->>> left, right = Box(), Box()
->>> left.items.append("left")
->>> right.items
-[]
+class Box(Struct):
+    items: list = []
 
+
+left, right = Box(), Box()
+left.items.append("left")
+assert right.items == []
 ```
 
 A `frozen=False` struct default is deep-copied per instance too:
 
 ```python
->>> class Settings(Struct, frozen=False):
-...     verbose: bool = False
+from salix import Struct
 
->>> class App(Struct):
-...     settings: Settings = Settings()
 
->>> first, second = App(), App()
->>> first.settings.verbose = True
->>> second.settings.verbose
-False
+class Settings(Struct, frozen=False):
+    verbose: bool = False
 
+
+class App(Struct):
+    settings: Settings = Settings()
+
+
+first, second = App(), App()
+first.settings.verbose = True
+assert second.settings.verbose is False
 ```
 
 When a default is copied, each field gets its own copy, so two fields declared
@@ -167,19 +170,21 @@ evaluation error still fails the class. Every row is pinned in
 attribute names of `dataclasses.Field`, and imports nothing to do it:
 
 ```python
->>> from typing import Annotated
->>> from salix import MISSING, Struct, fields
+from typing import Annotated
 
->>> class Option(Struct):
-...     name: Annotated[str, "what to call it"]
-...     count: int = 1
+from salix import MISSING, Struct, fields
 
->>> [(field.name, field.type, field.default) for field in fields(Option)]
-[('name', <class 'str'>, MISSING), ('count', <class 'int'>, 1)]
 
->>> fields(Option)[0].annotated_metadata
-('what to call it',)
+class Option(Struct):
+    name: Annotated[str, "what to call it"]
+    count: int = 1
 
+
+assert [(field.name, field.type, field.default) for field in fields(Option)] == [
+    ("name", str, MISSING),
+    ("count", int, 1),
+]
+assert fields(Option)[0].annotated_metadata == ("what to call it",)
 ```
 
 `MISSING` is salix's own sentinel, not `dataclasses.MISSING`. A struct field
@@ -193,15 +198,15 @@ order. It is shallow, skips an unset field, and leaves out the instance
 `__dict__`:
 
 ```python
->>> from salix import Struct, to_dict
+from salix import Struct, to_dict
 
->>> class Flag(Struct):
-...     name: str
-...     count: int = 1
 
->>> to_dict(Flag("verbose"))
-{'name': 'verbose', 'count': 1}
+class Flag(Struct):
+    name: str
+    count: int = 1
 
+
+assert list(to_dict(Flag("verbose")).items()) == [("name", "verbose"), ("count", 1)]
 ```
 
 ## Caching a computed value
@@ -212,29 +217,31 @@ dataclass refuses it the same way. Two answers: `functools.cache` on the
 method, or a field that `__post_init__` fills:
 
 ```python
->>> import functools
->>> from salix import Struct, set_field
+import functools
 
->>> class Computed(Struct):
-...     x: int
-...
-...     @functools.cache
-...     def double(self) -> int:
-...         return self.x * 2
+from salix import Struct, set_field
 
->>> Computed(3).double()
-6
 
->>> class Filled(Struct):
-...     x: int
-...     double: int = 0
-...
-...     def __post_init__(self) -> None:
-...         set_field(self, "double", self.x * 2)
+class Computed(Struct):
+    x: int
 
->>> Filled(4).double
-8
+    @functools.cache
+    def double(self) -> int:
+        return self.x * 2
 
+
+assert Computed(3).double() == 6
+
+
+class Filled(Struct):
+    x: int
+    double: int = 0
+
+    def __post_init__(self) -> None:
+        set_field(self, "double", self.x * 2)
+
+
+assert Filled(4).double == 8
 ```
 
 Under the default eq=True the method cache keys on the value, not the
