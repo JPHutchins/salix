@@ -38,14 +38,27 @@ stdenv.mkDerivation {
     export PYTHONPATH="$PWD:$(python -c 'import sys; print(":".join(path for path in sys.path if path))')"
     export PYTHONMALLOC=malloc
     ulimit -s 8192
+    process_logs="$TMPDIR/memcheck"
+    mkdir "$process_logs"
 
+    pytest_status=0
     valgrind \
       --tool=memcheck \
       --main-stacksize=$(($(ulimit -s) * 1024)) \
       --trace-children=yes \
-      --errors-for-leak-kinds=none \
-      --error-exitcode=99 \
-      python -m pytest -q -p no:cacheprovider | tee $out
+      --leak-check=full \
+      --show-leak-kinds=definite,indirect \
+      --errors-for-leak-kinds=definite \
+      --log-file="$process_logs/%p.log" \
+      python -m pytest -q -p no:cacheprovider | tee $out || pytest_status=$?
+
+    cat "$process_logs"/*.log | tee -a $out
+    processes_with_errors=$(grep --files-without-match "ERROR SUMMARY: 0 errors" "$process_logs"/*.log || true)
+    if [ -n "$processes_with_errors" ]; then
+      echo "memcheck reported errors in: $processes_with_errors" >&2
+      exit 1
+    fi
+    [ "$pytest_status" -eq 0 ]
 
     runHook postBuild
   '';
