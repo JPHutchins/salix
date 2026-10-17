@@ -1,0 +1,5 @@
+{
+   cpython-instrumentation-reads-its-own-uninitialised-allocation
+   Memcheck:Cond
+   fun:force_instrument_lock_held*
+}

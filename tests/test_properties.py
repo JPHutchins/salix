@@ -1,3 +1,5 @@
+import copy
+
 from hypothesis import given
 from hypothesis import strategies as st
 from values import HASHABLE, Coordinate, Frozen, Inner
@@ -37,6 +39,34 @@ UNHASHABLE_VALUES = (
     | st.builds(bytearray, st.binary())
     | st.builds(lambda payload: memoryview(bytearray(payload)), st.binary())
 )
+
+COPYABLE_UNHASHABLE_VALUES = (
+    st.lists(LEAVES)
+    | st.dictionaries(LEAVES, LEAVES)
+    | st.sets(LEAVES)
+    | st.builds(bytearray, st.binary())
+)
+DEFAULT_FIELD_VALUES = (
+    VALUES | COPYABLE_UNHASHABLE_VALUES | st.tuples(COPYABLE_UNHASHABLE_VALUES, LEAVES)
+)
+
+
+def hashes(value: object) -> bool:
+    try:
+        hash(value)
+    except (TypeError, ValueError):
+        return False
+
+    return True
+
+
+def deep_copies(value: object) -> bool:
+    try:
+        copy.deepcopy(value)
+    except TypeError:
+        return False
+
+    return True
 
 
 @given(VALUES, VALUES)
@@ -95,3 +125,17 @@ def test_an_unhashable_field_still_round_trips_and_compares(first, second):
     assert pair.x is first
     assert pair.y is second
     assert pair == Pair(first, second)
+
+
+@given(DEFAULT_FIELD_VALUES, DEFAULT_FIELD_VALUES)
+def test_a_frozen_struct_default_is_copied_exactly_when_its_hash_fails_and_a_deepcopy_succeeds(
+    first, second
+):
+    declared = Pair(first, second)
+
+    class Holder(Struct):
+        pair: Pair = declared
+
+    assert (Holder().pair is not Holder().pair) == (
+        not hashes(declared) and deep_copies(declared)
+    )

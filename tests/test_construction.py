@@ -1,6 +1,9 @@
 import copy
 import copyreg
+import sys
 import threading
+from collections.abc import Callable
+from types import FrameType
 
 import pytest
 from platforms import recurses_through_c_until_recursion_error, starts_a_thread
@@ -741,6 +744,27 @@ class TestMutableDefaults:
 
         assert Holder().v == kind()
 
+    @pytest.mark.parametrize(
+        ("default", "calls"),
+        [
+            pytest.param([1, "a", None, 2.5], 0, id="atom_list"),
+            pytest.param({"a": 1, "b": 2}, 0, id="atom_dict"),
+            pytest.param({1, "b"}, 0, id="atom_set"),
+            pytest.param([[1]], 1, id="nested_list"),
+            pytest.param({"a": (1, "b")}, 1, id="tuple_in_dict"),
+        ],
+    )
+    def test_a_default_of_atoms_is_copied_without_calling_deepcopy(self, default, calls):
+        """Replacing copy.deepcopy turns the fast path off, so this counts calls
+        to the real one with a profiler instead."""
+
+        class Holder(Struct, frozen=False):
+            v: object = default
+
+        Holder()
+
+        assert deepcopy_calls_from_outside_copy(Holder) == calls
+
     def test_a_registered_reductor_copies_a_set_default(self, monkeypatch):
         class Holder(Struct):
             v: set = {1, 2}  # noqa: RUF012
@@ -1082,6 +1106,26 @@ class TestMutableDefaults:
             inner: Inner = Inner()
 
         assert Holder().inner is Holder().inner
+
+
+def deepcopy_calls_from_outside_copy(operation: Callable[[], object]) -> int:
+    calls = 0
+
+    def profile(frame: FrameType, event: str, argument: object) -> None:
+        nonlocal calls
+        called_from_outside_copy = (
+            frame.f_back is None or frame.f_back.f_code.co_filename != copy.__file__
+        )
+        if event == "call" and frame.f_code is copy.deepcopy.__code__ and called_from_outside_copy:
+            calls += 1
+
+    sys.setprofile(profile)
+    try:
+        operation()
+    finally:
+        sys.setprofile(None)
+
+    return calls
 
 
 def tried_while_its_class_is_created(window: str, attempt) -> list[object]:

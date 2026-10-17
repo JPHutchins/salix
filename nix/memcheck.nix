@@ -49,6 +49,7 @@ stdenv.mkDerivation {
       --leak-check=full \
       --show-leak-kinds=definite,indirect \
       --errors-for-leak-kinds=definite \
+      --suppressions=${./memcheck.supp} \
       --log-file="$process_logs/%p.log" \
       python -m pytest -q -p no:cacheprovider | tee $out || pytest_status=$?
 
