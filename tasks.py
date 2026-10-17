@@ -38,10 +38,8 @@ VERSION = _PROJECT_VERSION.group(1)
 
 class PythonPin(TypedDict):
     version: str
-    tag: str
     abiTag: str
     pbsVariant: str
-    hashes: dict[str, str]
 
 
 _PINS: dict[str, PythonPin] = json.loads(
@@ -54,10 +52,11 @@ assert all(
 PINNED = {name: pin["version"] for name, pin in _PINS.items()}
 assert any(name.endswith("t") for name in PINNED)
 
-UNTESTED: tuple[str, ...] = tuple(
-    json.loads(Path("nix/untested-pythons.json").read_text(encoding="utf-8"))
-)
-assert set(UNTESTED) <= set(PINNED)
+_UNTESTED_PYTHONS = json.loads(Path("nix/untested-pythons.json").read_text(encoding="utf-8"))
+assert isinstance(_UNTESTED_PYTHONS, list)
+assert all(isinstance(python, str) for python in _UNTESTED_PYTHONS)
+UNTESTED: tuple[str, ...] = tuple(_UNTESTED_PYTHONS)
+assert set(UNTESTED) <= {python for python in PINNED if python.endswith("t")}
 FREE_THREADED = tuple(
     python for python in PINNED if python.endswith("t") and python not in UNTESTED
 )

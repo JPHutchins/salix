@@ -172,10 +172,17 @@
       ".python-version lists ${toString declaredPythons} but nix/python-targets.json pins "
       + "${toString pinnedPythons}; regenerate with tools/update_python_targets.py"
     );
-    assert lib.assertMsg (lib.all (python: matrix.pythons ? ${python}) untestedPythons) (
-      "nix/untested-pythons.json lists ${toString untestedPythons} but nix/python-targets.json pins "
-      + "${toString pinnedPythons}"
-    );
+    assert lib.assertMsg
+      (
+        builtins.isList untestedPythons
+        && lib.all (
+          python: builtins.isString python && lib.hasSuffix "t" python && matrix.pythons ? ${python}
+        ) untestedPythons
+      )
+      (
+        "nix/untested-pythons.json is ${builtins.toJSON untestedPythons}, but it must be a list of "
+        + "free-threaded interpreters nix/python-targets.json pins: ${toString pinnedPythons}"
+      );
     {
       packages = forAllSystems (
         system:

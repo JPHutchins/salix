@@ -141,12 +141,16 @@ def recorded_release(output: Path) -> str | None:
     if not output.exists():
         return None
 
-    recorded = json.loads(output.read_text()).get("release")
+    try:
+        recorded = json.loads(output.read_text())
+    except json.JSONDecodeError as error:
+        raise SystemExit(f"{output} is not JSON ({error}); pass --release") from error
 
-    if not isinstance(recorded, str):
-        raise SystemExit(f"{output} records no release; pass --release")
-
-    return recorded
+    match recorded:
+        case {"release": str(release)} if release:
+            return release
+        case _:
+            raise SystemExit(f"{output} records no release tag; pass --release")
 
 
 def main() -> None:
