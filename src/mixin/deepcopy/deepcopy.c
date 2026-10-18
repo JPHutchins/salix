@@ -20,17 +20,6 @@ static PyObject * memo_failure(PyObject * const memo, PyObject * const key) {
 	return NULL;
 }
 
-static PyObject * allocated_copy(StructType * const type) {
-	PyTypeObject * const cls = &type->heap_type.ht_type;
-	PY_MOVABLE(copy, cls->tp_alloc(cls, 0));
-
-	if (copy != NULL && install_empty_exception_payload(type, copy) != RESULT_OK) {
-		return NULL;
-	}
-
-	return py_move(&copy);
-}
-
 PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) {
 	if (!PyDict_Check(memo)) {
 		PyErr_SetString(PyExc_TypeError, "__deepcopy__() argument must be a dict");
@@ -153,58 +142,10 @@ PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) {
 		NULL
 	);
 
-	PY_MOVABLE(copy, NULL);
-
-	if (type->struct_family_owned) {
-		PY_OWNED(values_snapshot, PyTuple_New(type->struct_field_count));
-
-		if (values_snapshot == NULL) {
-			return NULL;
-		}
-
-		struct_slots_ref_into(type, self, values_snapshot, NULL);
-
-		PyObject * args;
-
-		STRUCT_BEGIN_CRITICAL_SECTION(self);
-		args = Py_XNewRef(((PyBaseExceptionObject *) self)->args);
-		STRUCT_END_CRITICAL_SECTION();
-
-		if (args == NULL) {
-			args = PyTuple_New(0);
-		}
-
-		if (args == NULL) {
-			return NULL;
-		}
-
-		if (PyTuple_GET_SIZE(args) > 0) {
-			PY_OWNED(deep_args, PyObject_CallFunctionObjArgs(deepcopy, args, memo, NULL));
-			Py_DECREF(args);
-			copy = deep_args != NULL ? PyObject_Call((PyObject *) cls, deep_args, NULL) : NULL;
-
-			if (copy == NULL) {
-				return NULL;
-			}
-		} else {
-			Py_DECREF(args);
-			copy = allocated_copy(type);
-
-			if (copy == NULL) {
-				return NULL;
-			}
-		}
-
-		for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
-			PyObject * const value = PyTuple_GET_ITEM(values_snapshot, i);
-
-			if (value != NULL) {
-				Py_XSETREF(*struct_slot(type, copy, i), Py_NewRef(value));
-			}
-		}
-	} else {
-		copy = allocated_copy(type);
-	}
+	PY_MOVABLE(copy, (
+		type->struct_family_owned ? family_rebuilt_copy(type, self, deepcopy, memo) :
+		allocated_struct_copy(type)
+	));
 
 	if (copy == NULL) {
 		return NULL;

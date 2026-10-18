@@ -360,6 +360,73 @@ enum result set_exception_args_from_fields(
 	return store_exception_args(self, py_move(&args));
 }
 
+PyObject * allocated_struct_copy(StructType * const type) {
+	PyTypeObject * const cls = &type->heap_type.ht_type;
+	PY_MOVABLE(copy, cls->tp_alloc(cls, 0));
+
+	if (
+		copy != NULL &&
+		PyType_FastSubclass(cls, Py_TPFLAGS_BASE_EXC_SUBCLASS) &&
+		install_empty_exception_payload(type, copy) != RESULT_OK
+	) {
+		return NULL;
+	}
+
+	return py_move(&copy);
+}
+
+static PyObject * family_called_with(
+	StructType * const type,
+	PyObject * const args,
+	PyObject * const deepcopier,
+	PyObject * const memo
+) {
+	PY_OWNED(arguments, (
+		deepcopier != NULL ? PyObject_CallFunctionObjArgs(deepcopier, args, memo, NULL) :
+		Py_NewRef(args)
+	));
+
+	return (
+		arguments != NULL ? PyObject_Call((PyObject *) &type->heap_type.ht_type, arguments, NULL) :
+		NULL
+	);
+}
+
+PyObject * family_rebuilt_copy(
+	StructType * const type,
+	PyObject * const self,
+	PyObject * const deepcopier,
+	PyObject * const memo
+) {
+	PY_OWNED(values_snapshot, PyTuple_New(type->struct_field_count));
+
+	if (values_snapshot == NULL) {
+		return NULL;
+	}
+
+	struct_slots_ref_into(type, self, values_snapshot, NULL);
+
+	PY_OWNED(args, exception_args_of(self));
+	PY_MOVABLE(copy, (
+		args != NULL && PyTuple_GET_SIZE(args) > 0 ? family_called_with(type, args, deepcopier, memo) :
+		allocated_struct_copy(type)
+	));
+
+	if (copy == NULL) {
+		return NULL;
+	}
+
+	for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
+		PyObject * const value = PyTuple_GET_ITEM(values_snapshot, i);
+
+		if (value != NULL) {
+			Py_XSETREF(*struct_slot(type, copy, i), Py_NewRef(value));
+		}
+	}
+
+	return py_move(&copy);
+}
+
 enum result set_exception_args_from_original(
 	StructType * const type,
 	PyObject * const copy,

@@ -71,6 +71,15 @@ int change_names_touch(
 
 enum result install_empty_exception_payload(StructType * type, PyObject * self);
 
+PyObject * allocated_struct_copy(StructType * type);
+
+PyObject * family_rebuilt_copy(
+	StructType * type,
+	PyObject * self,
+	PyObject * deepcopier,
+	PyObject * memo
+);
+
 enum result carry_group_members(
 	StructType * type,
 	PyObject * self,
