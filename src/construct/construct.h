@@ -1,7 +1,9 @@
 #pragma once
 
 #include "../construct.h"
+#include "../owned.h"
 #include "../result.h"
+#include "../types.h"
 
 typedef struct StructType StructType;
 
@@ -70,6 +72,28 @@ int change_names_touch(
 );
 
 enum result install_empty_exception_payload(StructType * type, PyObject * self);
+
+static inline PyObject * allocated_struct_copy(StructType * const type) {
+	PyTypeObject * const cls = &type->heap_type.ht_type;
+	PY_MOVABLE(copy, cls->tp_alloc(cls, 0));
+
+	if (
+		copy != NULL &&
+		is_exception_struct(cls) &&
+		install_empty_exception_payload(type, copy) != RESULT_OK
+	) {
+		return NULL;
+	}
+
+	return py_move(&copy);
+}
+
+PyObject * family_rebuilt_copy(
+	StructType * type,
+	PyObject * self,
+	PyObject * deepcopier,
+	PyObject * memo
+);
 
 enum result carry_group_members(
 	StructType * type,

@@ -15,6 +15,17 @@ static enum result store_args_from_member_fields(
 );
 #endif
 
+static PyObject * shared_or_deepcopied(
+	PyObject * const value,
+	PyObject * const deepcopier,
+	PyObject * const memo
+) {
+	return (
+		deepcopier != NULL ? PyObject_CallFunctionObjArgs(deepcopier, value, memo, NULL) :
+		Py_NewRef(value)
+	);
+}
+
 int change_names_touch(
 	StructType * const type,
 	PyObject * const keyword_names,
@@ -124,8 +135,7 @@ enum result carry_group_members(
 
 		Py_XSETREF(group->msg, (
 			msg != NULL ? (
-				deepcopier != NULL ? PyObject_CallFunctionObjArgs(deepcopier, msg, memo, NULL) :
-				Py_XNewRef(msg)
+				shared_or_deepcopied(msg, deepcopier, memo)
 			) :
 			PyUnicode_FromString("")
 		));
@@ -136,8 +146,7 @@ enum result carry_group_members(
 
 		Py_XSETREF(group->excs, (
 			excs != NULL ? (
-				deepcopier != NULL ? PyObject_CallFunctionObjArgs(deepcopier, excs, memo, NULL) :
-				Py_XNewRef(excs)
+				shared_or_deepcopied(excs, deepcopier, memo)
 			) :
 			PyTuple_New(0)
 		));
@@ -360,6 +369,49 @@ enum result set_exception_args_from_fields(
 	return store_exception_args(self, py_move(&args));
 }
 
+static PyObject * family_called_with(
+	StructType * const type,
+	PyObject * const args,
+	PyObject * const deepcopier,
+	PyObject * const memo
+) {
+	PY_OWNED(arguments, shared_or_deepcopied(args, deepcopier, memo));
+
+	return (
+		arguments != NULL ? PyObject_Call((PyObject *) &type->heap_type.ht_type, arguments, NULL) :
+		NULL
+	);
+}
+
+PyObject * family_rebuilt_copy(
+	StructType * const type,
+	PyObject * const self,
+	PyObject * const deepcopier,
+	PyObject * const memo
+) {
+	PY_OWNED(values_snapshot, PyTuple_New(type->struct_field_count));
+
+	if (values_snapshot == NULL) {
+		return NULL;
+	}
+
+	struct_slots_ref_into(type, self, values_snapshot, NULL);
+
+	PY_OWNED(args, exception_args_of(self));
+	PY_MOVABLE(copy, (
+		args != NULL && PyTuple_GET_SIZE(args) > 0 ? family_called_with(type, args, deepcopier, memo) :
+		allocated_struct_copy(type)
+	));
+
+	if (copy == NULL) {
+		return NULL;
+	}
+
+	struct_slots_set_from(type, copy, values_snapshot);
+
+	return py_move(&copy);
+}
+
 enum result set_exception_args_from_original(
 	StructType * const type,
 	PyObject * const copy,
@@ -373,17 +425,11 @@ enum result set_exception_args_from_original(
 		return RESULT_OK;
 	}
 
-	PyObject * const args = exception_args_of(original);
-	PY_MOVABLE(copied_args, NULL);
-
-	if (args == NULL) {
-		copied_args = PyTuple_New(0);
-	} else if (deepcopier != NULL) {
-		copied_args = PyObject_CallFunctionObjArgs(deepcopier, args, memo, NULL);
-		Py_DECREF(args);
-	} else {
-		copied_args = args;
-	}
+	PY_OWNED(args, exception_args_of(original));
+	PY_MOVABLE(copied_args, (
+		args != NULL ? shared_or_deepcopied(args, deepcopier, memo) :
+		PyTuple_New(0)
+	));
 
 	if (copied_args == NULL) {
 		return RESULT_ERROR;

@@ -74,8 +74,7 @@ static PyObject * replace_with_init_vars(
 	PyObject * const * const arguments,
 	PyObject * const keyword_names
 ) {
-	PyTypeObject * const cls = &type->heap_type.ht_type;
-	PY_MOVABLE(copy, cls->tp_alloc(cls, 0));
+	PY_MOVABLE(copy, allocated_struct_copy(type));
 
 	if (copy == NULL) {
 		return NULL;
@@ -201,7 +200,7 @@ PyObject * Struct_replace(
 				) {
 					PyErr_Clear();
 					allocated_route = true;
-					replaced = cls->tp_alloc(cls, 0);
+					replaced = allocated_struct_copy(type);
 				} else if (replaced != NULL && !PyObject_TypeCheck(replaced, cls)) {
 					PyErr_Format(
 						PyExc_TypeError,
@@ -218,17 +217,11 @@ PyObject * Struct_replace(
 				}
 			} else {
 				allocated_route = true;
-				replaced = cls->tp_alloc(cls, 0);
+				replaced = allocated_struct_copy(type);
 			}
 
 			if (replaced != NULL) {
-				for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
-					PyObject * const value = PyTuple_GET_ITEM(values, i);
-
-					if (value != NULL) {
-						Py_XSETREF(*struct_slot(type, replaced, i), Py_NewRef(value));
-					}
-				}
+				struct_slots_set_from(type, replaced, values);
 
 				for (Py_ssize_t i = 0; i < change_count; ++i) {
 					struct field_lookup const found = find_field(
@@ -403,7 +396,7 @@ PyObject * Struct_replace(
 		return replace_with_init_vars(type, self, arguments, keyword_names);
 	}
 
-	PY_MOVABLE(copy, cls->tp_alloc(cls, 0));
+	PY_MOVABLE(copy, allocated_struct_copy(type));
 
 	if (copy == NULL) {
 		return NULL;
