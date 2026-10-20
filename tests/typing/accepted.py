@@ -39,6 +39,9 @@ class Seeded(Struct):
     a: int
     seed: InitVar[int]
 
+    def __post_init__(self, seed: int) -> None:
+        pass
+
 
 class SeededByDefault(Struct):
     a: int
