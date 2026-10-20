@@ -39,6 +39,11 @@ class Seeded(Struct):
     a: int
     seed: InitVar[int]
 
+
+class SeededByDefault(Struct):
+    a: int
+    seed: InitVar[int] = 0
+
     def __post_init__(self, seed: int) -> None:
         pass
 
@@ -157,7 +162,11 @@ def subscripting_a_generic_struct_narrows_the_field_type() -> None:
 
 def replace_returns_the_concrete_struct_type() -> None:
     assert_type(replace(Point(1, "two"), x=9), Point)
-    replace(Point(1, "two"), y=object())
+
+
+def replace_takes_an_init_var_and_may_omit_one_with_a_default() -> None:
+    assert_type(replace(Seeded(1, 2), a=3, seed=4), Seeded)
+    assert_type(replace(SeededByDefault(1), a=3), SeededByDefault)
 
 
 def from_mapping_returns_the_concrete_struct_type() -> None:

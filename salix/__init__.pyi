@@ -1,7 +1,7 @@
 from collections.abc import Mapping
-from typing import Any, Final, TypeVar, final
+from typing import Any, Final, Protocol, TypeVar, final
 
-from typing_extensions import Self, dataclass_transform
+from typing_extensions import ParamSpec, Self, dataclass_transform
 
 @dataclass_transform(frozen_default=True)
 class Struct:
@@ -28,10 +28,22 @@ class Struct:
     ) -> None: ...
 
 _StructT = TypeVar("_StructT", bound=Struct)
+_StructT_co = TypeVar("_StructT_co", bound=Struct, covariant=True)
+_Changes = ParamSpec("_Changes")
+
+class _ReplaceableStruct(Protocol[_Changes, _StructT_co]):
+    @property
+    def __struct_fields__(self) -> tuple[str, ...]: ...
+    def __replace__(self, /, *args: _Changes.args, **changes: _Changes.kwargs) -> _StructT_co: ...
 
 
 def set_field(instance: Struct, name: str, value: object, /) -> None: ...
-def replace(instance: _StructT, /, **changes: object) -> _StructT: ...
+def replace(
+    instance: _ReplaceableStruct[_Changes, _StructT_co],
+    /,
+    *args: _Changes.args,
+    **changes: _Changes.kwargs,
+) -> _StructT_co: ...
 def from_mapping(cls: type[_StructT], values: Mapping[str, object], /) -> _StructT: ...
 def to_dict(instance: Struct, /) -> dict[str, object]: ...
 

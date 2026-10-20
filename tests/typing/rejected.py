@@ -1,6 +1,7 @@
-from dataclasses import InitVar
+import sys
+from dataclasses import InitVar, dataclass
 
-from salix import Struct, fields, set_field, to_dict
+from salix import Struct, fields, replace, set_field, to_dict
 
 
 class Point(Struct):
@@ -23,6 +24,11 @@ class Ordered(Struct, order=True):
 
 class NoMatchArgs(Struct, match_args=False):
     rank: int
+
+
+@dataclass(frozen=True)
+class Plain:
+    x: int
 
 
 def a_frozen_field_may_not_be_assigned() -> None:
@@ -157,3 +163,23 @@ def fields_refuses_a_value_that_is_not_a_struct() -> None:
 
 def a_field_record_is_read_only() -> None:
     fields(Point)[0].name = "renamed"  # type: ignore[misc]
+
+
+def replace_refuses_a_value_that_is_not_a_struct() -> None:
+    replace(Plain(1), x=2)  # type: ignore[arg-type]
+
+
+def replace_takes_no_positional_changes() -> None:
+    replace(Point(1, "two"), 3)  # type: ignore[call-arg]
+
+
+if sys.version_info >= (3, 13):
+
+    def replace_refuses_a_name_that_is_not_a_field() -> None:
+        replace(Point(1, "two"), z=1)  # type: ignore[call-arg]
+
+    def replace_refuses_a_value_of_the_wrong_type() -> None:
+        replace(Point(1, "two"), x="one")  # type: ignore[arg-type]
+
+    def the_replace_method_refuses_a_name_that_is_not_a_field() -> None:
+        Point(1, "two").__replace__(z=1)  # type: ignore[call-arg]

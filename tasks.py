@@ -152,12 +152,16 @@ analyze = Sequential(compile_flags, Parallel(c_tidy, c_analyzer))
 TYPE_CHECK = "uv run --no-project --with typing_extensions"
 mypy = Task(
     TYPE_CHECK + " --with mypy mypy --strict --warn-unused-ignores"
-    " --python-version " + OLDEST + " tests/typing"
+    " --python-version {CHECKED_PYTHON} tests/typing"
 )
-pyright = Task(TYPE_CHECK + " --with pyright pyright --pythonversion " + OLDEST + " tests/typing")
+pyright = Task(TYPE_CHECK + " --with pyright pyright --pythonversion {CHECKED_PYTHON} tests/typing")
 
 ty = Task(
-    TYPE_CHECK + " --with ty ty check --python-version " + OLDEST + " tests/typing/accepted.py"
+    TYPE_CHECK + " --with ty ty check --python-version {CHECKED_PYTHON} tests/typing/accepted.py"
+)
+typed_api = Parallel(
+    Parallel(mypy, pyright, ty),
+    variants=tuple({"CHECKED_PYTHON": python} for python in (OLDEST, NEWEST)),
 )
 
 tooling = Task(
@@ -168,7 +172,7 @@ tooling = Task(
     " setup.py tasks.py build_config.py tools/ bench/",
     env={"MYPYPATH": "."},
 )
-type_check = Parallel(mypy, pyright, ty, tooling)
+type_check = Parallel(typed_api, tooling)
 
 RUFF_CHECK = "uv run --no-project --with ruff ruff check"
 HUNDREDS_OF_DIAGNOSTICS = 64_000
