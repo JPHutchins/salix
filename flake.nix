@@ -159,6 +159,11 @@
 
           cTests = pkgs.callPackage ./nix/c-tests.nix { src = testSource; };
 
+          sourceBuildGlibc = pkgs.callPackage ./nix/source-build-glibc.nix {
+            src = buildSource;
+            glibcFloor = lib.removePrefix "x86_64-linux-gnu." matrix.platforms.manylinux-x86_64.zigTarget;
+          };
+
           memcheck = pkgs.callPackage ./nix/memcheck.nix {
             inherit testPackages;
             src = lib.fileset.toSource {
@@ -199,6 +204,7 @@
             jphfmt
             cTests
             memcheck
+            sourceBuildGlibc
             sdist
             release
             pyodidePython
@@ -234,6 +240,9 @@
         }
         // lib.optionalAttrs (lib.hasSuffix "-linux" system) {
           inherit (forSystem.${system}) memcheck;
+        }
+        // lib.optionalAttrs (system == "x86_64-linux") {
+          source-build-glibc = forSystem.${system}.sourceBuildGlibc;
         }
       );
 

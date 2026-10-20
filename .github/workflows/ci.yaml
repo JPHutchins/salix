@@ -85,6 +85,18 @@ jobs:
       - run: uv sync --locked --no-install-workspace --only-group ci
       - run: uv run --no-sync camas memcheck
 
+  source-build-glibc:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: 0.13.0
+      - run: uv sync --locked --no-install-workspace --only-group ci
+      - run: uv run --no-sync camas source_build_glibc
+
   pyodide:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -109,7 +121,7 @@ jobs:
 
   release:
     if: startsWith(github.ref, 'refs/tags/')
-    needs: [wheels, coverage, memcheck, pyodide]
+    needs: [wheels, coverage, memcheck, source-build-glibc, pyodide]
     runs-on: ubuntu-latest
     concurrency:
       group: release-publish
