@@ -7,6 +7,8 @@ dependencies = [
     "hypothesis>=6",
     "packaging>=24",
     "pytest-markdown-docs>=0.9",
+    "pyrsistent>=0.20",
+    "immutables>=0.21",
     "tomli>=2; python_version < '3.11'",
 ]
 

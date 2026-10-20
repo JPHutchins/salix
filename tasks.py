@@ -243,7 +243,7 @@ HEADER_GATES = (
 )
 HEADER_GATE_BUILD = {"PYTHONPATH": "../build/{BEFORE}"}
 HEADER_GATE_SUITE = (
-    " --with pytest --with hypothesis --with packaging"
+    " --with pytest --with hypothesis --with packaging --with pyrsistent"
     " python -m pytest -p no:cacheprovider --ignore=test_check_wheel.py ."
 )
 HEADER_GATE_README = (
@@ -284,7 +284,7 @@ pyodide = Sequential(
     Task("nix build .#pyodide-python --out-link dist/pyodide-python", mutates=True),
     Task(
         "uv export --frozen --package salix-tests --no-hashes --no-emit-workspace"
-        " --output-file dist/pyodide-test-requirements.txt",
+        " --no-emit-package immutables --output-file dist/pyodide-test-requirements.txt",
         mutates=True,
     ),
     Task(
@@ -339,7 +339,7 @@ wheel_guard = Task(
 )
 WHEEL_PYTEST = WHEEL_RUN + f' --find-links ../result-wheels --with "salix=={VERSION}" --with pytest'
 wheel_test = Task(
-    WHEEL_PYTEST + " --with hypothesis python -m pytest .",
+    WHEEL_PYTEST + " --with hypothesis --with pyrsistent python -m pytest .",
     cwd=Path("tests"),
     env={"SALIX_REQUIRE_INSTALLED": "1"},
 )
