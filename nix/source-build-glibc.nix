@@ -3,6 +3,7 @@
   stdenv,
   python3,
   src,
+  glibcFloor,
 }:
 
 stdenv.mkDerivation {
@@ -21,9 +22,23 @@ stdenv.mkDerivation {
     runHook preBuild
 
     python setup.py build_ext --inplace
-    readelf --version-info salix/__init__*.so | grep -oE 'GLIBC_[A-Z0-9_.]+' | sort -u | tee $out
-    if grep -q '^GLIBC_ABI_' $out; then
-      echo "a source build requires $(grep '^GLIBC_ABI_' $out | tr '\n' ' ')which an older glibc lacks" >&2
+    module=(salix/__init__*.so)
+
+    if readelf --relocs "''${module[@]}" | grep -q R_X86_64_TLSDESC; then
+      echo "a source build reaches its thread-locals through TLS descriptors (the gnu2 dialect)" >&2
+      exit 1
+    fi
+
+    readelf --version-info "''${module[@]}" | grep -oE 'GLIBC_[A-Z0-9_.]+' | sort -u | tee $out
+    floor=GLIBC_${glibcFloor}
+    absent_from_floor=$(
+      while read -r needed; do
+        [[ $needed =~ ^GLIBC_2\.[0-9.]+$ && $(printf '%s\n' "$needed" "$floor" | sort -V | tail -1) == "$floor" ]] \
+          || echo "$needed"
+      done < $out
+    )
+    if [ -n "$absent_from_floor" ]; then
+      echo "a source build requires" $absent_from_floor "which $floor, the wheels' floor, lacks" >&2
       exit 1
     fi
 
