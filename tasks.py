@@ -150,22 +150,32 @@ c_analyzer = Task(
 analyze = Sequential(compile_flags, Parallel(c_tidy, c_analyzer))
 
 TYPE_CHECK = "uv run --no-project --with typing_extensions"
+MYPY = "mypy==2.4.0"
+PYRIGHT = "pyright==1.1.414"
+TY = "ty==0.0.63"
 mypy = Task(
-    TYPE_CHECK + " --with mypy mypy --strict --warn-unused-ignores"
+    TYPE_CHECK + " --with " + MYPY + " mypy --strict --warn-unused-ignores"
     " --python-version {CHECKED_PYTHON} tests/typing"
 )
-pyright = Task(TYPE_CHECK + " --with pyright pyright --pythonversion {CHECKED_PYTHON} tests/typing")
+pyright = Task(
+    TYPE_CHECK + " --with " + PYRIGHT + " pyright --pythonversion {CHECKED_PYTHON} tests/typing"
+)
 
 ty = Task(
-    TYPE_CHECK + " --with ty ty check --python-version {CHECKED_PYTHON} tests/typing/accepted.py"
+    TYPE_CHECK + " --with " + TY + " ty check --python-version {CHECKED_PYTHON}"
+    " tests/typing/accepted.py"
 )
 typed_api = Parallel(
-    Parallel(mypy, pyright, ty),
-    variants=tuple({"CHECKED_PYTHON": python} for python in (OLDEST, NEWEST)),
+    mypy,
+    pyright,
+    ty,
+    variants=tuple(
+        {"CHECKED_PYTHON": python} for python in sorted(PYTHONS, key=release_order)
+    ),
 )
 
 tooling = Task(
-    TYPE_CHECK + " --with mypy --with camas --with setuptools --with types-setuptools"
+    TYPE_CHECK + " --with " + MYPY + " --with camas --with setuptools --with types-setuptools"
     " --with msgspec --with record-type"
     " mypy --strict --warn-unused-ignores --explicit-package-bases"
     " --exclude bench/source-tiers/vendor"
