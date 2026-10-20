@@ -5,6 +5,13 @@
 #include "result.h"
 #include "types.h"
 
+struct ascii_literal {
+	char const * text;
+	Py_ssize_t length;
+};
+
+#define ASCII_LITERAL(literal) {.text = "" literal, .length = sizeof("" literal) - 1}
+
 #if PY_VERSION_HEX >= 0x030E0000
 typedef PyUnicodeWriter repr_writer;
 
@@ -12,12 +19,8 @@ static int write_text(repr_writer * const writer, PyObject * const text) {
 	return PyUnicodeWriter_WriteStr(writer, text);
 }
 
-static int write_ascii(
-	repr_writer * const writer,
-	char const * const ascii,
-	Py_ssize_t const length
-) {
-	return PyUnicodeWriter_WriteASCII(writer, ascii, length);
+static int write_ascii(repr_writer * const writer, struct ascii_literal const literal) {
+	return PyUnicodeWriter_WriteASCII(writer, literal.text, literal.length);
 }
 
 static int write_value_repr(repr_writer * const writer, PyObject * const value) {
@@ -30,12 +33,8 @@ static int write_text(repr_writer * const writer, PyObject * const text) {
 	return _PyUnicodeWriter_WriteStr(writer, text);
 }
 
-static int write_ascii(
-	repr_writer * const writer,
-	char const * const ascii,
-	Py_ssize_t const length
-) {
-	return _PyUnicodeWriter_WriteASCIIString(writer, ascii, length);
+static int write_ascii(repr_writer * const writer, struct ascii_literal const literal) {
+	return _PyUnicodeWriter_WriteASCIIString(writer, literal.text, literal.length);
 }
 
 static int write_value_repr(repr_writer * const writer, PyObject * const value) {
@@ -45,17 +44,14 @@ static int write_value_repr(repr_writer * const writer, PyObject * const value) 
 }
 #endif
 
-static char const fields_open[] = "(";
-static char const fields_close[] = ")";
-static char const field_separator[] = ", ";
-static char const name_value_separator[] = "=";
-static char const unset_value[] = "<unset>";
+static struct ascii_literal const fields_open = ASCII_LITERAL("(");
+static struct ascii_literal const fields_close = ASCII_LITERAL(")");
+static struct ascii_literal const field_separator = ASCII_LITERAL(", ");
+static struct ascii_literal const name_value_separator = ASCII_LITERAL("=");
+static struct ascii_literal const unset_value = ASCII_LITERAL("<unset>");
 
 static int write_value(repr_writer * const writer, PyObject * const value) {
-	return (
-		value != NULL ? write_value_repr(writer, value) :
-		write_ascii(writer, unset_value, sizeof unset_value - 1)
-	);
+	return (value != NULL ? write_value_repr(writer, value) : write_ascii(writer, unset_value));
 }
 
 static enum result write_field(
@@ -65,14 +61,11 @@ static enum result write_field(
 	Py_ssize_t const index
 ) {
 	PY_OWNED(value, struct_slot_ref(type, self, index));
-	bool const separated = (
-		index == 0 ||
-		write_ascii(writer, field_separator, sizeof field_separator - 1) == 0
-	);
+	bool const separated = (index == 0 || write_ascii(writer, field_separator) == 0);
 	bool const named = (
 		separated &&
 		write_text(writer, PyTuple_GET_ITEM(type->struct_field_names, index)) == 0 &&
-		write_ascii(writer, name_value_separator, sizeof name_value_separator - 1) == 0
+		write_ascii(writer, name_value_separator) == 0
 	);
 
 	return named && write_value(writer, value) == 0 ? RESULT_OK : RESULT_ERROR;
@@ -84,10 +77,7 @@ static enum result write_struct(
 	PyObject * const self,
 	PyObject * const qualname
 ) {
-	if (
-		write_text(writer, qualname) < 0 ||
-		write_ascii(writer, fields_open, sizeof fields_open - 1) < 0
-	) {
+	if (write_text(writer, qualname) < 0 || write_ascii(writer, fields_open) < 0) {
 		return RESULT_ERROR;
 	}
 
@@ -97,10 +87,7 @@ static enum result write_struct(
 		}
 	}
 
-	return (
-		write_ascii(writer, fields_close, sizeof fields_close - 1) == 0 ? RESULT_OK :
-		RESULT_ERROR
-	);
+	return (write_ascii(writer, fields_close) == 0 ? RESULT_OK : RESULT_ERROR);
 }
 
 #if PY_VERSION_HEX >= 0x030E0000
