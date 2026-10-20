@@ -191,6 +191,8 @@ c_test = Task("nix build .#c-tests --no-link", when=NIX_INPUTS)
 
 memcheck = Task("nix build .#memcheck --no-link", when=NIX_INPUTS)
 
+source_build_glibc = Task("nix build .#source-build-glibc --no-link", when=NIX_INPUTS)
+
 wheels = Task("nix build .#default --out-link result-wheels", when=NIX_INPUTS, mutates=True)
 flake_evaluates = Task(
     "sh -c 'nix flake show --all-systems --json > /dev/null'", when=NIX_INPUTS

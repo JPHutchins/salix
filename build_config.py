@@ -74,6 +74,8 @@ BUILD: Final = BuildConfig(
 
 STRICT: Final = ("-Werror",)
 
+PLATFORM_FLAGS: Final = {"linux-x86_64": ("-mtls-dialect=gnu",)}
+
 SHIPPED: Final = ("-g0",)
 
 
