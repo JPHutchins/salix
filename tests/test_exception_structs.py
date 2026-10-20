@@ -541,12 +541,35 @@ def test_copy_arms_carry_the_family_members():
 
 @pytest.mark.parametrize(("copier", "shares_items"), [(copy.copy, True), (copy.deepcopy, False)])
 def test_a_family_copy_rebuilds_its_attributes_from_shared_or_detached_args(copier, shares_items):
-    error = FileError([2], "msg")
+    error = replace(FileError([2], "msg"), code=7)
     copied = copier(error)
 
-    assert (copied.errno, copied.args) == ([2], ([2], "msg"))
+    assert (copied.errno, copied.args, copied.code) == ([2], ([2], "msg"), 7)
     assert (copied.errno is error.errno) is shares_items
     assert (copied.args[0] is error.args[0]) is shares_items
+
+
+@pytest.mark.parametrize("copier", [copy.copy, copy.deepcopy])
+def test_a_family_copy_without_args_carries_its_fields_and_an_empty_payload(copier):
+    copied = copier(replace(FileError(), code=7))
+
+    assert (copied.args, copied.errno, copied.code) == ((), None, 7)
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="ExceptionGroup exists from 3.11")
+@pytest.mark.parametrize("copier", [copy.copy, copy.deepcopy])
+def test_a_group_copy_without_args_carries_its_fields_and_an_empty_group(copier):
+    group = EG()
+    group.x = 5
+    copied = copier(group)
+
+    assert (copied.args, copied.x, copied.message, copied.exceptions, str(copied)) == (
+        (),
+        5,
+        "",
+        (),
+        " (0 sub-exception)",
+    )
 
 
 def test_replace_and_from_mapping_run_on_family_owned_structs():

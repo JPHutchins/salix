@@ -2,6 +2,7 @@
 
 #include "../construct.h"
 #include "../result.h"
+#include "../types.h"
 
 typedef struct StructType StructType;
 
@@ -71,7 +72,22 @@ int change_names_touch(
 
 enum result install_empty_exception_payload(StructType * type, PyObject * self);
 
-PyObject * allocated_struct_copy(StructType * type);
+static inline PyObject * allocated_struct_copy(StructType * const type) {
+	PyTypeObject * const cls = &type->heap_type.ht_type;
+	PyObject * const copy = cls->tp_alloc(cls, 0);
+
+	if (
+		copy == NULL ||
+		!is_exception_struct(cls) ||
+		install_empty_exception_payload(type, copy) == RESULT_OK
+	) {
+		return copy;
+	}
+
+	Py_DECREF(copy);
+
+	return NULL;
+}
 
 PyObject * family_rebuilt_copy(
 	StructType * type,

@@ -269,6 +269,20 @@ static inline Py_ssize_t struct_slots_ref_into(
 	return set_count;
 }
 
+static inline void struct_slots_set_from(
+	StructType const * const type,
+	PyObject * const target,
+	PyObject * const values
+) {
+	for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
+		PyObject * const value = PyTuple_GET_ITEM(values, i);
+
+		if (value != NULL) {
+			Py_XSETREF(*struct_slot(type, target, i), Py_NewRef(value));
+		}
+	}
+}
+
 static inline PyObject * struct_slots_by_name(
 	StructType const * const type,
 	PyObject * const self
