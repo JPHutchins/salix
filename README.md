@@ -137,6 +137,12 @@ class body named: appending to the module-level object afterwards does not
 reach the class. The getters hand the stored objects out, not copies: do not
 mutate what `__struct_defaults__` returns.
 
+A large collection field that changes often is cheaper as a persistent
+collection — `pyrsistent`'s `pvector` and `pmap`, or `immutables.Map` — than
+as a tuple or dict. It hashes, so as a default it is shared rather than
+copied, and `replace(record, items=record.items.set(key, value))` builds the
+new collection from the old one's untouched structure instead of copying it.
+
 ## ClassVar and InitVar
 
 A name annotated `ClassVar[...]` at the top level is a class variable:
