@@ -55,7 +55,7 @@ def test_an_unset_field_is_skipped():
     assert to_dict(Point.__new__(Point)) == {}
 
 
-@pytest.mark.parametrize("set_count", [1, 6, 11])
+@pytest.mark.parametrize("set_count", [0, 1, 6, 11])
 def test_a_sparse_instance_gives_a_dict_sized_for_its_set_fields(set_count):
     Wide = type("Wide", (Struct,), {"__annotations__": {f"field_{i}": object for i in range(30)}})
     Narrow = type("Narrow", (Struct,), {"__annotations__": {f"field_{i}": object for i in range(set_count)}})
@@ -64,8 +64,10 @@ def test_a_sparse_instance_gives_a_dict_sized_for_its_set_fields(set_count):
     sparse.__setstate__((None, values))
 
     built = to_dict(sparse)
-    _, slots = sparse.__reduce_ex__(4)[2]
+    state = sparse.__reduce_ex__(4)[2]
+    slots = {} if state is None else state[1]
 
+    assert (state is None) == (set_count == 0)
     assert built == values
     assert sys.getsizeof(built) == sys.getsizeof(to_dict(Narrow(**values)))
     assert sys.getsizeof(slots) == sys.getsizeof(built)
