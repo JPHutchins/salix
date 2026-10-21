@@ -1,14 +1,12 @@
 import base64
 import hashlib
-import os
 import struct
 import subprocess
-import sys
 import zipfile
 from pathlib import Path
 
 import pytest
-from platforms import starts_a_subprocess
+from platforms import run_tool, starts_a_subprocess
 
 CHECK_WHEEL = Path(__file__).resolve().parent.parent / "tools" / "check_wheel.py"
 
@@ -40,14 +38,7 @@ def wheel(where: Path, platform: str, payload_name: str, payload: bytes) -> Path
 
 
 def check(*paths: Path) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [sys.executable, str(CHECK_WHEEL), *map(str, paths)],
-        capture_output=True,
-        encoding="utf-8",
-        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
-        check=False,
-        timeout=60,
-    )
+    return run_tool(CHECK_WHEEL, *paths)
 
 
 TRUNCATED_ELF = b"\x7fELF" + bytes(14) + struct.pack("<H", 0x3E) + bytes(4)
@@ -112,15 +103,25 @@ def elf_module(
     symbol_entry_size: int = 24,
     section_header_size: int = 64,
     duplicated_section: int | None = None,
+    empty_section_at: int | None = None,
+    symbol_count: int = 1,
+    name_length: int | None = None,
 ) -> bytes:
     strings = b"\0" + b"".join(
-        name.encode() + b"\0" for name in ("PyInit_salix", "ld-linux.so.2", "GLIBC_2.3", "libc.so.6", *versions)
+        name.encode() + b"\0"
+        for name in (
+            "PyInit_salix" if name_length is None else "a" * name_length,
+            "ld-linux.so.2",
+            "GLIBC_2.3",
+            "libc.so.6",
+            *versions,
+        )
     )
 
     def string(name: str) -> int:
         return strings.index(b"\0" + name.encode() + b"\0") + 1
 
-    symbols = bytes(24) + struct.pack("<IBBHQQ", string("PyInit_salix"), 0x12, 0, 1, 0, 0)
+    symbols = bytes(24) + struct.pack("<IBBHQQ", 1, 0x12, 0, 1, 0, 0) * symbol_count
     needs = (
         struct.pack("<HHIII", 1, 1, string("ld-linux.so.2"), 16, 32)
         + struct.pack("<IHHII", 0, 0, 2, string("GLIBC_2.3"), 0)
@@ -162,7 +163,11 @@ def elf_module(
             strict=True,
         )
     ]
-    duplicates = [] if duplicated_section is None else [headers[duplicated_section - 1]]
+    assert duplicated_section is None or 1 <= duplicated_section <= len(headers)
+    duplicates = [
+        *([] if duplicated_section is None else [headers[duplicated_section - 1]]),
+        *([] if empty_section_at is None else [struct.pack("<IIQQQQIIQQ", 0, 3, 0, 0, empty_section_at, 0, 0, 0, 1, 0)]),
+    ]
     section_headers = bytes(64) + b"".join(headers + duplicates)
     header = (
         b"\x7fELF\x02\x01\x01"
@@ -255,7 +260,7 @@ WASM = ("pyemscripten_2026_0_wasm32", "salix/__init__.cpython-313-wasm32-emscrip
         (
             WASM,
             WASM_HEADER + wasm_section(2, wasm_name("env") + wasm_name("g") + b"\x03"),
-            "a read at 9 runs past its section's 8 bytes",
+            "3 bytes at 7 run past its section's 8 bytes",
         ),
     ],
     ids=[
@@ -410,6 +415,7 @@ def test_a_manylinux_module_needing_an_unnumbered_glibc_version_fails(version, t
         ({"symbol_entry_size": 0}, "misstate their entry size"),
         ({"section_header_size": 0}, "the section headers are 0 bytes each, not 64"),
         ({"duplicated_section": 3}, "overlap the section before them"),
+        ({"empty_section_at": 1 << 40}, "run past the file's"),
     ],
     ids=[
         "need-count-under-the-chain",
@@ -424,6 +430,7 @@ def test_a_manylinux_module_needing_an_unnumbered_glibc_version_fails(version, t
         "symbols-without-an-entry-size",
         "section-headers-without-a-size",
         "version-needs-listed-twice",
+        "an-empty-section-past-the-file",
     ],
 )
 def test_a_version_need_or_relocation_section_that_misstates_itself_fails_that_wheel_cleanly(
@@ -479,3 +486,47 @@ def test_a_side_module_exporting_anything_but_functions_fails_by_name_and_kind(e
     assert completed.returncode == 1
     assert listed in completed.stderr
     assert "could not be checked" not in completed.stderr
+
+
+def test_many_exports_naming_one_long_string_are_resolved_once(tmp_path):
+    payload = elf_module(
+        0x3E, ("GLIBC_2.2.5",), X86_64_RELATIVE_AND_DTPMOD64, symbol_count=40_000, name_length=1_000_000
+    )
+    completed = check(wheel(tmp_path, *ELF, payload))
+
+    assert completed.returncode == 1
+    assert "not PyInit_salix alone" in completed.stderr
+    assert "could not be checked" not in completed.stderr
+
+
+def test_a_wheel_that_outlasts_the_time_bound_fails_with_it(tmp_path):
+    hung = wheel(tmp_path, *WASM, wasm_exporting(*WASM_SIDE_MODULE_EXPORTS))
+    completed = run_tool(
+        "-c",
+        "import sys, time\n"
+        f"sys.path.insert(0, {str(CHECK_WHEEL.parent)!r})\n"
+        "import check_wheel\n"
+        "check_wheel.CHECK_SECONDS = 0.2\n"
+        "check_wheel.check = lambda path: iter(time.sleep(10) or ())\n"
+        f"sys.argv = ['check_wheel.py', {str(hung)!r}]\n"
+        "check_wheel.main()\n",
+    )
+
+    assert completed.returncode == 1
+    assert completed.stdout.splitlines() == [f"FAIL {hung.name}"]
+    assert "could not be checked within 0.2 s" in completed.stderr
+
+
+def test_wheels_sharing_a_filename_each_get_their_own_verdict(tmp_path):
+    good = tmp_path / "good"
+    bad = tmp_path / "bad"
+    good.mkdir()
+    bad.mkdir()
+    passing = wheel(good, *WASM, wasm_exporting(*WASM_SIDE_MODULE_EXPORTS))
+    failing = wheel(bad, *WASM, wasm_exporting(*WASM_SIDE_MODULE_EXPORTS[:2]))
+    completed = check(passing, failing)
+
+    assert passing.name == failing.name
+    assert completed.stdout.splitlines() == [f"ok   {passing.name}", f"FAIL {failing.name}"]
+    assert str(failing) in completed.stderr
+    assert str(passing) not in completed.stderr
