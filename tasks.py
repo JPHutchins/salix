@@ -252,6 +252,7 @@ free_threaded = Parallel(
     variants=tuple({"FT": python, "FT_PYTHON": f"{PINNED[python]}t"} for python in FREE_THREADED),
     env=FREE_THREADED_ROOT,
 )
+ISOLATED_RUN = "uv run --no-project --isolated --managed-python --python "
 HEADER_GATES = (
     {"BEFORE": "3.13.11", "AFTER": "3.13.12"},
     {"BEFORE": "3.14.3", "AFTER": "3.14.4"},
@@ -268,20 +269,20 @@ HEADER_GATE_README = (
 header_gates = Parallel(
     Sequential(
         Task(
-            "uv run --no-project --managed-python --python {BEFORE} --with setuptools"
+            ISOLATED_RUN + "{BEFORE} --with setuptools"
             " python setup.py build_ext --build-lib build/{BEFORE} --build-temp build/{BEFORE}-temp",
             mutates=True,
             env=STRICT_BUILD,
         ),
         Task(
-            "uv run --no-project --managed-python --python {BEFORE} python -c 'import salix'",
+            ISOLATED_RUN + "{BEFORE} python -c 'import salix'",
             cwd=Path("tests"),
             env=HEADER_GATE_BUILD,
         ),
         Parallel(
             *(
                 Task(
-                    "uv run --no-project --managed-python --python " + interpreter + run,
+                    ISOLATED_RUN + interpreter + run,
                     cwd=Path("tests"),
                     env=HEADER_GATE_BUILD,
                 )
@@ -326,7 +327,7 @@ pyodide = Sequential(
 in_place_build = Task("uv run python setup.py build_ext --inplace", mutates=True, env=STRICT_BUILD)
 benchmark = Sequential(in_place_build, bench)
 CONFORMANCE_PYTHON = "3.14.6"
-CONFORMANCE_RUN = f"uv run --no-project --isolated --managed-python --python {CONFORMANCE_PYTHON}"
+CONFORMANCE_RUN = ISOLATED_RUN + CONFORMANCE_PYTHON
 conformance = Sequential(
     Task(
         CONFORMANCE_RUN + " --with setuptools python setup.py build_ext --inplace",
@@ -341,7 +342,7 @@ conformance = Sequential(
 )
 check = Parallel(test, free_threaded, format_check, lock_check, lint, analyze, c_test, type_check)
 
-WHEEL_RUN = "uv run --no-cache --no-project --managed-python --python {PY}"
+WHEEL_RUN = ISOLATED_RUN + "{PY} --no-cache"
 wheel_guard = Task(
     WHEEL_RUN + " --no-index --find-links ../result-wheels"
     f' --with "salix=={VERSION}"'
