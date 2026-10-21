@@ -1,3 +1,4 @@
+import abc
 import copy
 import copyreg
 import pickle
@@ -403,6 +404,25 @@ class TestMutableDefaults:
 
         assert Holder().v is Holder().v
 
+    def test_a_list_default_holding_a_class_whose_metaclass_cannot_be_hashed_is_shared(self):
+        class UnhashableMetaclass(type):
+            def __hash__(cls):
+                raise TypeError("unhashable metaclass")
+
+        class Meta(type, metaclass=UnhashableMetaclass):
+            pass
+
+        class Unhashable(metaclass=Meta):
+            pass
+
+        class Holder(Struct):
+            items: list = [Unhashable]  # noqa: RUF012
+
+        with pytest.raises(TypeError, match="unhashable metaclass"):
+            copy.deepcopy([Unhashable])
+
+        assert Holder().items is Holder().items
+
     @pytest.mark.parametrize(
         "value",
         [
@@ -737,7 +757,7 @@ class TestMutableDefaults:
 
         assert list(Holder().v) == list(copy.deepcopy(stored))
 
-    @pytest.mark.parametrize("kind", [list, dict], ids=lambda kind: kind.__name__)
+    @pytest.mark.parametrize("kind", [list, dict, set], ids=lambda kind: kind.__name__)
     def test_a_registered_dispatch_copier_copies_the_default(self, kind, monkeypatch):
         class Holder(Struct):
             v: object = kind([("a", 1)]) if kind is dict else kind([1])
@@ -752,6 +772,7 @@ class TestMutableDefaults:
             pytest.param([1, "a", None, 2.5], 0, id="atom_list"),
             pytest.param({"a": 1, "b": 2}, 0, id="atom_dict"),
             pytest.param({1, "b"}, 0, id="atom_set"),
+            pytest.param([abc.ABC], 0, id="class_list"),
             pytest.param([[1]], 1, id="nested_list"),
             pytest.param({"a": (1, "b")}, 1, id="tuple_in_dict"),
         ],
@@ -788,6 +809,27 @@ class TestMutableDefaults:
         monkeypatch.setitem(copyreg.dispatch_table, set, lambda value: (frozenset, (list(value),)))
 
         assert type(Holder().v) is frozenset
+
+    @pytest.mark.parametrize(
+        ("kind", "copied", "calls"),
+        [(list, {99}, 1), (tuple, {1, 2}, 0)],
+        ids=["list", "tuple"],
+    )
+    def test_a_set_default_is_copied_through_the_list_copier_but_never_the_tuple_copier(
+        self, kind, copied, calls, monkeypatch
+    ):
+        """copy.deepcopy reduces a set to set(list) and copies the reduction's
+        arguments one by one, never as a tuple."""
+
+        declared = {1, 2}
+
+        class Holder(Struct):
+            v: set = declared
+
+        monkeypatch.setitem(copy._deepcopy_dispatch, kind, lambda value, memo: kind([99]))
+
+        assert Holder().v == copy.deepcopy(declared) == copied
+        assert deepcopy_calls_from_outside_copy(Holder) == calls
 
     def test_a_struct_default_holding_a_list_is_copied_deeply(self):
         class Inner(Struct):
