@@ -39,6 +39,7 @@ PE_MACHINES = {0x8664: "x86-64", 0xAA64: "aarch64"}
 ELF_SECTION_RELA = 4
 ELF_SECTION_DYNSYM = 11
 ELF_SECTION_VERNEED = 0x6FFFFFFE
+ELF_VERSION_ENTRY_SIZE = 16
 ELF_BINDINGS_EXPORTED = frozenset({1, 2, 10})
 ELF_VISIBILITIES_EXPORTED = frozenset({0, 3})
 ELF_RELOCATIONS_REFUSED: dict[str, dict[int, str]] = {"x86-64": {36: "R_X86_64_TLSDESC"}}
@@ -159,25 +160,33 @@ def check(path: Path) -> Iterator[Failure]:
 
 
 def beyond_the_glibc_floor(binary: bytes, machine: str, floor: tuple[int, ...]) -> Iterator[str]:
-    beyond = sorted(
-        version
-        for version in elf_needed_versions(binary)
-        if version.startswith("GLIBC_") and not within(version, floor)
-    )
+    sections = elf_sections(binary)
+    numbers = {
+        version: glibc_release(version)
+        for version in elf_needed_versions(binary, sections)
+        if version.startswith("GLIBC_")
+    }
+    unnumbered = sorted(version for version, number in numbers.items() if number is None)
+    beyond = sorted(version for version, number in numbers.items() if number is not None and number > floor)
+
+    if unnumbered:
+        yield f"needs {unnumbered}, glibc version nodes that no numbered release, and so no manylinux floor, covers"
 
     if beyond:
         yield f"needs {beyond}, which glibc {'.'.join(map(str, floor))} lacks"
 
-    refused = ELF_RELOCATIONS_REFUSED.get(machine, {})
-    descriptors = sorted(refused[kind] for kind in elf_relocation_kinds(binary) & refused.keys())
+    refused = ELF_RELOCATIONS_REFUSED.get(machine)
 
-    if descriptors:
-        yield f"reaches its thread-locals through {descriptors}, the gnu2 TLS dialect"
+    if refused is not None:
+        descriptors = sorted(refused[kind] for kind in elf_relocation_kinds(binary, sections) & refused.keys())
+
+        if descriptors:
+            yield f"reaches its thread-locals through {descriptors}, the gnu2 TLS dialect"
 
 
-def within(version: str, floor: tuple[int, ...]) -> bool:
+def glibc_release(version: str) -> tuple[int, ...] | None:
     numbered = NUMBERED_GLIBC.fullmatch(version)
-    return numbered is not None and tuple(int(part) for part in numbered[1].split(".")) <= floor
+    return tuple(int(part) for part in numbered[1].split(".")) if numbered is not None else None
 
 
 def init_symbol(payload: str) -> str:
@@ -233,34 +242,46 @@ def elf_exports(binary: bytes) -> frozenset[str]:
     )
 
 
-def elf_needed_versions(binary: bytes) -> frozenset[str]:
-    sections = elf_sections(binary)
-
+def elf_needed_versions(binary: bytes, sections: list[ElfSection]) -> frozenset[str]:
     return frozenset(
         c_string(binary, sections[needs.link].offset + name)
         for needs in sections
         if needs.kind == ELF_SECTION_VERNEED
-        for name in elf_version_names(binary, needs.offset, needs.info)
+        for name in elf_version_names(binary, needs)
     )
 
 
-def elf_version_names(binary: bytes, need: int, need_count: int) -> Iterator[int]:
-    for _ in range(need_count):
-        _, version_count, _, first_version, next_need = struct.unpack_from("<HHIII", binary, need)
+def elf_version_names(binary: bytes, needs: ElfSection) -> Iterator[int]:
+    need = needs.offset
+
+    for _ in range(needs.info):
+        _, version_count, _, first_version, next_need = struct.unpack_from(
+            "<HHIII", binary, inside_the_section(needs, need)
+        )
         version = need + first_version
 
         for _ in range(version_count):
-            _, _, _, name, next_version = struct.unpack_from("<IHHII", binary, version)
+            _, _, _, name, next_version = struct.unpack_from("<IHHII", binary, inside_the_section(needs, version))
             yield name
             version += next_version
+
+        if next_need == 0:
+            return
 
         need += next_need
 
 
-def elf_relocation_kinds(binary: bytes) -> frozenset[int]:
+def inside_the_section(section: ElfSection, entry: int) -> int:
+    if not section.offset <= entry <= section.offset + section.size - ELF_VERSION_ENTRY_SIZE:
+        raise ValueError(f"a version entry at {entry} is outside its section at {section.offset}+{section.size}")
+
+    return entry
+
+
+def elf_relocation_kinds(binary: bytes, sections: list[ElfSection]) -> frozenset[int]:
     return frozenset(
         info & 0xFFFFFFFF
-        for relocations in elf_sections(binary)
+        for relocations in sections
         if relocations.kind == ELF_SECTION_RELA
         for (info,) in (
             struct.unpack_from("<Q", binary, start + 8)
@@ -379,7 +400,12 @@ def pe_exports(binary: bytes) -> frozenset[str]:
 
 
 def wasm_machine(binary: bytes) -> str:
-    return "wasm64" if any(flags & WASM_LIMITS_64_BIT for flags in wasm_memories(binary)) else "wasm32"
+    memories = list(wasm_memories(binary))
+
+    if not memories:
+        raise ValueError("the module declares and imports no memory, so its address width is unknown")
+
+    return "wasm64" if any(flags & WASM_LIMITS_64_BIT for flags in memories) else "wasm32"
 
 
 class WasmImport(IntEnum):
@@ -392,7 +418,7 @@ class WasmImport(IntEnum):
 
 class WasmSection(NamedTuple):
     kind: int
-    start: int
+    body: bytes
 
 
 def leb128(binary: bytes, offset: int) -> tuple[int, int]:
@@ -418,13 +444,17 @@ def wasm_sections(binary: bytes) -> Iterator[WasmSection]:
         if start + size > len(binary):
             raise ValueError(f"section {binary[offset]} at {offset} has size {size}")
 
-        yield WasmSection(binary[offset], start)
+        yield WasmSection(binary[offset], binary[start : start + size])
         offset = start + size
 
 
-def wasm_name(binary: bytes, offset: int) -> tuple[str, int]:
-    length, start = leb128(binary, offset)
-    return binary[start : start + length].decode(), start + length
+def wasm_name(body: bytes, offset: int) -> tuple[str, int]:
+    length, start = leb128(body, offset)
+
+    if start + length > len(body):
+        raise ValueError(f"a name of {length} bytes at {start} runs past its section's {len(body)}")
+
+    return body[start : start + length].decode(), start + length
 
 
 def wasm_limits(binary: bytes, offset: int) -> tuple[int, int]:
@@ -443,31 +473,31 @@ def wasm_limits(binary: bytes, offset: int) -> tuple[int, int]:
 def wasm_memories(binary: bytes) -> Iterator[int]:
     for section in wasm_sections(binary):
         if section.kind == WASM_SECTION_MEMORY:
-            count, offset = leb128(binary, section.start)
+            count, offset = leb128(section.body, 0)
 
             for _ in range(count):
-                flags, offset = wasm_limits(binary, offset)
+                flags, offset = wasm_limits(section.body, offset)
                 yield flags
 
         if section.kind == WASM_SECTION_IMPORT:
-            count, offset = leb128(binary, section.start)
+            count, offset = leb128(section.body, 0)
 
             for _ in range(count):
-                _, offset = wasm_name(binary, offset)
-                _, offset = wasm_name(binary, offset)
+                _, offset = wasm_name(section.body, offset)
+                _, offset = wasm_name(section.body, offset)
 
-                match WasmImport(binary[offset]):
+                match WasmImport(section.body[offset]):
                     case WasmImport.FUNCTION:
-                        _, offset = leb128(binary, offset + 1)
+                        _, offset = leb128(section.body, offset + 1)
                     case WasmImport.TABLE:
-                        _, offset = wasm_limits(binary, offset + 2)
+                        _, offset = wasm_limits(section.body, offset + 2)
                     case WasmImport.MEMORY:
-                        flags, offset = wasm_limits(binary, offset + 1)
+                        flags, offset = wasm_limits(section.body, offset + 1)
                         yield flags
                     case WasmImport.GLOBAL:
                         offset += 3
                     case WasmImport.TAG:
-                        _, offset = leb128(binary, offset + 2)
+                        _, offset = leb128(section.body, offset + 2)
 
 
 def wasm_exports(binary: bytes) -> frozenset[str]:
@@ -475,16 +505,20 @@ def wasm_exports(binary: bytes) -> frozenset[str]:
         name
         for section in wasm_sections(binary)
         if section.kind == WASM_SECTION_EXPORT
-        for name in wasm_export_names(binary, section.start)
+        for name in wasm_export_names(section.body)
     )
 
 
-def wasm_export_names(binary: bytes, start: int) -> Iterator[str]:
-    count, offset = leb128(binary, start)
+def wasm_export_names(body: bytes) -> Iterator[str]:
+    count, offset = leb128(body, 0)
 
     for _ in range(count):
-        name, offset = wasm_name(binary, offset)
-        _, offset = leb128(binary, offset + 1)
+        name, offset = wasm_name(body, offset)
+
+        if body[offset] != WasmImport.FUNCTION:
+            raise ValueError(f"export {name} has kind {body[offset]}, not a function")
+
+        _, offset = leb128(body, offset + 1)
         yield name
 
 
