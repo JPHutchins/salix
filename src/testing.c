@@ -111,12 +111,22 @@ PyObject * testing_entry(PyObject * const fixtures, char const * const name) {
 	return entry;
 }
 
+PyObject * testing_fixture(char const * const source, char const * const name) {
+	PY_OWNED(fixtures, testing_evaluate(source));
+
+	return Py_NewRef(testing_entry(fixtures, name));
+}
+
+static char const instances_source[] = {
+#	embed "../tests/c/fixtures/testing/instances.py" suffix(, '\0')
+};
+
 PyObject * testing_two_field_instance(void) {
-	return testing_evaluate("class P(Struct):\n    alpha: int\n    beta: int\nresult = P(1, 2)\n");
+	return testing_fixture(instances_source, "two_field");
 }
 
 PyObject * testing_frozen_empty_instance(void) {
-	return testing_evaluate("class E(Struct):\n    pass\nresult = E()\n");
+	return testing_fixture(instances_source, "frozen_empty");
 }
 
 #endif

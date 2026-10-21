@@ -206,8 +206,12 @@ int honours_a_body_comparison(
 
 #	include "../../testing.h"
 
+static char const comparison_source[] = {
+#	embed "../../../tests/c/fixtures/settle/comparison.py" suffix(, '\0')
+};
+
 static PyObject * comparison_class(void) {
-	return testing_evaluate("class C(Struct):\n    x: int = 1\nresult = C\n");
+	return testing_fixture(comparison_source, "compared");
 }
 
 static void test_resolve_dunder_answers_each_shape(void) {
@@ -242,7 +246,7 @@ static void test_resolve_dunder_answers_each_shape(void) {
 
 static void test_the_owner_rule_honours_only_the_first_structs_chain(void) {
 	PyObject * const cls = comparison_class();
-	PyObject * const other = testing_evaluate("class D(Struct):\n    y: int = 2\nresult = D\n");
+	PyObject * const other = testing_fixture(comparison_source, "other");
 	PyTypeObject * const type = (PyTypeObject *) cls;
 
 	TEST_ASSERT_TRUE(honoured_owner(type, type));
