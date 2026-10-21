@@ -1174,15 +1174,12 @@ def test_a_failing_origin_probe_fails_the_class():
     assert Ordinary._struct_fields_ == ("v",)
 
 
-def test_an_annotation_that_rewrites_the_annotations_does_not_take_the_walk_with_it():
+def test_an_annotation_that_rewrites_the_annotations_changes_nothing_the_walk_reads():
     """The object path asks the annotation for `__origin__`, which runs the
-    class author's code, which can reach the dict being walked. `PyDict_Next`
-    is only defined while the dict is unmodified, so the names are taken first
-    and each annotation is looked up again as it is reached.
-
-    A field added during the walk is not declared -- it was not there when the
-    class body ended -- and one deleted during it is skipped rather than read
-    from a pointer the dict no longer owns.
+    class author's code, which can reach the dict the class body declared.
+    The walk reads planning's own copy of it, so the fields are the ones the
+    body ended with: one deleted during the walk is still a field, and one
+    added during it is not.
     """
 
     annotations = {}
@@ -1201,7 +1198,7 @@ def test_an_annotation_that_rewrites_the_annotations_does_not_take_the_walk_with
 
     Built = type(Struct)("Rewritten", (Struct,), {"__annotations__": annotations})
 
-    assert Built._struct_fields_ == ("first", "last")
+    assert Built._struct_fields_ == ("first", "doomed", "last")
 
 
 @pytest.mark.skipif(sys.version_info < (3, 12), reason="PEP 695 `type` is a syntax error before 3.12")
@@ -1247,18 +1244,21 @@ def test_a_pep_695_alias_to_something_else_is_still_a_field():
     assert Ordinary._struct_fields_ == ("v",)
 
 
-def test_a_str_injected_during_the_walk_is_matched_rather_than_crashing():
-    """The text matcher's needles are built at the first str annotation, and
-    not from a question asked of the dict before the loop.
-
-    The walk runs the class author's `__getattr__`, which can put a str into
-    that dict after such a question has answered "there is no text here". That
-    combination segfaulted: the answer was cached, the needles stayed NULL, and
-    the injected str reached `PyUnicode_GET_LENGTH(NULL)`.
-
-    Asserted as the refusal it should be, because a segfault takes pytest with
-    it and there would be nothing left to report.
+def test_a_str_after_an_object_annotation_is_matched_and_one_injected_during_the_walk_is_not_read():
+    """The text matcher's needles are built at the first str annotation,
+    wherever the walk reaches it. A str the class author's `__getattr__` puts
+    into the body's dict during the walk is not read at all: the walk reads
+    planning's own copy.
     """
+
+    class Quiet:
+        def __getattr__(self, name: str) -> object:
+            raise AttributeError(name)
+
+    with pytest.raises(TypeError, match="annotated ClassVar"):
+        type(Struct)(
+            "Late", (Struct,), {"__annotations__": {"first": Quiet(), "late": "ClassVar[int]"}}
+        )
 
     annotations = {}
 
@@ -1271,8 +1271,9 @@ def test_a_str_injected_during_the_walk_is_matched_rather_than_crashing():
 
     annotations.update({"first": Injects(), "late": int})
 
-    with pytest.raises(TypeError, match="annotated ClassVar"):
-        type(Struct)("Injected", (Struct,), {"__annotations__": annotations})
+    Built = type(Struct)("Injected", (Struct,), {"__annotations__": annotations})
+
+    assert Built._struct_fields_ == ("first", "late")
 
 
 def test_the_object_path_is_skipped_when_neither_module_is_loaded(monkeypatch):
