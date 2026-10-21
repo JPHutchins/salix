@@ -217,6 +217,25 @@ def test_a_state_naming_a_slot_beyond_the_fields_restores_through_the_slot() -> 
     assert (restored.x, restored.extra) == (5, "kept")
 
 
+def test_a_non_struct_restore_reads_the_state_as_it_was_passed() -> None:
+    slots = {"a": 1, "b": 2}
+    instance_dict = {"c": 3}
+    emptied: list[str] = []
+
+    class Impostor(Struct.__mro__[1], list):
+        def __setattr__(self, name: str, value: object) -> None:
+            object.__setattr__(self, name, value)
+            emptied.append(name)
+            slots.clear()
+            instance_dict.clear()
+
+    restored = Impostor()
+    restored.__setstate__((instance_dict, slots))
+
+    assert emptied[0] == "a"
+    assert vars(restored) == {"a": 1, "b": 2, "c": 3}
+
+
 @pytest.mark.parametrize("protocol", PROTOCOLS)
 def test_a_frozen_struct_round_trips(protocol: int) -> None:
     first = object()

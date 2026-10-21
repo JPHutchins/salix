@@ -526,10 +526,14 @@ static struct field_plan plan_from_parameters(
 }
 
 static PyObject * checked_annotations(PyObject * const namespace) {
-	PY_MOVABLE(annotations, struct_annotations(namespace));
+	PY_OWNED(annotations, struct_annotations(namespace));
 
-	if (annotations == NULL || PyDict_Check(annotations)) {
-		return py_move(&annotations);
+	if (annotations == NULL) {
+		return NULL;
+	}
+
+	if (PyDict_Check(annotations)) {
+		return PyDict_Copy(annotations);
 	}
 
 	PyErr_SetString(PyExc_TypeError, "__annotations__ must be a dict");

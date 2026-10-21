@@ -563,6 +563,10 @@ static enum result restore_fields(
 	return RESULT_OK;
 }
 
+static PyObject * state_snapshot(PyObject * const part, bool const restore_runs_user_code) {
+	return restore_runs_user_code ? PyDict_Copy(part) : dict_safe_to_read_unlocked(part);
+}
+
 static enum result restore_impostor(PyObject * const self, struct state_parts const parts) {
 	Py_ssize_t position = 0;
 	PyObject * name;
@@ -612,15 +616,30 @@ PyObject * Struct_setstate(PyObject * const self, PyObject * const state) {
 		return NULL;
 	}
 
-	PY_OWNED(slots, parts.slots != NULL ? dict_safe_to_read_unlocked(parts.slots) : NULL);
+	bool const impostor = !is_struct(self);
+	PY_OWNED(slots, parts.slots != NULL ? state_snapshot(parts.slots, impostor) : NULL);
 
 	if (slots == NULL && parts.slots != NULL) {
 		return NULL;
 	}
 
-	parts.slots = slots;
+	PY_OWNED(
+		dict_state,
+		(
+			parts.instance_dict == NULL ? NULL :
+			parts.instance_dict == parts.slots ? Py_NewRef(slots) :
+			state_snapshot(parts.instance_dict, impostor)
+		)
+	);
 
-	if (!is_struct(self)) {
+	if (dict_state == NULL && parts.instance_dict != NULL) {
+		return NULL;
+	}
+
+	parts.slots = slots;
+	parts.instance_dict = dict_state;
+
+	if (impostor) {
 		return restore_impostor(self, parts) == RESULT_OK ? Py_NewRef(Py_None) : NULL;
 	}
 
