@@ -1,3 +1,4 @@
+import copy
 import os
 
 import pytest
@@ -6,6 +7,12 @@ from platforms import printed_by_a_fresh_interpreter, starts_a_subprocess
 pytestmark = starts_a_subprocess
 
 TESTS_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
+
+ATOMIC_TYPES_EXIST = pytest.mark.skipif(not hasattr(copy, "_atomic_types"), reason="copy._atomic_types exists from 3.14")
+
+ATOMIC_TYPES_FROZEN = pytest.mark.skipif(
+    isinstance(getattr(copy, "_atomic_types", None), frozenset), reason="copy._atomic_types is a frozenset"
+)
 
 
 @pytest.mark.parametrize(
@@ -198,3 +205,98 @@ def test_default_copies_call_the_copy_dot_deepcopy_bound_when_the_first_defaulte
         built = Nested()
         print(bool(recorded), built.items, built.items[0] is not Nested().items[0])
     """) == f"{construction_recorded} [[1]] True"
+
+
+@ATOMIC_TYPES_EXIST
+@pytest.mark.parametrize(
+    ("declared", "printed"),
+    [
+        ("{1, 2}", "True True 0 True"),
+        ("{'a': 1}", "True True 0 True"),
+        ("set()", "False False 0 True"),
+        ("{}", "False False 0 True"),
+    ],
+    ids=["set", "dict", "empty_set", "empty_dict"],
+)
+def test_a_container_registered_as_atomic_before_first_use_is_shared_without_a_deepcopy_unless_empty(
+    declared: str, printed: str
+):
+    assert printed_by_a_fresh_interpreter(f"""
+        import copy
+        import sys
+        import salix
+
+        sys.path.append({TESTS_DIRECTORY!r})
+        from deepcopy_calls import deepcopy_calls_from_outside_copy
+
+        declared = {declared}
+        copy._atomic_types = copy._atomic_types | {{type(declared)}}
+
+        class Holder(salix.Struct):
+            v: object = declared
+
+        calls = deepcopy_calls_from_outside_copy(Holder)
+        print(Holder().v is Holder().v, Holder().v is declared, calls, copy.deepcopy(declared) is declared)
+    """) == printed
+
+
+@ATOMIC_TYPES_EXIST
+def test_a_mutable_struct_registered_as_atomic_before_first_use_is_shared_without_a_deepcopy():
+    assert printed_by_a_fresh_interpreter(f"""
+        import copy
+        import sys
+        import salix
+
+        sys.path.append({TESTS_DIRECTORY!r})
+        from deepcopy_calls import deepcopy_calls_from_outside_copy
+
+        class Box(salix.Struct, frozen=False):
+            items: list
+
+        declared = Box([1])
+        copy._atomic_types = copy._atomic_types | {{Box}}
+
+        class Holder(salix.Struct):
+            v: Box = declared
+
+        calls = deepcopy_calls_from_outside_copy(Holder)
+        print(Holder().v is Holder().v, Holder().v is declared, calls, copy.deepcopy(declared) is declared)
+    """) == "True True 0 True"
+
+
+@ATOMIC_TYPES_EXIST
+@pytest.mark.parametrize(
+    ("first_use", "registration", "printed"),
+    [
+        (False, "rebound", "True True"),
+        (True, "rebound", "False True"),
+        pytest.param(True, "added_in_place", "True True", marks=ATOMIC_TYPES_FROZEN),
+    ],
+    ids=["rebound_before_first_use", "rebound_after_first_use", "added_in_place_after_first_use"],
+)
+def test_an_atomic_registration_rebound_after_the_first_default_copy_is_not_seen_but_one_added_in_place_is(
+    first_use: bool, registration: str, printed: str
+):
+    assert printed_by_a_fresh_interpreter(f"""
+        import copy
+        import salix
+
+        class Warm(salix.Struct):
+            items: list = [[0]]
+
+        def rebound():
+            copy._atomic_types = copy._atomic_types | {{set}}
+
+        def added_in_place():
+            copy._atomic_types.add(set)
+
+        if {first_use}:
+            Warm()
+        {registration}()
+        declared = {{1, 2}}
+
+        class Holder(salix.Struct):
+            v: object = declared
+
+        print(Holder().v is Holder().v, copy.deepcopy(declared) is declared)
+    """) == printed

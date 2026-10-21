@@ -10,12 +10,7 @@ from types import FrameType
 
 import pytest
 from deepcopy_calls import deepcopy_calls_from_outside_copy
-from platforms import (
-    printed_by_a_fresh_interpreter,
-    recurses_through_c_until_recursion_error,
-    starts_a_subprocess,
-    starts_a_thread,
-)
+from platforms import recurses_through_c_until_recursion_error, starts_a_thread
 from values import COPIED_WHEN_EMPTY, NON_EMPTY, ClassWhoseMetaclassCannotBeHashed
 
 from salix import Struct, fields, from_mapping, replace, set_field, to_dict
@@ -425,23 +420,6 @@ class TestMutableDefaults:
             copy.deepcopy(value)
 
         assert Holder().v is Holder().v
-
-    @starts_a_subprocess
-    @pytest.mark.skipif(not hasattr(copy, "_atomic_types"), reason="copy._atomic_types exists from 3.14")
-    @pytest.mark.parametrize("declared", ["{1, 2}", "{'a': 1}"], ids=["set", "dict"])
-    def test_a_container_registered_as_atomic_is_shared_as_copy_dot_deepcopy_shares_it(self, declared: str):
-        assert printed_by_a_fresh_interpreter(f"""
-            import copy
-            import salix
-
-            declared = {declared}
-            copy._atomic_types = copy._atomic_types | {{type(declared)}}
-
-            class Holder(salix.Struct):
-                v: object = declared
-
-            print(Holder().v is Holder().v, copy.deepcopy(declared) is declared)
-        """) == "True True"
 
     @pytest.mark.parametrize(
         "value",
