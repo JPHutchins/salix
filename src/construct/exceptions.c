@@ -555,24 +555,26 @@ Py_ssize_t explicit_items_prefix(
 
 #	include "../testing.h"
 
+static char const exceptions_source[] = {
+#	embed "../../tests/c/fixtures/construct/exceptions.py" suffix(, '\0')
+};
+
 #	if PY_VERSION_HEX >= 0x030B0000
 static char const members_string_source[] = {
 #		embed "../../tests/c/fixtures/construct/members_string.py" suffix(, '\0')
 };
+
+static char const group_members_source[] = {
+#		embed "../../tests/c/fixtures/construct/group_members.py" suffix(, '\0')
+};
 #	endif
 
 static PyObject * exception_instance(void) {
-	return testing_evaluate(
-		"class E(Exception, Struct, frozen=True):\n"
-		"    message: str\n"
-		"result = E(\"boom\")\n"
-	);
+	return testing_fixture(exceptions_source, "exception");
 }
 
 static PyObject * beta_named_instance(void) {
-	return testing_evaluate(
-		"class P(Struct):\n    alpha: int\n    beta: int\nresult = P(1, beta=9)\n"
-	);
+	return testing_fixture(exceptions_source, "beta_named");
 }
 
 static void test_the_explicit_prefix_stops_at_the_first_unexplicit_field(void) {
@@ -628,12 +630,7 @@ static void test_the_carried_payload_count_reads_the_stored_args(void) {
 #	if PY_VERSION_HEX >= 0x030B0000
 
 static PyObject * group_instance(void) {
-	return testing_evaluate(
-		"class G(ExceptionGroup, Struct, frozen=False):\n"
-		"    message: str\n"
-		"    exceptions: list\n"
-		"result = G(\"boom\", [ValueError(\"x\")])\n"
-	);
+	return testing_fixture(group_members_source, "group");
 }
 
 static void test_the_group_members_carry_writes_the_bound_fields(void) {
