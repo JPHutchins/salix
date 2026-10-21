@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import csv
 import hashlib
+import itertools
 import re
 import struct
 import sys
@@ -36,15 +37,19 @@ ELF_MACHINES = {0x3E: "x86-64", 0xB7: "aarch64"}
 MACHO_MACHINES = {0x01000007: "x86-64", 0x0100000C: "aarch64"}
 PE_MACHINES = {0x8664: "x86-64", 0xAA64: "aarch64"}
 
+ELF_SECTION_NULL = 0
+ELF_SECTION_STRTAB = 3
 ELF_SECTION_RELA = 4
+ELF_SECTION_NOBITS = 8
 ELF_SECTION_DYNSYM = 11
 ELF_SECTION_VERNEED = 0x6FFFFFFE
 ELF_VERSION_ENTRY_SIZE = 16
+ELF_RELA_ENTRY_SIZE = 24
 ELF_BINDINGS_EXPORTED = frozenset({1, 2, 10})
 ELF_VISIBILITIES_EXPORTED = frozenset({0, 3})
 ELF_RELOCATIONS_REFUSED: dict[str, dict[int, str]] = {"x86-64": {36: "R_X86_64_TLSDESC"}}
 MANYLINUX_TAG = re.compile(r"manylinux_(\d+)_(\d+)_")
-NUMBERED_GLIBC = re.compile(r"GLIBC_(\d+(?:\.\d+)*)")
+NUMBERED_GLIBC = re.compile(r"GLIBC_([0-9]+(?:\.[0-9]+)*)")
 MACHO_LOAD_SYMTAB = 0x2
 MACHO_LOAD_DYSYMTAB = 0xB
 MACHO_REQUIRED_COMMANDS = {MACHO_LOAD_SYMTAB: ("LC_SYMTAB", 24), MACHO_LOAD_DYSYMTAB: ("LC_DYSYMTAB", 80)}
@@ -170,7 +175,7 @@ def beyond_the_glibc_floor(binary: bytes, machine: str, floor: tuple[int, ...]) 
     beyond = sorted(version for version, number in numbers.items() if number is not None and number > floor)
 
     if unnumbered:
-        yield f"needs {unnumbered}, glibc version nodes that no numbered release, and so no manylinux floor, covers"
+        yield f"needs {unnumbered}, unnumbered glibc version nodes that a glibc {'.'.join(map(str, floor))} floor cannot cover"
 
     if beyond:
         yield f"needs {beyond}, which glibc {'.'.join(map(str, floor))} lacks"
@@ -222,14 +227,38 @@ def elf_sections(binary: bytes) -> list[ElfSection]:
     if section_count == 0:
         raise ValueError("the section headers are stripped")
 
-    return [elf_section(binary, section_table + index * section_size) for index in range(section_count)]
+    sections = [elf_section(binary, section_table + index * section_size) for index in range(section_count)]
+    misplaced = [
+        index
+        for index, section in enumerate(sections)
+        if (section.kind not in (ELF_SECTION_NULL, ELF_SECTION_NOBITS) and section.offset + section.size > len(binary))
+        or (
+            section.kind == ELF_SECTION_RELA
+            and (section.entry_size != ELF_RELA_ENTRY_SIZE or section.size % ELF_RELA_ENTRY_SIZE != 0)
+        )
+    ]
+
+    if misplaced:
+        raise ValueError(f"sections {misplaced} run past the file's {len(binary)} bytes or misstate their entries")
+
+    return sections
+
+
+def linked_string(binary: bytes, sections: list[ElfSection], section: ElfSection, offset: int) -> str:
+    strings = sections[section.link] if section.link < len(sections) else ElfSection(ELF_SECTION_NULL, 0, 0, 0, 0, 0)
+    end = binary.find(b"\0", strings.offset + offset, strings.offset + strings.size)
+
+    if strings.kind != ELF_SECTION_STRTAB or end < 0:
+        raise ValueError(f"name {offset} is not a string in section {section.link}, which a link must name")
+
+    return binary[strings.offset + offset : end].decode()
 
 
 def elf_exports(binary: bytes) -> frozenset[str]:
     sections = elf_sections(binary)
 
     return frozenset(
-        c_string(binary, sections[symbols.link].offset + name)
+        linked_string(binary, sections, symbols, name)
         for symbols in sections
         if symbols.kind == ELF_SECTION_DYNSYM
         for name, info, other, section in (
@@ -244,7 +273,7 @@ def elf_exports(binary: bytes) -> frozenset[str]:
 
 def elf_needed_versions(binary: bytes, sections: list[ElfSection]) -> frozenset[str]:
     return frozenset(
-        c_string(binary, sections[needs.link].offset + name)
+        linked_string(binary, sections, needs, name)
         for needs in sections
         if needs.kind == ELF_SECTION_VERNEED
         for name in elf_version_names(binary, needs)
@@ -252,30 +281,51 @@ def elf_needed_versions(binary: bytes, sections: list[ElfSection]) -> frozenset[
 
 
 def elf_version_names(binary: bytes, needs: ElfSection) -> Iterator[int]:
-    need = needs.offset
+    chain = list(chained_entries(binary, needs, needs.offset, "<HHIII"))
+    declared = len(chain) + sum(version_count for _, (_, version_count, _, _, _) in chain)
 
-    for _ in range(needs.info):
-        _, version_count, _, first_version, next_need = struct.unpack_from(
-            "<HHIII", binary, inside_the_section(needs, need)
-        )
-        version = need + first_version
+    if len(chain) != needs.info:
+        raise ValueError(f"the version-need section declares {needs.info} needs but chains {len(chain)}")
 
-        for _ in range(version_count):
-            _, _, _, name, next_version = struct.unpack_from("<IHHII", binary, inside_the_section(needs, version))
-            yield name
-            version += next_version
+    if declared > needs.size // ELF_VERSION_ENTRY_SIZE:
+        raise ValueError(f"the version needs declare {declared} entries, more than their {needs.size} bytes hold")
 
-        if next_need == 0:
+    for need, (_, version_count, _, first_version, _) in chain:
+        names = [
+            name
+            for _, (_, _, _, name, _) in itertools.islice(
+                chained_entries(binary, needs, need + first_version, "<IHHII"), version_count + 1
+            )
+        ]
+
+        if first_version < ELF_VERSION_ENTRY_SIZE or len(names) != version_count:
+            raise ValueError(
+                f"the version need at {need} declares {version_count} versions {first_version} bytes in,"
+                f" but chains {len(names)}"
+            )
+
+        yield from names
+
+
+def chained_entries(
+    binary: bytes, section: ElfSection, first: int, layout: str
+) -> Iterator[tuple[int, tuple[int, ...]]]:
+    entry = first
+
+    while True:
+        if not section.offset <= entry <= section.offset + section.size - ELF_VERSION_ENTRY_SIZE:
+            raise ValueError(f"a version entry at {entry} is outside its section at {section.offset}+{section.size}")
+
+        fields = struct.unpack_from(layout, binary, entry)
+        yield entry, fields
+
+        if fields[-1] == 0:
             return
 
-        need += next_need
+        if fields[-1] < ELF_VERSION_ENTRY_SIZE:
+            raise ValueError(f"the version entry at {entry} links {fields[-1]} bytes ahead, into itself")
 
-
-def inside_the_section(section: ElfSection, entry: int) -> int:
-    if not section.offset <= entry <= section.offset + section.size - ELF_VERSION_ENTRY_SIZE:
-        raise ValueError(f"a version entry at {entry} is outside its section at {section.offset}+{section.size}")
-
-    return entry
+        entry += fields[-1]
 
 
 def elf_relocation_kinds(binary: bytes, sections: list[ElfSection]) -> frozenset[int]:
@@ -418,14 +468,14 @@ class WasmImport(IntEnum):
 
 class WasmSection(NamedTuple):
     kind: int
-    body: bytes
+    body: memoryview
 
 
-def leb128(binary: bytes, offset: int) -> tuple[int, int]:
+def leb128(binary: bytes | memoryview, offset: int) -> tuple[int, int]:
     value = 0
 
     for shift in range(0, 64, 7):
-        byte = binary[offset]
+        byte = wasm_byte(binary, offset)
         value |= (byte & 0x7F) << shift
         offset += 1
 
@@ -444,21 +494,28 @@ def wasm_sections(binary: bytes) -> Iterator[WasmSection]:
         if start + size > len(binary):
             raise ValueError(f"section {binary[offset]} at {offset} has size {size}")
 
-        yield WasmSection(binary[offset], binary[start : start + size])
+        yield WasmSection(binary[offset], memoryview(binary)[start : start + size])
         offset = start + size
 
 
-def wasm_name(body: bytes, offset: int) -> tuple[str, int]:
+def wasm_name(body: memoryview, offset: int) -> tuple[str, int]:
     length, start = leb128(body, offset)
 
     if start + length > len(body):
         raise ValueError(f"a name of {length} bytes at {start} runs past its section's {len(body)}")
 
-    return body[start : start + length].decode(), start + length
+    return bytes(body[start : start + length]).decode(), start + length
 
 
-def wasm_limits(binary: bytes, offset: int) -> tuple[int, int]:
-    flags = binary[offset]
+def wasm_byte(body: bytes | memoryview, offset: int) -> int:
+    if offset >= len(body):
+        raise ValueError(f"a read at {offset} runs past its section's {len(body)} bytes")
+
+    return body[offset]
+
+
+def wasm_limits(binary: memoryview, offset: int) -> tuple[int, int]:
+    flags = wasm_byte(binary, offset)
     _, offset = leb128(binary, offset + 1)
 
     if flags & WASM_LIMITS_HAS_MAXIMUM:
@@ -486,7 +543,7 @@ def wasm_memories(binary: bytes) -> Iterator[int]:
                 _, offset = wasm_name(section.body, offset)
                 _, offset = wasm_name(section.body, offset)
 
-                match WasmImport(section.body[offset]):
+                match WasmImport(wasm_byte(section.body, offset)):
                     case WasmImport.FUNCTION:
                         _, offset = leb128(section.body, offset + 1)
                     case WasmImport.TABLE:
@@ -509,17 +566,14 @@ def wasm_exports(binary: bytes) -> frozenset[str]:
     )
 
 
-def wasm_export_names(body: bytes) -> Iterator[str]:
+def wasm_export_names(body: memoryview) -> Iterator[str]:
     count, offset = leb128(body, 0)
 
     for _ in range(count):
         name, offset = wasm_name(body, offset)
-
-        if body[offset] != WasmImport.FUNCTION:
-            raise ValueError(f"export {name} has kind {body[offset]}, not a function")
-
+        kind = wasm_byte(body, offset)
         _, offset = leb128(body, offset + 1)
-        yield name
+        yield name if kind == WasmImport.FUNCTION else f"{name} (kind {kind})"
 
 
 EXPORT_READERS: dict[str, Callable[[bytes], frozenset[str]]] = {
