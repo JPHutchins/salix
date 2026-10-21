@@ -17,16 +17,20 @@ recurses_through_c_until_recursion_error = pytest.mark.skipif(
     reason="Pyodide aborts on deep C recursion before CPython raises RecursionError",
 )
 
-reads_copy_atomic_types = pytest.mark.skipif(
-    not hasattr(copy, "_atomic_types"), reason="copy._atomic_types exists from 3.14"
+COPY_ATOMIC_TYPES = getattr(copy, "_atomic_types", None)
+
+rebinds_copy_atomic_types = pytest.mark.skipif(
+    COPY_ATOMIC_TYPES is None, reason="copy._atomic_types exists from 3.14"
 )
 
 adds_to_copy_atomic_types_in_place = pytest.mark.skipif(
-    isinstance(getattr(copy, "_atomic_types", None), frozenset), reason="copy._atomic_types is a frozenset"
+    not isinstance(COPY_ATOMIC_TYPES, set), reason="copy._atomic_types is a mutable set on 3.14 only"
 )
 
+TESTS_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
 
-def printed_by_a_fresh_interpreter(probe: str) -> str:
+
+def printed_by_a_fresh_interpreter(probe: str, *, imports_test_helpers: bool = False) -> str:
     import salix
 
     package_parent = os.path.dirname(os.path.dirname(salix.__file__))
@@ -38,8 +42,8 @@ def printed_by_a_fresh_interpreter(probe: str) -> str:
                 "-S",
                 "-c",
                 f"__import__('sys').path.insert(0, {package_parent!r})\n"
-                f"__import__('sys').path.append({os.path.dirname(os.path.abspath(__file__))!r})\n"
-                f"{textwrap.dedent(probe)}",
+                + (f"__import__('sys').path.append({TESTS_DIRECTORY!r})\n" if imports_test_helpers else "")
+                + textwrap.dedent(probe),
             ],
             capture_output=True,
             text=True,

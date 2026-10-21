@@ -2,7 +2,7 @@ import pytest
 from platforms import (
     adds_to_copy_atomic_types_in_place,
     printed_by_a_fresh_interpreter,
-    reads_copy_atomic_types,
+    rebinds_copy_atomic_types,
     starts_a_subprocess,
 )
 
@@ -164,7 +164,7 @@ def test_the_deepcopy_fast_path_is_decided_by_the_copy_dot_deepcopy_bound_at_the
         calls = deepcopy_calls_from_outside_copy(Defaulted)
         Defaulted().items.append(3)
         print(calls, Defaulted().items)
-    """) == printed
+    """, imports_test_helpers=True) == printed
 
 
 @pytest.mark.parametrize(
@@ -198,7 +198,7 @@ def test_default_copies_call_the_copy_dot_deepcopy_bound_when_the_first_defaulte
     """) == f"{construction_recorded} [[1]] True"
 
 
-@reads_copy_atomic_types
+@rebinds_copy_atomic_types
 @pytest.mark.parametrize(
     ("declared", "printed"),
     [
@@ -215,7 +215,7 @@ def test_a_container_registered_as_atomic_before_first_use_is_shared_without_a_d
     assert printed_by_a_fresh_interpreter(f"""
         import copy
         import salix
-        from deepcopy_calls import deepcopy_calls_from_outside_copy
+        from deepcopy_calls import result_and_deepcopy_calls_from_outside_copy
 
         declared = {declared}
         copy._atomic_types = copy._atomic_types | {{type(declared)}}
@@ -223,19 +223,17 @@ def test_a_container_registered_as_atomic_before_first_use_is_shared_without_a_d
         class Holder(salix.Struct):
             v: object = declared
 
-        built = []
-        calls = deepcopy_calls_from_outside_copy(lambda: built.extend((Holder(), Holder())))
-        first, second = built
+        (first, second), calls = result_and_deepcopy_calls_from_outside_copy(lambda: (Holder(), Holder()))
         print(first.v is second.v, first.v is declared, calls, copy.deepcopy(declared) is declared)
-    """) == printed
+    """, imports_test_helpers=True) == printed
 
 
-@reads_copy_atomic_types
+@rebinds_copy_atomic_types
 def test_a_mutable_struct_registered_as_atomic_before_first_use_is_shared_without_a_deepcopy():
     assert printed_by_a_fresh_interpreter("""
         import copy
         import salix
-        from deepcopy_calls import deepcopy_calls_from_outside_copy
+        from deepcopy_calls import result_and_deepcopy_calls_from_outside_copy
 
         class Box(salix.Struct, frozen=False):
             items: list
@@ -246,14 +244,12 @@ def test_a_mutable_struct_registered_as_atomic_before_first_use_is_shared_withou
         class Holder(salix.Struct):
             v: Box = declared
 
-        built = []
-        calls = deepcopy_calls_from_outside_copy(lambda: built.extend((Holder(), Holder())))
-        first, second = built
+        (first, second), calls = result_and_deepcopy_calls_from_outside_copy(lambda: (Holder(), Holder()))
         print(first.v is second.v, first.v is declared, calls, copy.deepcopy(declared) is declared)
-    """) == "True True 0 True"
+    """, imports_test_helpers=True) == "True True 0 True"
 
 
-@reads_copy_atomic_types
+@rebinds_copy_atomic_types
 @pytest.mark.parametrize(
     ("first_use", "registration", "printed"),
     [

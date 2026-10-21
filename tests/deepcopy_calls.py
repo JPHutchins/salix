@@ -2,9 +2,16 @@ import copy
 import sys
 from collections.abc import Callable
 from types import FrameType
+from typing import TypeVar
+
+T = TypeVar("T")
 
 
 def deepcopy_calls_from_outside_copy(operation: Callable[[], object]) -> int:
+    return result_and_deepcopy_calls_from_outside_copy(operation)[1]
+
+
+def result_and_deepcopy_calls_from_outside_copy(operation: Callable[[], T]) -> tuple[T, int]:
     deepcopy_code = copy.deepcopy.__code__
     copy_globals = copy.__dict__
     calls = 0
@@ -21,8 +28,8 @@ def deepcopy_calls_from_outside_copy(operation: Callable[[], object]) -> int:
     outer_profile = sys.getprofile()
     sys.setprofile(profile)
     try:
-        operation()
+        result = operation()
     finally:
         sys.setprofile(outer_profile)
 
-    return calls
+    return result, calls
