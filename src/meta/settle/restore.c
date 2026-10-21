@@ -101,8 +101,12 @@ enum result restore_stripped(
 
 #	include "../../testing.h"
 
+static char const restore_source[] = {
+#	embed "../../../tests/c/fixtures/settle/restore.py" suffix(, '\0')
+};
+
 static PyObject * rebind_class(void) {
-	return testing_evaluate("class R(Struct):\n    x: int = 1\nresult = R\n");
+	return testing_fixture(restore_source, "rebound");
 }
 
 static void test_a_rebind_writes_the_mixins_binding(void) {

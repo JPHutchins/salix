@@ -516,17 +516,12 @@ static void probe_a_hostile_settle_name(char const * const name, void * const co
 	Py_XDECREF(traceback);
 }
 
+static char const hostile_key_source[] = {
+#	embed "../../../tests/c/fixtures/settle/hostile_key.py" suffix(, '\0')
+};
+
 static void test_every_settle_name_refuses_a_hostile_key(void) {
-	PY_OWNED(
-		hostile_class,
-		testing_evaluate(
-			"class HostileKey(str):\n"
-			"    __hash__ = str.__hash__\n"
-			"    def __eq__(self, other):\n"
-			"        raise ValueError('nope')\n"
-			"result = HostileKey\n"
-		)
-	);
+	PY_OWNED(hostile_class, testing_fixture(hostile_key_source, "hostile_key"));
 	TEST_ASSERT_NOT_NULL(hostile_class);
 
 	PY_OWNED(salix, PyImport_ImportModule("salix"));

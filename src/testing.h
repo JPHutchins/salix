@@ -7,6 +7,7 @@
 
 PyObject * testing_evaluate(char const * source);
 PyObject * testing_entry(PyObject * fixtures, char const * name);
+PyObject * testing_fixture(char const * source, char const * name);
 PyObject * testing_two_field_instance(void);
 PyObject * testing_frozen_empty_instance(void);
 

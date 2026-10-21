@@ -155,9 +155,12 @@ PyObject * Struct_repr(PyObject * const self) {
 
 #	include "testing.h"
 
+static char const instances_source[] = {
+#	embed "../tests/c/fixtures/repr/instances.py" suffix(, '\0')
+};
+
 static void test_an_unwritten_slot_renders_as_unset(void) {
-	PyObject * const instance =
-		testing_evaluate("class P(Struct):\n    x: int\n    y: int\nresult = P(1, 2)\n");
+	PyObject * const instance = testing_fixture(instances_source, "pair");
 	StructType const * const type = struct_type_of(instance);
 	PyObject * * const slot = struct_slot(type, instance, 1);
 	PyObject * const written = *slot;
@@ -176,12 +179,11 @@ static void test_an_unwritten_slot_renders_as_unset(void) {
 }
 
 static void test_a_written_slot_renders_its_repr(void) {
-	PyObject * const instance =
-		testing_evaluate("class P(Struct):\n    x: int\nresult = P('value')\n");
+	PyObject * const instance = testing_fixture(instances_source, "text");
 	PyObject * const rendered = Struct_repr(instance);
 
 	TEST_ASSERT_NOT_NULL(rendered);
-	TEST_ASSERT_EQUAL_STRING("P(x='value')", PyUnicode_AsUTF8(rendered));
+	TEST_ASSERT_EQUAL_STRING("Q(x='value')", PyUnicode_AsUTF8(rendered));
 
 	Py_DECREF(rendered);
 	Py_DECREF(instance);
