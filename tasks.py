@@ -150,25 +150,39 @@ c_analyzer = Task(
 analyze = Sequential(compile_flags, Parallel(c_tidy, c_analyzer))
 
 TYPE_CHECK = "uv run --no-project --with typing_extensions"
+MYPY = "mypy==2.4.0"
+PYRIGHT = "pyright==1.1.414"
+TY = "ty==0.0.63"
 mypy = Task(
-    TYPE_CHECK + " --with mypy mypy --strict --warn-unused-ignores"
-    " --python-version " + OLDEST + " tests/typing"
+    TYPE_CHECK + " --with " + MYPY + " mypy --strict --warn-unused-ignores"
+    " --python-version {CHECKED_PYTHON} tests/typing"
 )
-pyright = Task(TYPE_CHECK + " --with pyright pyright --pythonversion " + OLDEST + " tests/typing")
+pyright = Task(
+    TYPE_CHECK + " --with " + PYRIGHT + " pyright --pythonversion {CHECKED_PYTHON} tests/typing"
+)
 
 ty = Task(
-    TYPE_CHECK + " --with ty ty check --python-version " + OLDEST + " tests/typing/accepted.py"
+    TYPE_CHECK + " --with " + TY + " ty check --python-version {CHECKED_PYTHON}"
+    " tests/typing/accepted.py"
+)
+typed_api = Parallel(
+    mypy,
+    pyright,
+    ty,
+    variants=tuple(
+        {"CHECKED_PYTHON": python} for python in sorted(PYTHONS, key=release_order)
+    ),
 )
 
 tooling = Task(
-    TYPE_CHECK + " --with mypy --with camas --with setuptools --with types-setuptools"
+    TYPE_CHECK + " --with " + MYPY + " --with camas --with setuptools --with types-setuptools"
     " --with msgspec --with record-type"
     " mypy --strict --warn-unused-ignores --explicit-package-bases"
     " --exclude bench/source-tiers/vendor"
     " setup.py tasks.py build_config.py tools/ bench/",
     env={"MYPYPATH": "."},
 )
-type_check = Parallel(mypy, pyright, ty, tooling)
+type_check = Parallel(typed_api, tooling)
 
 RUFF_CHECK = "uv run --no-project --with ruff ruff check"
 HUNDREDS_OF_DIAGNOSTICS = 64_000
