@@ -7,8 +7,8 @@ import re
 TERMINATOR = re.compile(b"\0")
 
 
-def c_string(binary: bytes, start: int, region: tuple[int, int] | None = None) -> str:
-    low, high = (0, len(binary)) if region is None else region
+def c_string(binary: bytes, start: int, region: tuple[int, int]) -> str:
+    low, high = region
     terminators = terminator_offsets(binary, low, high)
     terminator = bisect.bisect_left(terminators, start)
 

@@ -1,8 +1,10 @@
 import base64
 import hashlib
+import itertools
 import struct
 import subprocess
 import zipfile
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -23,13 +25,22 @@ def record_line(name: str, data: bytes) -> str:
     return f"{name},sha256={digest},{len(data)}\n"
 
 
-def wheel(where: Path, platform: str, payload_name: str, payload: bytes) -> Path:
+def wheel(
+    where: Path,
+    platform: str,
+    payload_name: str,
+    payload: bytes,
+    payload_row: Callable[[str, bytes], str] = record_line,
+) -> Path:
     files = {
         payload_name: payload,
         f"{DIST_INFO}/METADATA": b"Metadata-Version: 2.1\nName: salix\nVersion: 0.1.0a1\n",
         f"{DIST_INFO}/WHEEL": f"Wheel-Version: 1.0\nTag: cp313-cp313-{platform}\n".encode(),
     }
-    record = "".join(record_line(name, data) for name, data in files.items()) + f"{DIST_INFO}/RECORD,,\n"
+    record = (
+        "".join((payload_row if name == payload_name else record_line)(name, data) for name, data in files.items())
+        + f"{DIST_INFO}/RECORD,,\n"
+    )
     path = where / f"salix-0.1.0a1-cp313-cp313-{platform}.whl"
     with zipfile.ZipFile(path, "w") as archive:
         for name, data in {**files, f"{DIST_INFO}/RECORD": record.encode()}.items():
@@ -86,6 +97,71 @@ def pe(data_directory_count: int, magic: int = 0x20B) -> bytes:
         + struct.pack("<I", data_directory_count)
         + struct.pack("<II", 0x1000, 0x40)
         + bytes(120)
+    )
+
+
+def macho_module(names: tuple[str, ...], strings_size: int | None = None) -> bytes:
+    strings = b"\0" + b"".join(b"_" + name.encode() + b"\0" for name in names)
+    symbols = 32 + 24 + 80
+    return (
+        b"\xcf\xfa\xed\xfe"
+        + struct.pack("<IIIIIII", 0x01000007, 3, 6, 2, 104, 0, 0)
+        + struct.pack(
+            "<IIIIII",
+            0x2,
+            24,
+            symbols,
+            len(names),
+            symbols + 16 * len(names),
+            len(strings) if strings_size is None else strings_size,
+        )
+        + struct.pack("<IIIIII", 0xB, 80, 0, 0, 0, len(names))
+        + bytes(56)
+        + b"".join(
+            struct.pack("<IBBHQ", start, 0x0F, 1, 0, 0)
+            for start in itertools.accumulate((len(name) + 2 for name in names[:-1]), initial=1)
+        )
+        + strings
+    )
+
+
+PE_SECTION_DATA = 0x170
+PE_SECTION_ADDRESS = 0x1000
+
+
+def pe_module(
+    names: tuple[str, ...],
+    raw_start: int = PE_SECTION_DATA,
+    unbacked_tail: int = 0,
+    exports_at_the_backed_end: bool = False,
+) -> bytes:
+    name_table = PE_SECTION_ADDRESS + 40
+    data = (
+        bytes(24)
+        + struct.pack("<III", len(names), 0, name_table)
+        + bytes(4)
+        + b"".join(
+            struct.pack("<I", name_table + 4 * len(names) + start)
+            for start in itertools.accumulate((len(name) + 1 for name in names[:-1]), initial=0)
+        )
+        + b"".join(name.encode() + b"\0" for name in names)
+    )
+    backed_size = len(data) - unbacked_tail
+    return (
+        b"MZ"
+        + bytes(0x3A)
+        + struct.pack("<I", 0x40)
+        + b"PE\0\0"
+        + struct.pack("<HHIIIHH", 0x8664, 1, 0, 0, 0, 240, 0)
+        + struct.pack("<H", 0x20B)
+        + bytes(106)
+        + struct.pack("<I", 16)
+        + struct.pack("<II", PE_SECTION_ADDRESS + (backed_size if exports_at_the_backed_end else 0), 40)
+        + bytes(120)
+        + bytes(8)
+        + struct.pack("<IIII", len(data), PE_SECTION_ADDRESS, backed_size, raw_start)
+        + bytes(16)
+        + data
     )
 
 
@@ -247,9 +323,14 @@ WASM = ("pyemscripten_2026_0_wasm32", "salix/__init__.cpython-313-wasm32-emscrip
         (PE, pe(16), "no file-backed section"),
         (PE, pe(0), "declares no data directories"),
         (PE, pe(16, magic=0x10B), "not PE32+"),
+        (PE, pe_module(("PyInit_salix",), raw_start=0), f"RVA {PE_SECTION_ADDRESS:#x} is in no file-backed section"),
+        (PE, pe_module(("PyInit_salix",), unbacked_tail=8, exports_at_the_backed_end=True), "no file-backed section"),
+        (PE, pe_module(("PyInit_salix",), unbacked_tail=1), "has no terminator before"),
+        (MACHO, macho_module(("PyInit_salix",), strings_size=len("\0_PyInit_salix")), "has no terminator before"),
         (WASM, WASM_WITH_A_SECTION_PAST_THE_END, "has size 16"),
         (WASM, WASM_WITH_AN_UNKNOWN_IMPORT_KIND, "9 is not a valid WasmImport"),
         (WASM, WASM_WITH_AN_ENDLESS_LEB128, "longer than 64 bits"),
+        (WASM, WASM_HEADER + bytes([7]), "a read at 9 runs past the file's 9 bytes"),
         (WASM, WASM_WITH_AN_IMPORT_NAME_PAST_ITS_SECTION, "runs past its section's 3"),
         (WASM, wasm_exporting(*WASM_SIDE_MODULE_EXPORTS, memory=b""), "declares and imports no memory"),
         (
@@ -274,9 +355,14 @@ WASM = ("pyemscripten_2026_0_wasm32", "salix/__init__.cpython-313-wasm32-emscrip
         "pe-rva-outside-sections",
         "pe-no-data-directories",
         "pe32",
+        "pe-section-without-file-data",
+        "pe-rva-past-the-sections-file-data",
+        "pe-name-terminated-past-its-section",
+        "macho-name-terminated-past-the-string-table",
         "wasm-section-past-the-end",
         "wasm-unknown-import-kind",
         "wasm-endless-leb128",
+        "wasm-section-size-past-the-end-of-the-file",
         "wasm-import-name-past-its-section",
         "wasm-without-memory",
         "wasm-export-without-a-kind",
@@ -378,6 +464,56 @@ def test_a_manylinux_module_within_its_tags_glibc_passes(target, payload, tmp_pa
 
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout.startswith("ok ")
+
+
+@pytest.mark.parametrize(
+    ("target", "payload"),
+    [
+        (MACHO, macho_module(("PyInit_salix",))),
+        (MACHO, macho_module(("PyInit_salix", "_mh_dylib_header", "__dso_handle"))),
+        (PE, pe_module(("PyInit_salix",))),
+    ],
+    ids=["macho", "macho-with-the-linkers-symbols", "pe"],
+)
+def test_a_macho_or_pe_module_exporting_its_init_passes(target, payload, tmp_path):
+    completed = check(wheel(tmp_path, *target, payload))
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.startswith("ok ")
+
+
+@pytest.mark.parametrize(
+    ("target", "module"),
+    [(MACHO, macho_module), (PE, pe_module)],
+    ids=["macho", "pe"],
+)
+def test_a_macho_or_pe_module_exporting_anything_else_fails(target, module, tmp_path):
+    completed = check(wheel(tmp_path, *target, module(("PyInit_salix", "helper"))))
+
+    assert completed.returncode == 1
+    assert "exports ['PyInit_salix', 'helper'], not PyInit_salix alone" in completed.stderr
+    assert "could not be checked" not in completed.stderr
+
+
+@pytest.mark.parametrize(
+    ("payload_row", "reported", "unreported"),
+    [
+        (lambda name, data: record_line(name, data[::-1]), "RECORD hash mismatch", "RECORD size mismatch"),
+        (
+            lambda name, data: record_line(name, data).replace(f",{len(data)}\n", f",{len(data) + 1}\n"),
+            "RECORD size mismatch",
+            "RECORD hash mismatch",
+        ),
+    ],
+    ids=["hash", "size"],
+)
+def test_a_record_row_misstating_its_payload_fails_by_what_it_misstates(payload_row, reported, unreported, tmp_path):
+    payload = elf_module(0x3E, ("GLIBC_2.17",), X86_64_RELATIVE_AND_DTPMOD64)
+    completed = check(wheel(tmp_path, *ELF, payload, payload_row=payload_row))
+
+    assert completed.returncode == 1
+    assert f"{reported} for {ELF[1]}" in completed.stderr
+    assert unreported not in completed.stderr
 
 
 @pytest.mark.parametrize("version", ["GLIBC_2.18", "GLIBC_2.34"])

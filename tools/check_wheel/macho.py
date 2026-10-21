@@ -43,7 +43,9 @@ def macho_exports(binary: bytes) -> frozenset[str]:
     if unusable:
         raise ValueError("; ".join(unusable))
 
-    symbols, symbol_count, strings, _ = struct.unpack_from("<IIII", binary, commands[MACHO_LOAD_SYMTAB].offset + 8)
+    symbols, symbol_count, strings, strings_size = struct.unpack_from(
+        "<IIII", binary, commands[MACHO_LOAD_SYMTAB].offset + 8
+    )
     _, _, first_defined, defined_count = struct.unpack_from(
         "<IIII", binary, commands[MACHO_LOAD_DYSYMTAB].offset + 8
     )
@@ -54,6 +56,10 @@ def macho_exports(binary: bytes) -> frozenset[str]:
         )
 
     return frozenset(
-        c_string(binary, strings + struct.unpack_from("<I", binary, symbols + index * 16)[0]).removeprefix("_")
+        c_string(
+            binary,
+            strings + struct.unpack_from("<I", binary, symbols + index * 16)[0],
+            (strings, strings + strings_size),
+        ).removeprefix("_")
         for index in range(first_defined, first_defined + defined_count)
     )

@@ -73,9 +73,17 @@ def wasm_name(body: memoryview, offset: int) -> tuple[str, int]:
 
 def wasm_byte(body: bytes | memoryview, offset: int) -> int:
     if offset >= len(body):
-        raise ValueError(f"a read at {offset} runs past its section's {len(body)} bytes")
+        raise ValueError(f"a read at {offset} runs past {extent(body)}")
 
     return body[offset]
+
+
+def extent(body: bytes | memoryview) -> str:
+    match body:
+        case memoryview():
+            return f"its section's {len(body)} bytes"
+        case bytes():
+            return f"the file's {len(body)} bytes"
 
 
 def wasm_skip(body: memoryview, offset: int, count: int) -> int:

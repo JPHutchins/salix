@@ -17,22 +17,34 @@ class PeSection(NamedTuple):
     raw_size: int
     raw_start: int
 
+    def backs(self, address: int) -> bool:
+        return self.raw_start != 0 and self.virtual_start <= address < self.virtual_start + self.backed_size()
 
-def pe_offset(sections: list[PeSection], address: int) -> int:
-    offset = next(
-        (
-            section.raw_start + address - section.virtual_start
-            for section in sections
-            if section.raw_start != 0
-            and section.virtual_start <= address < section.virtual_start + min(section.virtual_size, section.raw_size)
-        ),
-        None,
-    )
+    def backed_size(self) -> int:
+        return min(self.virtual_size, self.raw_size)
 
-    if offset is None:
+    def offset_of(self, address: int) -> int:
+        return self.raw_start + address - self.virtual_start
+
+    def string_at(self, binary: bytes, address: int) -> str:
+        return c_string(binary, self.offset_of(address), (self.raw_start, self.raw_start + self.backed_size()))
+
+
+def pe_section(sections: list[PeSection], address: int) -> PeSection:
+    section = next((section for section in sections if section.backs(address)), None)
+
+    if section is None:
         raise ValueError(f"RVA {address:#x} is in no file-backed section")
 
-    return offset
+    return section
+
+
+def pe_offset(sections: list[PeSection], address: int) -> int:
+    return pe_section(sections, address).offset_of(address)
+
+
+def pe_string(binary: bytes, sections: list[PeSection], address: int) -> str:
+    return pe_section(sections, address).string_at(binary, address)
 
 
 def pe_header(binary: bytes) -> int:
@@ -69,6 +81,6 @@ def pe_exports(binary: bytes) -> frozenset[str]:
     names = pe_offset(sections, name_table)
 
     return frozenset(
-        c_string(binary, pe_offset(sections, struct.unpack_from("<I", binary, names + index * 4)[0]))
+        pe_string(binary, sections, struct.unpack_from("<I", binary, names + index * 4)[0])
         for index in range(name_count)
     )
