@@ -55,11 +55,19 @@ def macho_exports(binary: bytes) -> frozenset[str]:
             f"defined symbols {first_defined}..{first_defined + defined_count} are outside the {symbol_count} symbols"
         )
 
+    past_the_file = [
+        table
+        for table, start, size in (("symbols", symbols, 16 * symbol_count), ("strings", strings, strings_size))
+        if start + size > len(binary)
+    ]
+
+    if past_the_file:
+        raise ValueError(f"LC_SYMTAB's {past_the_file} run past the file's {len(binary)} bytes")
+
     return frozenset(
-        c_string(
-            binary,
-            strings + struct.unpack_from("<I", binary, symbols + index * 16)[0],
-            (strings, strings + strings_size),
-        ).removeprefix("_")
-        for index in range(first_defined, first_defined + defined_count)
+        c_string(binary, strings + name, (strings, strings + strings_size)).removeprefix("_")
+        for name in {
+            struct.unpack_from("<I", binary, symbols + index * 16)[0]
+            for index in range(first_defined, first_defined + defined_count)
+        }
     )
