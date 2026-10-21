@@ -61,6 +61,19 @@ class ByValue:
         return f"ByValue({self.key!r})"
 
 
+class RefusesToHashItsInstances(type):
+    def __hash__(cls):
+        raise TypeError("unhashable metaclass")
+
+
+class MetaclassThatCannotBeHashed(type, metaclass=RefusesToHashItsInstances):
+    pass
+
+
+class ClassWhoseMetaclassCannotBeHashed(metaclass=MetaclassThatCannotBeHashed):
+    pass
+
+
 class Inner(Struct):
     value: object
 

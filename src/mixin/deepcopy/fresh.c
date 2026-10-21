@@ -4,21 +4,8 @@
 #include "../../owned.h"
 #include "../../types.h"
 
-enum keeps_identity { KEEPS_IDENTITY_ERROR, KEEPS_IDENTITY_PROVEN, KEEPS_IDENTITY_UNPROVEN };
-
 static enum keeps_identity item_keeps_identity(PyObject * const tables, PyObject * const item) {
-	switch (route_of(tables, item)) {
-		case DEEP_ROUTE_ERROR:
-			return KEEPS_IDENTITY_ERROR;
-		case DEEP_ROUTE_ATOMIC:
-		case DEEP_ROUTE_ITSELF:
-			return KEEPS_IDENTITY_PROVEN;
-		case DEEP_ROUTE_LIST:
-		case DEEP_ROUTE_COPY_MODULE:
-			break;
-	}
-
-	return KEEPS_IDENTITY_UNPROVEN;
+	return route_keeps_identity(route_of(tables, item));
 }
 
 static enum keeps_identity every_item_keeps_identity(
@@ -111,27 +98,35 @@ static PyObject * dict_of_identities(PyObject * const tables, PyObject * const v
 static int set_reduces_through_the_stdlib(PyObject * const tables) {
 	PyObject * const dispatch = PyTuple_GET_ITEM(tables, DEEPCOPY_DISPATCH);
 	PyObject * const reductors = PyTuple_GET_ITEM(tables, DEEPCOPY_REDUCTORS);
-	PyObject * const tuple_copier = PyTuple_GET_ITEM(tables, DEEPCOPY_TUPLE);
 	PyObject * const list_copier = PyTuple_GET_ITEM(tables, DEEPCOPY_LIST);
 
-	if (!PyDict_CheckExact(reductors) || tuple_copier == Py_None || list_copier == Py_None) {
+	if (!PyDict_CheckExact(reductors) || list_copier == Py_None) {
 		return 0;
 	}
 
-	int const no_set_copier = table_entry_is(dispatch, &PySet_Type, Py_None);
-	int const no_set_reductor = (
-		no_set_copier > 0 ? table_entry_is(reductors, &PySet_Type, Py_None) :
-		no_set_copier
-	);
-	int const stdlib_tuple_copier = (
-		no_set_reductor > 0 ? table_entry_is(dispatch, &PyTuple_Type, tuple_copier) :
-		no_set_reductor
-	);
+	struct {
+		PyObject * table;
+		PyTypeObject * kind;
+		PyObject * entry;
+	} const stdlib_reduction[] = {
+		{.table = dispatch, .kind = &PySet_Type, .entry = Py_None},
+		{.table = reductors, .kind = &PySet_Type, .entry = Py_None},
+		{.table = dispatch, .kind = &PyList_Type, .entry = list_copier},
+	};
 
-	return (
-		stdlib_tuple_copier > 0 ? table_entry_is(dispatch, &PyList_Type, list_copier) :
-		stdlib_tuple_copier
-	);
+	for (size_t i = 0; i < sizeof stdlib_reduction / sizeof stdlib_reduction[0]; i += 1) {
+		int const matches = table_entry_is(
+			stdlib_reduction[i].table,
+			stdlib_reduction[i].kind,
+			stdlib_reduction[i].entry
+		);
+
+		if (matches <= 0) {
+			return matches;
+		}
+	}
+
+	return 1;
 }
 
 static PyObject * set_of_identities(PyObject * const tables, PyObject * const value) {
@@ -307,7 +302,7 @@ PyObject * fresh_deepcopy(
 	PyObject * const deepcopy,
 	PyObject * const value
 ) {
-	PY_OWNED(tables, deepcopy_tables(state, deepcopy));
+	PY_OWNED(tables, state != NULL ? deepcopy_tables(state, deepcopy) : NULL);
 
 	if (tables == NULL || PyTuple_GET_ITEM(tables, DEEPCOPY_FUNCTION) != deepcopy) {
 		return NULL;

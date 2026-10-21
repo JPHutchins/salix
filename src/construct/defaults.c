@@ -27,7 +27,7 @@ static PyObject * deep_copy_or_share(struct salix_state * const state, PyObject 
 		return NULL;
 	}
 
-	PY_MOVABLE(mirrored, state != NULL ? fresh_deepcopy(state, deepcopy, declared) : NULL);
+	PY_MOVABLE(mirrored, fresh_deepcopy(state, deepcopy, declared));
 	PY_MOVABLE(
 		deep_copied,
 		mirrored != NULL || PyErr_Occurred() ? py_move(&mirrored) :

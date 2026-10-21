@@ -1,15 +1,17 @@
+import abc
 import copy
 import copyreg
 import pickle
 import re
 import sys
 import threading
+from collections.abc import Callable
 from types import FrameType
 
 import pytest
 from deepcopy_calls import deepcopy_calls_from_outside_copy
 from platforms import recurses_through_c_until_recursion_error, starts_a_thread
-from values import COPIED_WHEN_EMPTY, NON_EMPTY
+from values import COPIED_WHEN_EMPTY, NON_EMPTY, ClassWhoseMetaclassCannotBeHashed
 
 from salix import Struct, fields, from_mapping, replace, set_field, to_dict
 
@@ -392,14 +394,24 @@ class TestMutableDefaults:
 
         assert 9 not in second_inner
 
-    def test_a_value_a_deepcopy_cannot_carry_is_shared(self):
+    @pytest.mark.parametrize(
+        "uncarryable",
+        [
+            pytest.param(lambda: memoryview(bytearray(b"abc")), id="a_writable_memoryview"),
+            pytest.param(lambda: [ClassWhoseMetaclassCannotBeHashed], id="a_class_whose_metaclass_cannot_be_hashed"),
+        ],
+    )
+    def test_a_value_a_deepcopy_cannot_carry_is_shared(self, uncarryable: Callable[[], object]):
         """The deep path falls back to the old sharing for values deepcopy
         refuses, rather than failing the construction."""
 
-        value = memoryview(bytearray(b"abc"))
+        value = uncarryable()
 
         class Holder(Struct):
             v: object = value
+
+        with pytest.raises(TypeError):
+            copy.deepcopy(value)
 
         assert Holder().v is Holder().v
 
@@ -737,7 +749,7 @@ class TestMutableDefaults:
 
         assert list(Holder().v) == list(copy.deepcopy(stored))
 
-    @pytest.mark.parametrize("kind", [list, dict], ids=lambda kind: kind.__name__)
+    @pytest.mark.parametrize("kind", [list, dict, set], ids=lambda kind: kind.__name__)
     def test_a_registered_dispatch_copier_copies_the_default(self, kind, monkeypatch):
         class Holder(Struct):
             v: object = kind([("a", 1)]) if kind is dict else kind([1])
@@ -752,6 +764,7 @@ class TestMutableDefaults:
             pytest.param([1, "a", None, 2.5], 0, id="atom_list"),
             pytest.param({"a": 1, "b": 2}, 0, id="atom_dict"),
             pytest.param({1, "b"}, 0, id="atom_set"),
+            pytest.param([abc.ABC], 0, id="class_list"),
             pytest.param([[1]], 1, id="nested_list"),
             pytest.param({"a": (1, "b")}, 1, id="tuple_in_dict"),
         ],
@@ -788,6 +801,27 @@ class TestMutableDefaults:
         monkeypatch.setitem(copyreg.dispatch_table, set, lambda value: (frozenset, (list(value),)))
 
         assert type(Holder().v) is frozenset
+
+    @pytest.mark.parametrize(
+        ("kind", "copied", "calls"),
+        [(list, {99}, 1), (tuple, {1, 2}, 0)],
+        ids=["list", "tuple"],
+    )
+    def test_a_set_default_is_copied_through_the_list_copier_but_never_the_tuple_copier(
+        self, kind, copied, calls, monkeypatch
+    ):
+        """copy.deepcopy reduces a set to set(list) and copies the reduction's
+        arguments one by one, never as a tuple."""
+
+        declared = {1, 2}
+
+        class Holder(Struct):
+            v: set = declared
+
+        monkeypatch.setitem(copy._deepcopy_dispatch, kind, lambda value, memo: kind([99]))
+
+        assert Holder().v == copy.deepcopy(declared) == copied
+        assert deepcopy_calls_from_outside_copy(Holder) == calls
 
     def test_a_struct_default_holding_a_list_is_copied_deeply(self):
         class Inner(Struct):

@@ -18,7 +18,6 @@ static PyObject * deepcopy_tables_build(PyObject * const copy_module, PyObject *
 		[DEEPCOPY_ATOMIC_COPIER] = "_deepcopy_atomic",
 		[DEEPCOPY_LIST] = "_deepcopy_list",
 		[DEEPCOPY_DICT] = "_deepcopy_dict",
-		[DEEPCOPY_TUPLE] = "_deepcopy_tuple",
 		[DEEPCOPY_REDUCTORS] = "dispatch_table",
 	};
 	PY_MOVABLE(tables, PyTuple_New(DEEPCOPY_TABLE_COUNT));
@@ -56,7 +55,7 @@ static PyObject * deepcopy_tables_build(PyObject * const copy_module, PyObject *
 	return py_move(&tables);
 }
 
-PyObject * deepcopy_tables(struct salix_state * const state, PyObject * const deepcopy) {
+PyObject * deepcopy_tables(struct salix_state state[static 1], PyObject * const deepcopy) {
 	PyObject * cached = NULL;
 
 	STRUCT_BEGIN_CRITICAL_SECTION(state->pickle_cache[PICKLE_REDUCE_EX_NAME]);
@@ -164,14 +163,12 @@ static PyObject * deep_element(
 		return py_move(&found);
 	}
 
-	switch (route) {
-		case DEEP_ROUTE_ERROR:
+	switch (route_keeps_identity(route)) {
+		case KEEPS_IDENTITY_ERROR:
 			return NULL;
-		case DEEP_ROUTE_ATOMIC:
-		case DEEP_ROUTE_ITSELF:
+		case KEEPS_IDENTITY_PROVEN:
 			return Py_NewRef(value);
-		case DEEP_ROUTE_LIST:
-		case DEEP_ROUTE_COPY_MODULE:
+		case KEEPS_IDENTITY_UNPROVEN:
 			break;
 	}
 
