@@ -31,7 +31,6 @@ def release_order(python: str) -> tuple[int, ...]:
     return tuple(map(int, python.split(".")))
 
 
-OLDEST = min(PYTHONS, key=release_order)
 NEWEST = max(PYTHONS, key=release_order)
 
 _PROJECT_VERSION = re.search(
@@ -327,7 +326,7 @@ pyodide = Sequential(
 in_place_build = Task("uv run python setup.py build_ext --inplace", mutates=True, env=STRICT_BUILD)
 benchmark = Sequential(in_place_build, bench)
 CONFORMANCE_PYTHON = "3.14.6"
-CONFORMANCE_RUN = f"uv run --no-project --managed-python --python {CONFORMANCE_PYTHON}"
+CONFORMANCE_RUN = f"uv run --no-project --isolated --managed-python --python {CONFORMANCE_PYTHON}"
 conformance = Sequential(
     Task(
         CONFORMANCE_RUN + " --with setuptools python setup.py build_ext --inplace",
