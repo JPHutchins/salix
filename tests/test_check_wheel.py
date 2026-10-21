@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import os
 import struct
 import subprocess
 import sys
@@ -42,7 +43,8 @@ def check(path: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, str(CHECK_WHEEL), str(path)],
         capture_output=True,
-        text=True,
+        encoding="utf-8",
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
         check=False,
         timeout=60,
     )
