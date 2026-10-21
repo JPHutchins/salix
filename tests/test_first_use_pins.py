@@ -127,7 +127,7 @@ def test_a_copyreg_reloaded_after_the_first_pickle_is_seen_but_one_replaced_in_s
 
 @pytest.mark.parametrize(
     ("deepcopy_at_first_use", "printed"),
-    [("real", "0 [1, 2]"), ("lambda value, memo=None: real(value, memo)", "1 [1, 2]")],
+    [("real", "0 [1, 2]"), ("replaced", "1 [1, 2]")],
     ids=["stdlib_at_first_use", "replaced_at_first_use"],
 )
 def test_the_deepcopy_fast_path_is_decided_by_the_copy_dot_deepcopy_bound_at_the_first_struct_deepcopy(
@@ -135,10 +135,13 @@ def test_the_deepcopy_fast_path_is_decided_by_the_copy_dot_deepcopy_bound_at_the
 ):
     assert printed_by_a_fresh_interpreter(f"""
         import copy
-        import sys
         import salix
+        from deepcopy_calls import deepcopy_calls_from_outside_copy
 
         real = copy.deepcopy
+
+        def replaced(value, memo=None):
+            return real(value, memo)
 
         class Plain:
             pass
@@ -153,17 +156,38 @@ def test_the_deepcopy_fast_path_is_decided_by_the_copy_dot_deepcopy_bound_at_the
         class Defaulted(salix.Struct):
             items: list = [1, 2]
 
-        calls = 0
-
-        def profile(frame, event, argument):
-            global calls
-            called_from_outside_copy = frame.f_back is None or frame.f_back.f_code.co_filename != copy.__file__
-            if event == "call" and frame.f_code is real.__code__ and called_from_outside_copy:
-                calls += 1
-
-        sys.setprofile(profile)
-        constructed = Defaulted()
-        sys.setprofile(None)
-        constructed.items.append(3)
+        calls = deepcopy_calls_from_outside_copy(Defaulted)
+        Defaulted().items.append(3)
         print(calls, Defaulted().items)
     """) == printed
+
+
+@pytest.mark.parametrize(
+    ("deepcopy_at_first_use", "deepcopy_after_first_use", "recorded"),
+    [("recording", "real", "True"), ("real", "recording", "False")],
+    ids=["recording_at_first_use", "recording_after_first_use"],
+)
+def test_default_copies_call_the_copy_dot_deepcopy_bound_when_the_first_defaulted_class_was_built(
+    deepcopy_at_first_use: str, deepcopy_after_first_use: str, recorded: str
+):
+    assert printed_by_a_fresh_interpreter(f"""
+        import copy
+        import salix
+
+        real = copy.deepcopy
+        recorded = []
+
+        def recording(value, memo=None):
+            recorded.append(value)
+            return real(value, memo)
+
+        copy.deepcopy = {deepcopy_at_first_use}
+
+        class Nested(salix.Struct):
+            items: list = [[1]]
+
+        copy.deepcopy = {deepcopy_after_first_use}
+        recorded.clear()
+        built = Nested()
+        print(bool(recorded), built.items, built.items[0] is not Nested().items[0])
+    """) == f"{recorded} [[1]] True"

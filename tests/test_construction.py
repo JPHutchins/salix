@@ -4,10 +4,10 @@ import pickle
 import re
 import sys
 import threading
-from collections.abc import Callable
 from types import FrameType
 
 import pytest
+from deepcopy_calls import deepcopy_calls_from_outside_copy
 from platforms import recurses_through_c_until_recursion_error, starts_a_thread
 from values import COPIED_WHEN_EMPTY, NON_EMPTY
 
@@ -1122,27 +1122,6 @@ class TestMutableDefaults:
             inner: Inner = Inner()
 
         assert Holder().inner is Holder().inner
-
-
-def deepcopy_calls_from_outside_copy(operation: Callable[[], object]) -> int:
-    calls = 0
-
-    def profile(frame: FrameType, event: str, argument: object) -> None:
-        nonlocal calls
-        called_from_outside_copy = (
-            frame.f_back is None or frame.f_back.f_code.co_filename != copy.__file__
-        )
-        if event == "call" and frame.f_code is copy.deepcopy.__code__ and called_from_outside_copy:
-            calls += 1
-
-    outer_profile = sys.getprofile()
-    sys.setprofile(profile)
-    try:
-        operation()
-    finally:
-        sys.setprofile(outer_profile)
-
-    return calls
 
 
 def class_whose_build_failed() -> type:
