@@ -669,8 +669,10 @@ static void test_the_group_members_carry_writes_the_bound_fields(void) {
 
 	TEST_ASSERT_EQUAL_INT(RESULT_OK, store_group_args(type, shell, true));
 
-	TEST_ASSERT_EQUAL_INT(2, PyTuple_GET_SIZE(((PyBaseExceptionObject *) shell)->args));
-	TEST_ASSERT_EQUAL_PTR(exceptions, PyTuple_GET_ITEM(((PyBaseExceptionObject *) shell)->args, 1));
+	PY_OWNED(stored, exception_args_of(shell));
+
+	TEST_ASSERT_EQUAL_INT(2, PyTuple_GET_SIZE(stored));
+	TEST_ASSERT_EQUAL_PTR(exceptions, PyTuple_GET_ITEM(stored, 1));
 	TEST_ASSERT_NULL(group_excs_str(shell));
 
 	Py_DECREF(exceptions);
@@ -684,7 +686,9 @@ static void test_a_group_built_without_member_fields_caches_its_members_string(v
 	PyObject * const instance = testing_entry(fixtures, "fieldless");
 
 	TEST_ASSERT_NOT_NULL(instance);
-	TEST_ASSERT_EQUAL_INT(1, PyTuple_GET_SIZE(((PyBaseExceptionObject *) instance)->args));
+	PY_OWNED(stored, exception_args_of(instance));
+
+	TEST_ASSERT_EQUAL_INT(1, PyTuple_GET_SIZE(stored));
 	TEST_ASSERT_EQUAL(group_layout_has_excs_str(), group_excs_str(instance) != NULL);
 
 	Py_DECREF(fixtures);
@@ -697,7 +701,9 @@ static void test_an_empty_group_payload_caches_its_members_string(void) {
 
 	TEST_ASSERT_NOT_NULL(shell);
 	TEST_ASSERT_EQUAL_INT(RESULT_OK, install_empty_exception_payload(type, shell));
-	TEST_ASSERT_EQUAL_INT(0, PyTuple_GET_SIZE(((PyBaseExceptionObject *) shell)->args));
+	PY_OWNED(stored, exception_args_of(shell));
+
+	TEST_ASSERT_EQUAL_INT(0, PyTuple_GET_SIZE(stored));
 	TEST_ASSERT_EQUAL(group_layout_has_excs_str(), group_excs_str(shell) != NULL);
 	TEST_ASSERT_TRUE(
 		!group_layout_has_excs_str() ||
