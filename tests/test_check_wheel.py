@@ -2,12 +2,11 @@ import base64
 import hashlib
 import struct
 import subprocess
-import sys
 import zipfile
 from pathlib import Path
 
 import pytest
-from platforms import starts_a_subprocess
+from platforms import run_tool, starts_a_subprocess
 
 CHECK_WHEEL = Path(__file__).resolve().parent.parent / "tools" / "check_wheel.py"
 
@@ -38,14 +37,8 @@ def wheel(where: Path, platform: str, payload_name: str, payload: bytes) -> Path
     return path
 
 
-def check(path: Path) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [sys.executable, str(CHECK_WHEEL), str(path)],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=60,
-    )
+def check(*paths: Path) -> subprocess.CompletedProcess[str]:
+    return run_tool(CHECK_WHEEL, *paths)
 
 
 TRUNCATED_ELF = b"\x7fELF" + bytes(14) + struct.pack("<H", 0x3E) + bytes(4)
@@ -96,31 +89,104 @@ def pe(data_directory_count: int, magic: int = 0x20B) -> bytes:
     )
 
 
-def elf_module(machine: int, versions: tuple[str, ...], relocation_kinds: tuple[int, ...]) -> bytes:
-    strings = b"\0" + b"".join(name.encode() + b"\0" for name in ("PyInit_salix", "libc.so.6", *versions))
-
-    def string(name: str) -> int:
-        return strings.index(name.encode() + b"\0")
-
-    symbols = bytes(24) + struct.pack("<IBBHQQ", string("PyInit_salix"), 0x12, 0, 1, 0, 0)
-    needs = struct.pack("<HHIII", 1, len(versions), string("libc.so.6"), 16, 0) + b"".join(
-        struct.pack("<IHHII", 0, 0, 2 + index, string(version), 16 if index < len(versions) - 1 else 0)
-        for index, version in enumerate(versions)
-    )
-    relocations = b"".join(struct.pack("<QQq", 0, kind, 0) for kind in relocation_kinds)
-    bodies = [symbols, strings, needs, relocations]
-    starts = [64 + sum(len(body) for body in bodies[:index]) for index in range(len(bodies))]
-    section_headers = bytes(64) + b"".join(
-        struct.pack("<IIQQQQIIQQ", 0, kind, 0, 0, start, len(body), link, info, 8, entry_size)
-        for (kind, link, info, entry_size), start, body in zip(
-            [(11, 2, 1, 24), (3, 0, 0, 0), (0x6FFFFFFE, 2, 1, 0), (4, 1, 0, 24)], starts, bodies, strict=True
+def elf_module(
+    machine: int,
+    versions: tuple[str, ...],
+    relocation_kinds: tuple[int, ...],
+    need_count: int = 2,
+    last_next_need: int = 0,
+    version_count: int | None = None,
+    first_version: int = 16,
+    needs_link: int = 2,
+    last_name: int | None = None,
+    relocation_entry_size: int = 24,
+    symbol_entry_size: int = 24,
+    section_header_size: int = 64,
+    duplicated_section: int | None = None,
+    empty_section_at: int | None = None,
+    symbol_count: int = 1,
+    name_length: int | None = None,
+) -> bytes:
+    strings = b"\0" + b"".join(
+        name.encode() + b"\0"
+        for name in (
+            "PyInit_salix" if name_length is None else "a" * name_length,
+            "ld-linux.so.2",
+            "GLIBC_2.3",
+            "libc.so.6",
+            *versions,
         )
     )
+
+    def string(name: str) -> int:
+        return strings.index(b"\0" + name.encode() + b"\0") + 1
+
+    symbols = bytes(24) + struct.pack("<IBBHQQ", 1, 0x12, 0, 1, 0, 0) * symbol_count
+    needs = (
+        struct.pack("<HHIII", 1, 1, string("ld-linux.so.2"), 16, 32)
+        + struct.pack("<IHHII", 0, 0, 2, string("GLIBC_2.3"), 0)
+        + struct.pack(
+            "<HHIII",
+            1,
+            len(versions) if version_count is None else version_count,
+            string("libc.so.6"),
+            first_version,
+            last_next_need,
+        )
+        + b"".join(
+            struct.pack(
+                "<IHHII",
+                0,
+                0,
+                3 + index,
+                last_name if last_name is not None and index == len(versions) - 1 else string(version),
+                16 if index < len(versions) - 1 else 0,
+            )
+            for index, version in enumerate(versions)
+        )
+    )
+    first_symbol = 1 << 32
+    relocations = b"".join(struct.pack("<QQq", 0, first_symbol | kind, 0) for kind in relocation_kinds)
+    bodies = [symbols, strings, needs, relocations]
+    starts = [64 + sum(len(body) for body in bodies[:index]) for index in range(len(bodies))]
+    headers = [
+        struct.pack("<IIQQQQIIQQ", 0, kind, 0, 0, start, len(body), link, info, 8, entry_size)
+        for (kind, link, info, entry_size), start, body in zip(
+            [
+                (11, 2, 1, symbol_entry_size),
+                (3, 0, 0, 0),
+                (0x6FFFFFFE, needs_link, need_count, 0),
+                (4, 1, 0, relocation_entry_size),
+            ],
+            starts,
+            bodies,
+            strict=True,
+        )
+    ]
+    assert duplicated_section is None or 1 <= duplicated_section <= len(headers)
+    duplicates = [
+        *([] if duplicated_section is None else [headers[duplicated_section - 1]]),
+        *([] if empty_section_at is None else [struct.pack("<IIQQQQIIQQ", 0, 3, 0, 0, empty_section_at, 0, 0, 0, 1, 0)]),
+    ]
+    section_headers = bytes(64) + b"".join(headers + duplicates)
     header = (
         b"\x7fELF\x02\x01\x01"
         + bytes(9)
         + struct.pack(
-            "<HHIQQQIHHHHHH", 3, machine, 1, 0, 0, starts[-1] + len(relocations), 0, 64, 0, 0, 64, len(bodies) + 1, 2
+            "<HHIQQQIHHHHHH",
+            3,
+            machine,
+            1,
+            0,
+            0,
+            starts[-1] + len(relocations),
+            0,
+            64,
+            0,
+            0,
+            section_header_size,
+            len(bodies) + 1 + len(duplicates),
+            2,
         )
     )
     return header + b"".join(bodies) + section_headers
@@ -140,8 +206,11 @@ def wasm_name(name: str) -> bytes:
     return bytes([len(name)]) + name.encode()
 
 
-def wasm_exporting(*names: str) -> bytes:
-    return WASM_HEADER + wasm_section(7, *(wasm_name(name) + b"\0\0" for name in names))
+WASM_MEMORY_IMPORT = wasm_section(2, wasm_name("env") + wasm_name("memory") + b"\x02\x00\x01")
+
+
+def wasm_exporting(*names: str, kind: int = 0, memory: bytes = WASM_MEMORY_IMPORT) -> bytes:
+    return WASM_HEADER + memory + wasm_section(7, *(wasm_name(name) + bytes([kind, 0]) for name in names))
 
 
 WASM_SIDE_MODULE_EXPORTS = ("__wasm_call_ctors", "__wasm_apply_data_relocs", "PyInit_salix")
@@ -151,6 +220,10 @@ WASM_WITH_A_SECTION_PAST_THE_END = WASM_HEADER + bytes([7, 16])
 WASM_WITH_AN_UNKNOWN_IMPORT_KIND = WASM_HEADER + wasm_section(2, wasm_name("env") + wasm_name("thing") + b"\x09")
 
 WASM_WITH_AN_ENDLESS_LEB128 = WASM_HEADER + bytes([7]) + b"\x80" * 10
+
+WASM_WITH_AN_IMPORT_NAME_PAST_ITS_SECTION = (
+    WASM_HEADER + bytes([2, 3]) + b"\x01\x03en" + wasm_section(7, wasm_name("PyInit_salix") + b"\0\0")
+)
 
 WASM_WITH_64_BIT_MEMORY = WASM_HEADER + wasm_section(2, wasm_name("env") + wasm_name("memory") + b"\x02\x04\x01")
 
@@ -177,6 +250,18 @@ WASM = ("pyemscripten_2026_0_wasm32", "salix/__init__.cpython-313-wasm32-emscrip
         (WASM, WASM_WITH_A_SECTION_PAST_THE_END, "has size 16"),
         (WASM, WASM_WITH_AN_UNKNOWN_IMPORT_KIND, "9 is not a valid WasmImport"),
         (WASM, WASM_WITH_AN_ENDLESS_LEB128, "longer than 64 bits"),
+        (WASM, WASM_WITH_AN_IMPORT_NAME_PAST_ITS_SECTION, "runs past its section's 3"),
+        (WASM, wasm_exporting(*WASM_SIDE_MODULE_EXPORTS, memory=b""), "declares and imports no memory"),
+        (
+            WASM,
+            WASM_HEADER + WASM_MEMORY_IMPORT + wasm_section(7, wasm_name("PyInit_salix")),
+            "a read at 14 runs past its section's 14 bytes",
+        ),
+        (
+            WASM,
+            WASM_HEADER + wasm_section(2, wasm_name("env") + wasm_name("g") + b"\x03"),
+            "3 bytes at 7 run past its section's 8 bytes",
+        ),
     ],
     ids=[
         "truncated-elf",
@@ -192,6 +277,10 @@ WASM = ("pyemscripten_2026_0_wasm32", "salix/__init__.cpython-313-wasm32-emscrip
         "wasm-section-past-the-end",
         "wasm-unknown-import-kind",
         "wasm-endless-leb128",
+        "wasm-import-name-past-its-section",
+        "wasm-without-memory",
+        "wasm-export-without-a-kind",
+        "wasm-global-import-without-its-type",
     ],
 )
 def test_a_payload_that_cannot_be_read_fails_that_wheel_cleanly(target, payload, reason, tmp_path):
@@ -268,13 +357,7 @@ def test_one_unreadable_wheel_does_not_hide_the_others(tmp_path):
     second.mkdir()
     unreadable = wheel(first, *ELF, ELF_MAGIC_ONLY)
     misshapen = wheel(second, *PE, TRUNCATED_ELF)
-    completed = subprocess.run(
-        [sys.executable, str(CHECK_WHEEL), str(unreadable), str(misshapen)],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=60,
-    )
+    completed = check(unreadable, misshapen)
 
     assert completed.returncode == 1
     assert completed.stdout.splitlines() == [f"FAIL {unreadable.name}", f"FAIL {misshapen.name}"]
@@ -286,7 +369,7 @@ def test_one_unreadable_wheel_does_not_hide_the_others(tmp_path):
     [
         (ELF, elf_module(0x3E, ("GLIBC_2.2.5", "GLIBC_2.3"), X86_64_RELATIVE_AND_DTPMOD64)),
         (ELF, elf_module(0x3E, ("GLIBC_2.17",), X86_64_RELATIVE_AND_DTPMOD64)),
-        (ELF_AARCH64, elf_module(0xB7, ("GLIBC_2.17",), (1027, 1031))),
+        (ELF_AARCH64, elf_module(0xB7, ("GLIBC_2.17",), (1028, 1031))),
     ],
     ids=["x86-64-glibc-2.3", "x86-64-glibc-2.17", "aarch64-tls-descriptors"],
 )
@@ -297,10 +380,7 @@ def test_a_manylinux_module_within_its_tags_glibc_passes(target, payload, tmp_pa
     assert completed.stdout.startswith("ok ")
 
 
-@pytest.mark.parametrize(
-    "version",
-    ["GLIBC_2.18", "GLIBC_2.34", "GLIBC_ABI_GNU2_TLS", "GLIBC_PRIVATE"],
-)
+@pytest.mark.parametrize("version", ["GLIBC_2.18", "GLIBC_2.34"])
 def test_a_manylinux_module_needing_what_its_tags_glibc_lacks_fails(version, tmp_path):
     payload = elf_module(0x3E, ("GLIBC_2.2.5", version), X86_64_RELATIVE_AND_DTPMOD64)
     completed = check(wheel(tmp_path, *ELF, payload))
@@ -310,9 +390,143 @@ def test_a_manylinux_module_needing_what_its_tags_glibc_lacks_fails(version, tmp
     assert "could not be checked" not in completed.stderr
 
 
+@pytest.mark.parametrize("version", ["GLIBC_ABI_GNU2_TLS", "GLIBC_PRIVATE", "GLIBC_\u0662.\u0661\u0667"])
+def test_a_manylinux_module_needing_an_unnumbered_glibc_version_fails(version, tmp_path):
+    payload = elf_module(0x3E, ("GLIBC_2.2.5", version), X86_64_RELATIVE_AND_DTPMOD64)
+    completed = check(wheel(tmp_path, *ELF, payload))
+
+    assert completed.returncode == 1
+    assert f"needs ['{version}'], unnumbered glibc version nodes that a glibc 2.17 floor cannot cover" in completed.stderr
+    assert "lacks" not in completed.stderr
+
+
+@pytest.mark.parametrize(
+    ("overrides", "reason"),
+    [
+        ({"need_count": 1}, "2 needs of 1 declared"),
+        ({"need_count": 0xFFFFFFFF}, "declares 4294967295 needs but chains 2"),
+        ({"versions": ("GLIBC_2.17", "GLIBC_2.3"), "version_count": 1}, "declares 1 versions but chains more"),
+        ({"version_count": 0xFFFF}, "65538 entries in 4 slots"),
+        ({"first_version": 0}, "puts its first version 0 bytes in"),
+        ({"last_next_need": 8}, "links 8 bytes ahead, into itself"),
+        ({"needs_link": 3}, "is not a string in section 3"),
+        ({"last_name": 10_000}, "name 10000 is not a string in section 2"),
+        ({"relocation_entry_size": 0}, "misstate their entry size"),
+        ({"symbol_entry_size": 0}, "misstate their entry size"),
+        ({"section_header_size": 0}, "the section headers are 0 bytes each, not 64"),
+        ({"duplicated_section": 3}, "overlap the section before them"),
+        ({"empty_section_at": 1 << 40}, "run past the file's"),
+    ],
+    ids=[
+        "need-count-under-the-chain",
+        "need-count-over-the-chain",
+        "version-count-under-the-chain",
+        "version-count-over-the-section",
+        "first-version-inside-its-need",
+        "need-linked-into-itself",
+        "needs-linked-to-themselves",
+        "name-past-its-string-table",
+        "relocations-without-an-entry-size",
+        "symbols-without-an-entry-size",
+        "section-headers-without-a-size",
+        "version-needs-listed-twice",
+        "an-empty-section-past-the-file",
+    ],
+)
+def test_a_version_need_or_relocation_section_that_misstates_itself_fails_that_wheel_cleanly(
+    overrides, reason, tmp_path
+):
+    payload = elf_module(0xB7, relocation_kinds=(1028, 1031), **{"versions": ("GLIBC_2.17",), **overrides})
+    completed = check(wheel(tmp_path, *ELF_AARCH64, payload))
+
+    assert completed.returncode == 1
+    assert "could not be checked" in completed.stderr
+    assert reason in completed.stderr
+
+
+def test_a_version_need_chained_outside_its_section_fails_that_wheel_cleanly(tmp_path):
+    payload = elf_module(
+        0x3E, ("GLIBC_2.2.5",), X86_64_RELATIVE_AND_DTPMOD64, need_count=3, last_next_need=4096
+    )
+    completed = check(wheel(tmp_path, *ELF, payload))
+
+    assert completed.returncode == 1
+    assert "could not be checked" in completed.stderr
+    assert "is outside its section" in completed.stderr
+
+
 def test_a_manylinux_x86_64_module_using_tls_descriptors_fails(tmp_path):
     payload = elf_module(0x3E, ("GLIBC_2.2.5",), (8, 36))
     completed = check(wheel(tmp_path, *ELF, payload))
 
     assert completed.returncode == 1
     assert "reaches its thread-locals through ['R_X86_64_TLSDESC'], the gnu2 TLS dialect" in completed.stderr
+
+
+@pytest.mark.parametrize(
+    ("exporting", "listed"),
+    [
+        (wasm_exporting(*WASM_SIDE_MODULE_EXPORTS, kind=3), "'PyInit_salix (kind 3)'"),
+        (
+            WASM_HEADER
+            + WASM_MEMORY_IMPORT
+            + wasm_section(
+                7,
+                *(wasm_name(name) + b"\0\0" for name in WASM_SIDE_MODULE_EXPORTS),
+                wasm_name("memory") + b"\x02\0",
+            ),
+            "'memory (kind 2)'",
+        ),
+    ],
+    ids=["init-as-a-global", "memory-beside-the-init"],
+)
+def test_a_side_module_exporting_anything_but_functions_fails_by_name_and_kind(exporting, listed, tmp_path):
+    completed = check(wheel(tmp_path, *WASM, exporting))
+
+    assert completed.returncode == 1
+    assert listed in completed.stderr
+    assert "could not be checked" not in completed.stderr
+
+
+def test_many_exports_naming_one_long_string_are_resolved_once(tmp_path):
+    payload = elf_module(
+        0x3E, ("GLIBC_2.2.5",), X86_64_RELATIVE_AND_DTPMOD64, symbol_count=40_000, name_length=1_000_000
+    )
+    completed = check(wheel(tmp_path, *ELF, payload))
+
+    assert completed.returncode == 1
+    assert "not PyInit_salix alone" in completed.stderr
+    assert "could not be checked" not in completed.stderr
+
+
+def test_a_wheel_that_outlasts_the_time_bound_fails_with_it(tmp_path):
+    hung = wheel(tmp_path, *WASM, wasm_exporting(*WASM_SIDE_MODULE_EXPORTS))
+    completed = run_tool(
+        "-c",
+        "import sys, time\n"
+        f"sys.path.insert(0, {str(CHECK_WHEEL.parent)!r})\n"
+        "import check_wheel\n"
+        "check_wheel.CHECK_SECONDS = 0.2\n"
+        "check_wheel.check = lambda path: iter(time.sleep(10) or ())\n"
+        f"sys.argv = ['check_wheel.py', {str(hung)!r}]\n"
+        "check_wheel.main()\n",
+    )
+
+    assert completed.returncode == 1
+    assert completed.stdout.splitlines() == [f"FAIL {hung.name}"]
+    assert "could not be checked within 0.2 s" in completed.stderr
+
+
+def test_wheels_sharing_a_filename_each_get_their_own_verdict(tmp_path):
+    good = tmp_path / "good"
+    bad = tmp_path / "bad"
+    good.mkdir()
+    bad.mkdir()
+    passing = wheel(good, *WASM, wasm_exporting(*WASM_SIDE_MODULE_EXPORTS))
+    failing = wheel(bad, *WASM, wasm_exporting(*WASM_SIDE_MODULE_EXPORTS[:2]))
+    completed = check(passing, failing)
+
+    assert passing.name == failing.name
+    assert completed.stdout.splitlines() == [f"ok   {passing.name}", f"FAIL {failing.name}"]
+    assert str(failing) in completed.stderr
+    assert str(passing) not in completed.stderr

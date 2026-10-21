@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from platforms import starts_a_subprocess
+from platforms import run_tool, starts_a_subprocess
 
 CHECK_TAG = Path(__file__).resolve().parent.parent / "tools" / "check_tag.py"
 
@@ -16,13 +16,7 @@ pytestmark = [
 def check(tag: str, declared: str, where: Path) -> subprocess.CompletedProcess[str]:
     (where / "pyproject.toml").write_text(f'[project]\nversion = "{declared}"\n')
 
-    return subprocess.run(
-        [sys.executable, str(CHECK_TAG), tag],
-        cwd=where,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    return run_tool(CHECK_TAG, tag, cwd=where)
 
 
 @starts_a_subprocess
@@ -108,13 +102,7 @@ def test_the_pattern_accepts_exactly_what_packaging_calls_canonical():
 def test_a_version_that_is_not_a_string_is_refused_with_a_message(declared, tmp_path):
     (tmp_path / "pyproject.toml").write_text(f"[project]\nversion = {declared}\n")
 
-    result = subprocess.run(
-        [sys.executable, str(CHECK_TAG), "v1.0"],
-        cwd=tmp_path,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    result = run_tool(CHECK_TAG, "v1.0", cwd=tmp_path)
 
     assert result.returncode != 0
     assert "must be a string" in result.stderr
@@ -123,9 +111,7 @@ def test_a_version_that_is_not_a_string_is_refused_with_a_message(declared, tmp_
 
 @starts_a_subprocess
 def test_no_argument_is_refused(tmp_path):
-    result = subprocess.run(
-        [sys.executable, str(CHECK_TAG)], cwd=tmp_path, capture_output=True, text=True, check=False
-    )
+    result = run_tool(CHECK_TAG, cwd=tmp_path)
 
     assert result.returncode != 0
     assert "usage" in result.stderr

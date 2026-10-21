@@ -43,6 +43,18 @@ def printed_by_a_fresh_interpreter(probe: str) -> str:
     return result.stdout.strip()
 
 
+def run_tool(*command: str | os.PathLike[str], cwd: os.PathLike[str] | None = None) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, *map(str, command)],
+        cwd=cwd,
+        capture_output=True,
+        encoding="utf-8",
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+        check=False,
+        timeout=60,
+    )
+
+
 def decoded(output: str | bytes | None) -> str:
     match output:
         case bytes():
