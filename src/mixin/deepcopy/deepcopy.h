@@ -12,7 +12,6 @@ enum deep_route {
 };
 
 enum memo_none_entry {
-	MEMO_NONE_ENTRY_ERROR,
 	MEMO_NONE_ENTRY_PRESENT,
 	MEMO_NONE_ENTRY_ABSENT,
 };
@@ -20,16 +19,19 @@ enum memo_none_entry {
 PyObject * deepcopy_tables(struct salix_state * state, PyObject * deepcopy);
 enum deep_route route_of(PyObject * tables, PyObject * value);
 PyObject * deep_value(PyObject * tables, PyObject * memo, PyObject * value);
-enum memo_none_entry copy_reads_memo_none(void);
 
-static inline PyObject * memo_entry(
-	PyObject * const memo,
-	PyObject * const key,
-	enum memo_none_entry const none_entry
-) {
+static inline enum memo_none_entry copy_reads_memo_none(void) {
+#if PY_VERSION_HEX >= 0x030F0000 && PY_VERSION_HEX < 0x03100000
+	return Py_Version < 0x030F0100 ? MEMO_NONE_ENTRY_ABSENT : MEMO_NONE_ENTRY_PRESENT;
+#else
+	return MEMO_NONE_ENTRY_PRESENT;
+#endif
+}
+
+static inline PyObject * memo_entry(PyObject * const memo, PyObject * const key) {
 	PyObject * const found = dict_value_ref(memo, key);
 
-	if (found == Py_None && none_entry == MEMO_NONE_ENTRY_ABSENT) {
+	if (found == Py_None && copy_reads_memo_none() == MEMO_NONE_ENTRY_ABSENT) {
 		Py_DECREF(found);
 
 		return NULL;

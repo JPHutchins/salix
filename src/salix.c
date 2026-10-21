@@ -110,7 +110,6 @@ static void struct_free(void * const module) {
 	Py_CLEAR(state->missing);
 	Py_CLEAR(state->empty_metadata);
 	defaults_free();
-	memo_none_entry_free();
 
 	Py_CLEAR(state->handoff_attempt);
 	Py_CLEAR(state->handoff_declined);

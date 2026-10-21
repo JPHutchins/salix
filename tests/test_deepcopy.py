@@ -1,9 +1,13 @@
 import copy
+import os
+import subprocess
+import sys
 import weakref
 
 import pytest
-from platforms import recurses_through_c_until_recursion_error
+from platforms import recurses_through_c_until_recursion_error, starts_a_subprocess
 
+import salix
 from salix import Struct
 
 
@@ -600,6 +604,47 @@ def test_a_direct_deepcopy_call_reads_a_seeded_memo_as_copy_dot_deepcopy_reads_i
 
     assert (struct_copy is seed) == (plain_copy is seed)
     assert struct_copy is seed or (struct_copy == struct_value and struct_copy is not struct_value)
+
+
+@starts_a_subprocess
+@pytest.mark.parametrize(
+    ("first_use", "seed"),
+    [
+        ("del copy.deepcopy", "seeded"),
+        ("copy.deepcopy = lambda value, memo=None: 'stub'", "seeded"),
+        ("copy.deepcopy = lambda value, memo=None: 'stub'", None),
+    ],
+)
+def test_the_first_struct_deepcopy_reads_a_seeded_memo_without_calling_copy_dot_deepcopy(
+    first_use: str, seed: object
+):
+    package_parent = os.path.dirname(os.path.dirname(salix.__file__))
+    probe = (
+        "import copy\n"
+        "import sys\n"
+        f"sys.path.insert(0, {package_parent!r})\n"
+        "import salix\n"
+        "class Point(salix.Struct):\n"
+        "    x: int\n"
+        "class PlainPoint:\n"
+        "    def __init__(self, x):\n"
+        "        self.x = x\n"
+        f"seed = {seed!r}\n"
+        "plain = PlainPoint(1)\n"
+        "expected = copy.deepcopy(plain, {id(plain): seed}) is seed\n"
+        "point = Point(1)\n"
+        f"{first_use}\n"
+        "print((point.__deepcopy__({id(point): seed}) is seed) == expected)\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-I", "-c", probe],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=True,
+    )
+
+    assert result.stdout.split() == ["True"]
 
 
 def test_the_memo_records_what_copy_dot_deepcopy_records(monkeypatch: pytest.MonkeyPatch):

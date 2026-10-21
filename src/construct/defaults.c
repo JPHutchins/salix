@@ -1,4 +1,5 @@
 #include <Python.h>
+#include <stdatomic.h>
 
 #include "construct.h"
 #include "../owned.h"
@@ -121,11 +122,13 @@ static default_copier copies_default(PyTypeObject * const kind) {
 	return NULL;
 }
 
-static PyObject * cached_deepcopy = NULL;
+static _Atomic (PyObject *) cached_deepcopy = NULL;
 
 static PyObject * deepcopy_function(void) {
-	if (cached_deepcopy != NULL) {
-		return Py_XNewRef(cached_deepcopy);
+	PyObject * const published = atomic_load_explicit(&cached_deepcopy, memory_order_acquire);
+
+	if (published != NULL) {
+		return Py_NewRef(published);
 	}
 
 	PY_OWNED(module, PyImport_ImportModule("copy"));
@@ -141,16 +144,16 @@ static PyObject * deepcopy_function(void) {
 	}
 
 	STRUCT_BEGIN_CRITICAL_SECTION(module);
-		if (cached_deepcopy == NULL) {
-			cached_deepcopy = Py_NewRef(resolved);
+		if (atomic_load_explicit(&cached_deepcopy, memory_order_relaxed) == NULL) {
+			atomic_store_explicit(&cached_deepcopy, Py_NewRef(resolved), memory_order_release);
 		}
 	STRUCT_END_CRITICAL_SECTION();
 
-	return Py_XNewRef(cached_deepcopy);
+	return Py_NewRef(atomic_load_explicit(&cached_deepcopy, memory_order_acquire));
 }
 
 void defaults_free(void) {
-	Py_CLEAR(cached_deepcopy);
+	Py_XDECREF(atomic_exchange_explicit(&cached_deepcopy, NULL, memory_order_acq_rel));
 }
 
 enum default_probe { DEFAULT_PROBE_SHARE, DEFAULT_PROBE_DEEPCOPY, DEFAULT_PROBE_ERROR };

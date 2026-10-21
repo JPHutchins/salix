@@ -88,53 +88,10 @@ PyObject * deepcopy_tables(struct salix_state * const state, PyObject * const de
 	return stored;
 }
 
-static PyObject * cached_none_entry_absent = NULL;
-
-static PyObject * none_entry_absent_probe(PyObject * const copy_module) {
-	PY_OWNED(deepcopy, PyObject_GetAttrString(copy_module, "deepcopy"));
-	PY_OWNED(probe, deepcopy != NULL ? PyList_New(0) : NULL);
-	PY_OWNED(key, probe != NULL ? PyLong_FromVoidPtr(probe) : NULL);
-	PY_OWNED(memo, key != NULL ? PyDict_New() : NULL);
-
-	if (memo == NULL || PyDict_SetItem(memo, key, Py_None) < 0) {
-		return NULL;
-	}
-
-	PY_OWNED(copied, PyObject_CallFunctionObjArgs(deepcopy, probe, memo, NULL));
-
-	return copied != NULL ? PyBool_FromLong(copied != Py_None) : NULL;
-}
-
-enum memo_none_entry copy_reads_memo_none(void) {
-	if (cached_none_entry_absent == NULL) {
-		PY_OWNED(copy_module, PyImport_ImportModule("copy"));
-		PY_OWNED(probed, copy_module != NULL ? none_entry_absent_probe(copy_module) : NULL);
-
-		if (probed == NULL) {
-			return MEMO_NONE_ENTRY_ERROR;
-		}
-
-		STRUCT_BEGIN_CRITICAL_SECTION(copy_module);
-
-		if (cached_none_entry_absent == NULL) {
-			cached_none_entry_absent = Py_NewRef(probed);
-		}
-
-		STRUCT_END_CRITICAL_SECTION();
-	}
-
-	return cached_none_entry_absent == Py_True ? MEMO_NONE_ENTRY_ABSENT : MEMO_NONE_ENTRY_PRESENT;
-}
-
-void memo_none_entry_free(void) {
-	Py_CLEAR(cached_none_entry_absent);
-}
-
 static PyObject * remembered(PyObject * const memo, PyObject * const value) {
-	enum memo_none_entry const none_entry = copy_reads_memo_none();
-	PY_OWNED(key, none_entry != MEMO_NONE_ENTRY_ERROR ? PyLong_FromVoidPtr(value) : NULL);
+	PY_OWNED(key, PyLong_FromVoidPtr(value));
 
-	return key != NULL ? memo_entry(memo, key, none_entry) : NULL;
+	return key != NULL ? memo_entry(memo, key) : NULL;
 }
 
 static enum result keep_alive(PyObject * const memo, PyObject * const original) {
