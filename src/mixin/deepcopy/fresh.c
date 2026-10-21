@@ -79,6 +79,10 @@ static int table_entry_is(
 }
 
 static PyObject * dict_of_identities(PyObject * const tables, PyObject * const value) {
+	if (route_of(tables, value) != DEEP_ROUTE_COPY_MODULE) {
+		return NULL;
+	}
+
 	PyObject * const dict_copier = PyTuple_GET_ITEM(tables, DEEPCOPY_DICT);
 	PyObject * const dispatch = PyTuple_GET_ITEM(tables, DEEPCOPY_DISPATCH);
 	int const stdlib_copier = (
@@ -130,6 +134,10 @@ static int set_reduces_through_the_stdlib(PyObject * const tables) {
 }
 
 static PyObject * set_of_identities(PyObject * const tables, PyObject * const value) {
+	if (route_of(tables, value) != DEEP_ROUTE_COPY_MODULE) {
+		return NULL;
+	}
+
 	int const reduces = set_reduces_through_the_stdlib(tables);
 
 	if (reduces <= 0) {
