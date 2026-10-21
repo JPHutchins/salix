@@ -211,7 +211,7 @@ enum result install_fields(
 	struct options options,
 	bool resolves_body_eq
 );
-enum result install_init_vars(StructType * struct_class, struct field_plan const * plan);
+enum result install_parameters(StructType * struct_class, struct field_plan const * plan);
 enum result install_post_init(StructType * struct_class);
 enum result ensure_singleton(
 	StructType * struct_class,

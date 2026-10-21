@@ -146,15 +146,16 @@ static PyObject * signature_from_tables(
 		return NULL;
 	}
 
-	Py_ssize_t const required_count = struct_required_count(type);
-	Py_ssize_t const required_init_var_count = struct_required_init_var_count(type);
 	Py_ssize_t field_index = 0;
 	Py_ssize_t init_var_index = 0;
 
 	for (Py_ssize_t position = 0; position < struct_parameter_count(type); position += 1) {
 		bool const init_var = struct_parameter_kind(type, position) == PARAMETER_INIT_VAR;
 		Py_ssize_t const index = init_var ? init_var_index : field_index;
-		Py_ssize_t const required = init_var ? required_init_var_count : required_count;
+		PyObject * const declared = (
+			init_var ? struct_init_var_default(type, index) :
+			struct_field_default(type, index)
+		);
 		PY_OWNED(
 			arguments,
 			PyTuple_Pack(
@@ -172,14 +173,7 @@ static PyObject * signature_from_tables(
 			arguments == NULL ||
 			keywords == NULL ||
 			(
-				PyDict_SetItemString(
-					keywords,
-					"default",
-					index < required ? empty : PyTuple_GET_ITEM(
-						init_var ? type->struct_init_var_defaults : type->struct_defaults,
-						index - required
-					)
-				) < 0
+				PyDict_SetItemString(keywords, "default", declared != NULL ? declared : empty) < 0
 			) ||
 			(
 				PyDict_SetItemString(

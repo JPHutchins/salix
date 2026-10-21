@@ -459,8 +459,7 @@ enum result settle_planned(
 	Py_SETREF(struct_class->struct_defaults, Py_NewRef(plan->defaults));
 	Py_SETREF(struct_class->struct_annotations, Py_NewRef(plan->annotations));
 	Py_SETREF(struct_class->struct_metadata, Py_NewRef(plan->metadata));
-	struct_class->struct_default_count = PyTuple_GET_SIZE(plan->defaults);
-	installed = install_init_vars(struct_class, plan);
+	installed = install_parameters(struct_class, plan);
 	struct_clear_derived_caches(struct_class);
 	STRUCT_END_CRITICAL_SECTION();
 

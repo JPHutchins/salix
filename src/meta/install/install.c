@@ -45,7 +45,51 @@ static enum parameter_kind * parameter_kinds_of(PyObject * const init_var_flags)
 	return kinds;
 }
 
-enum result install_init_vars(
+static Py_ssize_t * default_indices_of(
+	PyObject * const names,
+	PyObject * const default_by_name,
+	PyObject * const defaults
+) {
+	Py_ssize_t const count = PySequence_Fast_GET_SIZE(names);
+	Py_ssize_t * const indices = PyMem_New(Py_ssize_t, count + 1);
+
+	if (indices == NULL) {
+		PyErr_NoMemory();
+
+		return NULL;
+	}
+
+	Py_ssize_t next_index = 0;
+
+	for (Py_ssize_t i = 0; i < count; i += 1) {
+		int const has_default = PyDict_Contains(
+			default_by_name,
+			PySequence_Fast_GET_ITEM(names, i)
+		);
+
+		if (has_default < 0) {
+			PyMem_Free(indices);
+
+			return NULL;
+		}
+
+		indices[i] = has_default == 1 ? next_index++ : NO_DEFAULT;
+	}
+
+	if (next_index != PyTuple_GET_SIZE(defaults)) {
+		PyMem_Free(indices);
+		PyErr_SetString(
+			PyExc_SystemError,
+			"salix internal error: a default table does not match its defaulted names"
+		);
+
+		return NULL;
+	}
+
+	return indices;
+}
+
+enum result install_parameters(
 	StructType * const struct_class,
 	struct field_plan const * const plan
 ) {
@@ -59,6 +103,28 @@ enum result install_init_vars(
 		return RESULT_ERROR;
 	}
 
+	Py_ssize_t * const field_default_indices =
+		default_indices_of(plan->all_names, plan->default_by_name, plan->defaults);
+	Py_ssize_t * const init_var_default_indices = (
+		field_default_indices != NULL ? default_indices_of(
+			plan->init_var_names,
+			plan->default_by_name,
+			plan->init_var_defaults
+		) :
+		NULL
+	);
+
+	if (init_var_default_indices == NULL) {
+		PyMem_Free(field_default_indices);
+		PyMem_Free(kinds);
+
+		return RESULT_ERROR;
+	}
+
+	PyMem_Free(struct_class->struct_field_default_indices);
+	struct_class->struct_field_default_indices = field_default_indices;
+	PyMem_Free(struct_class->struct_init_var_default_indices);
+	struct_class->struct_init_var_default_indices = init_var_default_indices;
 	PyMem_Free(struct_class->struct_parameter_kinds);
 	struct_class->struct_parameter_kinds = kinds;
 	Py_XSETREF(struct_class->struct_init_var_names, Py_NewRef(plan->init_var_names));
@@ -105,7 +171,7 @@ enum result install_fields(
 	enum result installed = RESULT_ERROR;
 
 	STRUCT_BEGIN_CRITICAL_SECTION(struct_class);
-	installed = install_init_vars(struct_class, plan);
+	installed = install_parameters(struct_class, plan);
 
 	if (installed == RESULT_OK) {
 		struct_class->struct_field_names = py_move(&field_names);
@@ -116,7 +182,6 @@ enum result install_fields(
 		struct_class->struct_member_offsets = member_offsets;
 		struct_class->struct_member_count = member_count;
 		struct_class->struct_field_count = field_count;
-		struct_class->struct_default_count = PyTuple_GET_SIZE(plan->defaults);
 		struct_class->struct_options = options;
 		struct_class->struct_resolves_body_eq = resolves_body_eq;
 		struct_clear_derived_caches(struct_class);
