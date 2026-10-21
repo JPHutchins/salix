@@ -1,13 +1,13 @@
 import copy
-import os
-import subprocess
-import sys
 import weakref
 
 import pytest
-from platforms import recurses_through_c_until_recursion_error, starts_a_subprocess
+from platforms import (
+    printed_by_a_fresh_interpreter,
+    recurses_through_c_until_recursion_error,
+    starts_a_subprocess,
+)
 
-import salix
 from salix import Struct
 
 
@@ -618,33 +618,21 @@ def test_a_direct_deepcopy_call_reads_a_seeded_memo_as_copy_dot_deepcopy_reads_i
 def test_the_first_struct_deepcopy_reads_a_seeded_memo_without_calling_copy_dot_deepcopy(
     first_use: str, seed: object
 ):
-    package_parent = os.path.dirname(os.path.dirname(salix.__file__))
-    probe = (
-        "import copy\n"
-        "import sys\n"
-        f"sys.path.insert(0, {package_parent!r})\n"
-        "import salix\n"
-        "class Point(salix.Struct):\n"
-        "    x: int\n"
-        "class PlainPoint:\n"
-        "    def __init__(self, x):\n"
-        "        self.x = x\n"
-        f"seed = {seed!r}\n"
-        "plain = PlainPoint(1)\n"
-        "expected = copy.deepcopy(plain, {id(plain): seed}) is seed\n"
-        "point = Point(1)\n"
-        f"{first_use}\n"
-        "print((point.__deepcopy__({id(point): seed}) is seed) == expected)\n"
-    )
-    result = subprocess.run(
-        [sys.executable, "-I", "-c", probe],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=True,
-    )
-
-    assert result.stdout.split() == ["True"]
+    assert printed_by_a_fresh_interpreter(f"""
+        import copy
+        import salix
+        class Point(salix.Struct):
+            x: int
+        class PlainPoint:
+            def __init__(self, x):
+                self.x = x
+        seed = {seed!r}
+        plain = PlainPoint(1)
+        expected = copy.deepcopy(plain, {{id(plain): seed}}) is seed
+        point = Point(1)
+        {first_use}
+        print((point.__deepcopy__({{id(point): seed}}) is seed) == expected)
+    """) == "True"
 
 
 def test_the_memo_records_what_copy_dot_deepcopy_records(monkeypatch: pytest.MonkeyPatch):

@@ -1,17 +1,13 @@
 import dataclasses
-import os
 import pickle
-import subprocess
-import sys
 from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Generic, TypeVar
 
 import pytest
-from platforms import starts_a_subprocess
+from platforms import printed_by_a_fresh_interpreter, starts_a_subprocess
 from values import EVERY, identify
 
-import salix
 from salix import FrozenInstanceError, Struct
 
 T = TypeVar("T")
@@ -69,31 +65,20 @@ def test_a_frozen_refusal_pickles_back_to_salix_s_class():
 
 @starts_a_subprocess
 def test_the_first_frozen_write_imports_nothing():
-    package_parent = os.path.dirname(os.path.dirname(salix.__file__))
-    probe = (
-        "import sys\n"
-        f"sys.path.insert(0, {package_parent!r})\n"
-        "import salix\n"
-        "class Point(salix.Struct):\n"
-        "    x: int\n"
-        "point = Point(1)\n"
-        "before = set(sys.modules)\n"
-        "try:\n"
-        "    point.x = 2\n"
-        "except salix.FrozenInstanceError:\n"
-        "    print('refused')\n"
-        "print(sorted(set(sys.modules) - before))\n"
-        "print('dataclasses' in sys.modules)\n"
-    )
-    result = subprocess.run(
-        [sys.executable, "-I", "-c", probe],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=True,
-    )
-
-    assert result.stdout.split() == ["refused", "[]", "False"]
+    assert printed_by_a_fresh_interpreter("""
+        import sys
+        import salix
+        class Point(salix.Struct):
+            x: int
+        point = Point(1)
+        before = set(sys.modules)
+        try:
+            point.x = 2
+        except salix.FrozenInstanceError:
+            print('refused')
+        print(sorted(set(sys.modules) - before))
+        print('dataclasses' in sys.modules)
+    """).split() == ["refused", "[]", "False"]
 
 
 def test_a_frozen_refusal_never_formats_a_non_str_name():
