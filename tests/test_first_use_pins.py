@@ -1,7 +1,11 @@
+import os
+
 import pytest
 from platforms import printed_by_a_fresh_interpreter, starts_a_subprocess
 
 pytestmark = starts_a_subprocess
+
+TESTS_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
 
 
 @pytest.mark.parametrize(
@@ -135,7 +139,10 @@ def test_the_deepcopy_fast_path_is_decided_by_the_copy_dot_deepcopy_bound_at_the
 ):
     assert printed_by_a_fresh_interpreter(f"""
         import copy
+        import sys
         import salix
+
+        sys.path.append({TESTS_DIRECTORY!r})
         from deepcopy_calls import deepcopy_calls_from_outside_copy
 
         real = copy.deepcopy
@@ -163,12 +170,12 @@ def test_the_deepcopy_fast_path_is_decided_by_the_copy_dot_deepcopy_bound_at_the
 
 
 @pytest.mark.parametrize(
-    ("deepcopy_at_first_use", "deepcopy_after_first_use", "recorded"),
+    ("deepcopy_at_first_use", "deepcopy_after_first_use", "construction_recorded"),
     [("recording", "real", "True"), ("real", "recording", "False")],
     ids=["recording_at_first_use", "recording_after_first_use"],
 )
 def test_default_copies_call_the_copy_dot_deepcopy_bound_when_the_first_defaulted_class_was_built(
-    deepcopy_at_first_use: str, deepcopy_after_first_use: str, recorded: str
+    deepcopy_at_first_use: str, deepcopy_after_first_use: str, construction_recorded: str
 ):
     assert printed_by_a_fresh_interpreter(f"""
         import copy
@@ -190,4 +197,4 @@ def test_default_copies_call_the_copy_dot_deepcopy_bound_when_the_first_defaulte
         recorded.clear()
         built = Nested()
         print(bool(recorded), built.items, built.items[0] is not Nested().items[0])
-    """) == f"{recorded} [[1]] True"
+    """) == f"{construction_recorded} [[1]] True"
