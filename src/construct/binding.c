@@ -232,7 +232,7 @@ enum result refuse_missing_parameters(
 		switch (struct_parameter_kind(type, position)) {
 			case PARAMETER_FIELD:
 				if (
-					field_index < struct_required_count(type) &&
+					struct_field_default(type, field_index) == NULL &&
 					*struct_slot(type, self, field_index) == NULL
 				) {
 					return refuse_missing(
@@ -246,7 +246,7 @@ enum result refuse_missing_parameters(
 				break;
 			case PARAMETER_INIT_VAR:
 				if (
-					init_var_index < struct_required_init_var_count(type) &&
+					struct_init_var_default(type, init_var_index) == NULL &&
 					PyTuple_GET_ITEM(post_init_arguments, 1 + init_var_index) == NULL
 				) {
 					return refuse_missing(
@@ -268,14 +268,14 @@ enum result fill_init_var_defaults(
 	StructType const * const type,
 	PyObject * const post_init_arguments
 ) {
-	Py_ssize_t const required_count = struct_required_init_var_count(type);
-
 	for (Py_ssize_t i = 0; i < type->struct_init_var_count; i += 1) {
 		if (PyTuple_GET_ITEM(post_init_arguments, 1 + i) != NULL) {
 			continue;
 		}
 
-		if (i < required_count) {
+		PyObject * const declared = struct_init_var_default(type, i);
+
+		if (declared == NULL) {
 			PyErr_Format(
 				PyExc_TypeError,
 				"%.200s() missing required argument '%U'",
@@ -286,10 +286,7 @@ enum result fill_init_var_defaults(
 			return RESULT_ERROR;
 		}
 
-		PyObject * const value = struct_default_copy(
-			type->struct_state,
-			PyTuple_GET_ITEM(type->struct_init_var_defaults, i - required_count)
-		);
+		PyObject * const value = struct_default_copy(type->struct_state, declared);
 
 		if (value == NULL) {
 			return RESULT_ERROR;
@@ -413,8 +410,6 @@ enum result fill_defaults(
 	PyObject * const self,
 	bool const require_all
 ) {
-	Py_ssize_t const required_count = struct_required_count(type);
-
 	for (Py_ssize_t i = 0; i < type->struct_field_count; ++i) {
 		PyObject * * const slot = struct_slot(type, self, i);
 
@@ -422,7 +417,9 @@ enum result fill_defaults(
 			continue;
 		}
 
-		if (i < required_count) {
+		PyObject * const declared = struct_field_default(type, i);
+
+		if (declared == NULL) {
 			if (!require_all) {
 				continue;
 			}
@@ -437,10 +434,7 @@ enum result fill_defaults(
 			return RESULT_ERROR;
 		}
 
-		PyObject * const value = struct_default_copy(
-			type->struct_state,
-			PyTuple_GET_ITEM(type->struct_defaults, i - required_count)
-		);
+		PyObject * const value = struct_default_copy(type->struct_state, declared);
 
 		if (value == NULL) {
 			return RESULT_ERROR;

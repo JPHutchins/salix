@@ -9,21 +9,11 @@
 static enum result append_inherited_default(
 	PyObject * const default_by_name,
 	PyObject * const parameter_name,
-	PyObject * const defaults,
-	Py_ssize_t const index,
-	Py_ssize_t const required_count
+	PyObject * const declared
 ) {
 	return (
-		(
-			index < required_count ||
-			(
-				PyDict_SetItem(
-					default_by_name,
-					parameter_name,
-					PyTuple_GET_ITEM(defaults, index - required_count)
-				) >= 0
-			)
-		) ? RESULT_OK :
+		declared == NULL ? RESULT_OK :
+		PyDict_SetItem(default_by_name, parameter_name, declared) >= 0 ? RESULT_OK :
 		RESULT_ERROR
 	);
 }
@@ -132,9 +122,7 @@ enum result append_inherited(
 						append_inherited_default(
 							default_by_name,
 							field_name,
-							base->struct_defaults,
-							field_index,
-							struct_required_count(base)
+							struct_field_default(base, field_index)
 						) != RESULT_OK
 					)
 				) {
@@ -163,9 +151,7 @@ enum result append_inherited(
 						append_inherited_default(
 							default_by_name,
 							init_var_name,
-							base->struct_init_var_defaults,
-							init_var_index,
-							struct_required_init_var_count(base)
+							struct_init_var_default(base, init_var_index)
 						) != RESULT_OK
 					)
 				) {

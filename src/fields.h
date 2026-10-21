@@ -10,12 +10,14 @@ struct field_plan {
 	PyObject * all_names;
 	PyObject * new_names;
 	PyObject * defaults;
+	Py_ssize_t * field_default_indices;
 	PyObject * annotations;
 	PyObject * metadata;
 	PyObject * parameter_names;
 	PyObject * init_var_flags;
 	PyObject * init_var_names;
 	PyObject * init_var_defaults;
+	Py_ssize_t * init_var_default_indices;
 	PyObject * init_var_annotations;
 	PyObject * declared_names;
 	PyObject * declared_annotations;

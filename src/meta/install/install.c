@@ -45,10 +45,7 @@ static enum parameter_kind * parameter_kinds_of(PyObject * const init_var_flags)
 	return kinds;
 }
 
-enum result install_init_vars(
-	StructType * const struct_class,
-	struct field_plan const * const plan
-) {
+enum result install_parameters(StructType * const struct_class, struct field_plan * const plan) {
 	Py_ssize_t const init_var_count = PyTuple_GET_SIZE(plan->init_var_names);
 	enum parameter_kind * const kinds = (
 		init_var_count > 0 ? parameter_kinds_of(plan->init_var_flags) :
@@ -59,14 +56,48 @@ enum result install_init_vars(
 		return RESULT_ERROR;
 	}
 
-	PyMem_Free(struct_class->struct_parameter_kinds);
+	PyObject * const replaced_tables[] = {
+		struct_class->struct_defaults,
+		struct_class->struct_annotations,
+		struct_class->struct_metadata,
+		struct_class->struct_init_var_names,
+		struct_class->struct_init_var_defaults,
+		struct_class->struct_init_var_annotations,
+		struct_class->struct_declared_names,
+		struct_class->struct_class_var_positions,
+		struct_class->struct_field_records,
+		struct_class->struct_signature,
+	};
+	void * const replaced_arrays[] = {
+		struct_class->struct_field_default_indices,
+		struct_class->struct_init_var_default_indices,
+		struct_class->struct_parameter_kinds,
+	};
+
+	struct_class->struct_defaults = Py_NewRef(plan->defaults);
+	struct_class->struct_field_default_indices = plan->field_default_indices;
+	struct_class->struct_annotations = Py_NewRef(plan->annotations);
+	struct_class->struct_metadata = Py_NewRef(plan->metadata);
+	struct_class->struct_init_var_names = Py_NewRef(plan->init_var_names);
+	struct_class->struct_init_var_defaults = Py_NewRef(plan->init_var_defaults);
+	struct_class->struct_init_var_default_indices = plan->init_var_default_indices;
+	struct_class->struct_init_var_annotations = Py_NewRef(plan->init_var_annotations);
+	struct_class->struct_declared_names = Py_NewRef(plan->declared_names);
+	struct_class->struct_class_var_positions = Py_XNewRef(plan->class_var_positions);
 	struct_class->struct_parameter_kinds = kinds;
-	Py_XSETREF(struct_class->struct_init_var_names, Py_NewRef(plan->init_var_names));
-	Py_XSETREF(struct_class->struct_init_var_defaults, Py_NewRef(plan->init_var_defaults));
-	Py_XSETREF(struct_class->struct_init_var_annotations, Py_NewRef(plan->init_var_annotations));
-	Py_XSETREF(struct_class->struct_declared_names, Py_NewRef(plan->declared_names));
-	Py_XSETREF(struct_class->struct_class_var_positions, Py_XNewRef(plan->class_var_positions));
 	struct_class->struct_init_var_count = init_var_count;
+	struct_class->struct_field_records = NULL;
+	struct_class->struct_signature = NULL;
+	plan->field_default_indices = NULL;
+	plan->init_var_default_indices = NULL;
+
+	for (size_t i = 0; i < Py_ARRAY_LENGTH(replaced_arrays); i += 1) {
+		PyMem_Free(replaced_arrays[i]);
+	}
+
+	for (size_t i = 0; i < Py_ARRAY_LENGTH(replaced_tables); i += 1) {
+		Py_XDECREF(replaced_tables[i]);
+	}
 
 	return RESULT_OK;
 }
@@ -74,7 +105,7 @@ enum result install_init_vars(
 enum result install_fields(
 	StructType * const struct_class,
 	StructType const * const base,
-	struct field_plan const * const plan,
+	struct field_plan * const plan,
 	struct options const options,
 	bool const resolves_body_eq
 ) {
@@ -105,21 +136,16 @@ enum result install_fields(
 	enum result installed = RESULT_ERROR;
 
 	STRUCT_BEGIN_CRITICAL_SECTION(struct_class);
-	installed = install_init_vars(struct_class, plan);
+	installed = install_parameters(struct_class, plan);
 
 	if (installed == RESULT_OK) {
 		struct_class->struct_field_names = py_move(&field_names);
-		struct_class->struct_defaults = Py_NewRef(plan->defaults);
-		struct_class->struct_annotations = Py_NewRef(plan->annotations);
-		struct_class->struct_metadata = Py_NewRef(plan->metadata);
 		struct_class->struct_slot_offsets = offsets;
 		struct_class->struct_member_offsets = member_offsets;
 		struct_class->struct_member_count = member_count;
 		struct_class->struct_field_count = field_count;
-		struct_class->struct_default_count = PyTuple_GET_SIZE(plan->defaults);
 		struct_class->struct_options = options;
 		struct_class->struct_resolves_body_eq = resolves_body_eq;
-		struct_clear_derived_caches(struct_class);
 	}
 
 	STRUCT_END_CRITICAL_SECTION();

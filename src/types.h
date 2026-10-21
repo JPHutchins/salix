@@ -40,9 +40,10 @@ typedef struct StructType {
 	PyObject * struct_declared_names;
 	PyObject * struct_class_var_positions;
 	enum parameter_kind * struct_parameter_kinds;
+	Py_ssize_t * struct_field_default_indices;
+	Py_ssize_t * struct_init_var_default_indices;
 
 	Py_ssize_t struct_field_count;
-	Py_ssize_t struct_default_count;
 	Py_ssize_t struct_member_count;
 	Py_ssize_t struct_init_var_count;
 	struct options struct_options;
@@ -370,12 +371,30 @@ static inline int struct_dict_copy_merged(
 	return installed;
 }
 
-static inline Py_ssize_t struct_required_count(StructType const * const type) {
-	return type->struct_field_count - type->struct_default_count;
+enum { NO_DEFAULT = -1 };
+
+static inline PyObject * struct_field_default(
+	StructType const * const type,
+	Py_ssize_t const index
+) {
+	Py_ssize_t const default_index = type->struct_field_default_indices[index];
+
+	return (
+		default_index == NO_DEFAULT ? NULL :
+		PyTuple_GET_ITEM(type->struct_defaults, default_index)
+	);
 }
 
-static inline Py_ssize_t struct_required_init_var_count(StructType const * const type) {
-	return type->struct_init_var_count - PyTuple_GET_SIZE(type->struct_init_var_defaults);
+static inline PyObject * struct_init_var_default(
+	StructType const * const type,
+	Py_ssize_t const index
+) {
+	Py_ssize_t const default_index = type->struct_init_var_default_indices[index];
+
+	return (
+		default_index == NO_DEFAULT ? NULL :
+		PyTuple_GET_ITEM(type->struct_init_var_defaults, default_index)
+	);
 }
 
 static inline Py_ssize_t struct_parameter_count(StructType const * const type) {
@@ -476,11 +495,6 @@ static inline bool refused_until_created(
 	);
 
 	return true;
-}
-
-static inline void struct_clear_derived_caches(StructType * const type) {
-	Py_CLEAR(type->struct_field_records);
-	Py_CLEAR(type->struct_signature);
 }
 
 static inline PyObject * struct_tuple_or_empty(PyObject * const tuple) {

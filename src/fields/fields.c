@@ -54,7 +54,12 @@ enum result refuse_reserved_name(PyObject * const field_name) {
 	return RESULT_ERROR;
 }
 
-static PyObject * build_defaults(PyObject * all_names, PyObject * default_by_name);
+struct default_table {
+	PyObject * defaults;
+	Py_ssize_t * indices;
+};
+
+static struct default_table build_defaults(PyObject * all_names, PyObject * default_by_name);
 static enum result refuse_misordered_parameters(
 	struct parameter_lists const * parameters,
 	PyObject * default_by_name
@@ -157,12 +162,16 @@ void field_plan_clear(struct field_plan * const plan) {
 	Py_CLEAR(plan->all_names);
 	Py_CLEAR(plan->new_names);
 	Py_CLEAR(plan->defaults);
+	PyMem_Free(plan->field_default_indices);
+	plan->field_default_indices = NULL;
 	Py_CLEAR(plan->annotations);
 	Py_CLEAR(plan->metadata);
 	Py_CLEAR(plan->parameter_names);
 	Py_CLEAR(plan->init_var_flags);
 	Py_CLEAR(plan->init_var_names);
 	Py_CLEAR(plan->init_var_defaults);
+	PyMem_Free(plan->init_var_default_indices);
+	plan->init_var_default_indices = NULL;
 	Py_CLEAR(plan->init_var_annotations);
 	Py_CLEAR(plan->declared_names);
 	Py_CLEAR(plan->declared_annotations);
@@ -252,18 +261,26 @@ static enum result plan_defaults(struct field_plan * const plan) {
 		return RESULT_ERROR;
 	}
 
-	PY_MOVABLE(defaults, build_defaults(plan->all_names, plan->default_by_name));
-	PY_MOVABLE(
-		init_var_defaults,
-		defaults != NULL ? build_defaults(plan->init_var_names, plan->default_by_name) : NULL
+	struct default_table const field_table = build_defaults(plan->all_names, plan->default_by_name);
+	struct default_table const init_var_table = (
+		field_table.defaults != NULL ? build_defaults(
+			plan->init_var_names,
+			plan->default_by_name
+		) :
+		(struct default_table){0}
 	);
 
-	if (init_var_defaults == NULL) {
+	if (init_var_table.defaults == NULL) {
+		Py_XDECREF(field_table.defaults);
+		PyMem_Free(field_table.indices);
+
 		return RESULT_ERROR;
 	}
 
-	plan->defaults = py_move(&defaults);
-	plan->init_var_defaults = py_move(&init_var_defaults);
+	plan->defaults = field_table.defaults;
+	plan->field_default_indices = field_table.indices;
+	plan->init_var_defaults = init_var_table.defaults;
+	plan->init_var_default_indices = init_var_table.indices;
 
 	return RESULT_OK;
 }
@@ -597,23 +614,36 @@ struct inheritance_lookup inherited_position(
 	return (struct inheritance_lookup){.tag = INHERITANCE_NEW};
 }
 
-static PyObject * build_defaults(PyObject * const all_names, PyObject * const default_by_name) {
+static struct default_table build_defaults(
+	PyObject * const all_names,
+	PyObject * const default_by_name
+) {
 	Py_ssize_t const field_count = PySequence_Fast_GET_SIZE(all_names);
-	Py_ssize_t first_default = field_count;
+	Py_ssize_t * const indices = PyMem_New(Py_ssize_t, field_count > 0 ? field_count : 1);
+
+	if (indices == NULL) {
+		PyErr_NoMemory();
+
+		return (struct default_table){0};
+	}
+
+	Py_ssize_t default_count = 0;
 
 	for (Py_ssize_t i = 0; i < field_count; ++i) {
 		PyObject * const field_name = PySequence_Fast_GET_ITEM(all_names, i);
 		int const has_default = PyDict_Contains(default_by_name, field_name);
 
 		if (has_default < 0) {
-			return NULL;
+			PyMem_Free(indices);
+
+			return (struct default_table){0};
 		}
 
-		if (has_default) {
-			first_default = first_default == field_count ? i : first_default;
-		} else if (first_default != field_count) {
+		if (has_default == 0 && default_count > 0) {
+			PyMem_Free(indices);
+
 			if (refuse_reserved_name(field_name) != RESULT_OK) {
-				return NULL;
+				return (struct default_table){0};
 			}
 
 			PyErr_Format(
@@ -622,38 +652,40 @@ static PyObject * build_defaults(PyObject * const all_names, PyObject * const de
 				field_name
 			);
 
-			return NULL;
+			return (struct default_table){0};
 		}
+
+		indices[i] = has_default == 1 ? default_count++ : NO_DEFAULT;
 	}
 
-	PyObject * const defaults = PyTuple_New(field_count - first_default);
+	PyObject * const defaults = PyTuple_New(default_count);
 
 	if (defaults == NULL) {
-		return NULL;
+		PyMem_Free(indices);
+
+		return (struct default_table){0};
 	}
 
-	for (Py_ssize_t i = first_default; i < field_count; ++i) {
-		PyObject * const field_name = PySequence_Fast_GET_ITEM(all_names, i);
-		PY_OWNED(value, dict_value_ref(default_by_name, field_name));
+	for (Py_ssize_t i = 0; i < field_count; ++i) {
+		if (indices[i] != NO_DEFAULT) {
+			PY_OWNED(
+				value,
+				dict_value_ref(default_by_name, PySequence_Fast_GET_ITEM(all_names, i))
+			);
+			PyObject * const stored = value != NULL ? struct_default_copy(NULL, value) : NULL;
 
-		if (value == NULL) {
-			Py_DECREF(defaults);
+			if (stored == NULL) {
+				Py_DECREF(defaults);
+				PyMem_Free(indices);
 
-			return NULL;
+				return (struct default_table){0};
+			}
+
+			PyTuple_SET_ITEM(defaults, indices[i], stored);
 		}
-
-		PyObject * const stored = struct_default_copy(NULL, value);
-
-		if (stored == NULL) {
-			Py_DECREF(defaults);
-
-			return NULL;
-		}
-
-		PyTuple_SET_ITEM(defaults, i - first_default, stored);
 	}
 
-	return defaults;
+	return (struct default_table){.defaults = defaults, .indices = indices};
 }
 
 #ifdef TESTING
@@ -690,12 +722,15 @@ static void test_no_defaults_produces_an_empty_tuple(void) {
 	char const * const names[] = {"a", "b"};
 	PyObject * const all_names = names_of(names, 2);
 	PyObject * const by_name = defaults_for(names, 0);
-	PyObject * const defaults = build_defaults(all_names, by_name);
+	struct default_table const table = build_defaults(all_names, by_name);
 
-	TEST_ASSERT_NOT_NULL(defaults);
-	TEST_ASSERT_EQUAL_INT(0, PyTuple_GET_SIZE(defaults));
+	TEST_ASSERT_NOT_NULL(table.defaults);
+	TEST_ASSERT_EQUAL_INT(0, PyTuple_GET_SIZE(table.defaults));
+	TEST_ASSERT_EQUAL_INT(NO_DEFAULT, table.indices[0]);
+	TEST_ASSERT_EQUAL_INT(NO_DEFAULT, table.indices[1]);
 
-	Py_DECREF(defaults);
+	Py_DECREF(table.defaults);
+	PyMem_Free(table.indices);
 	Py_DECREF(by_name);
 	Py_DECREF(all_names);
 }
@@ -705,12 +740,17 @@ static void test_only_the_trailing_run_becomes_defaults(void) {
 	char const * const defaulted[] = {"b", "c"};
 	PyObject * const all_names = names_of(names, 3);
 	PyObject * const by_name = defaults_for(defaulted, 2);
-	PyObject * const defaults = build_defaults(all_names, by_name);
+	struct default_table const table = build_defaults(all_names, by_name);
 
-	TEST_ASSERT_NOT_NULL(defaults);
-	TEST_ASSERT_EQUAL_INT(2, PyTuple_GET_SIZE(defaults));
+	TEST_ASSERT_NOT_NULL(table.defaults);
+	TEST_ASSERT_EQUAL_INT(2, PyTuple_GET_SIZE(table.defaults));
+	TEST_ASSERT_EQUAL_INT(NO_DEFAULT, table.indices[0]);
+	TEST_ASSERT_EQUAL_INT(0, table.indices[1]);
+	TEST_ASSERT_EQUAL_INT(1, table.indices[2]);
+	TEST_ASSERT_EQUAL_INT(1, PyLong_AsLong(PyTuple_GET_ITEM(table.defaults, table.indices[2])));
 
-	Py_DECREF(defaults);
+	Py_DECREF(table.defaults);
+	PyMem_Free(table.indices);
 	Py_DECREF(by_name);
 	Py_DECREF(all_names);
 }
@@ -720,9 +760,10 @@ static void test_a_required_field_after_a_default_is_rejected(void) {
 	char const * const defaulted[] = {"a"};
 	PyObject * const all_names = names_of(names, 2);
 	PyObject * const by_name = defaults_for(defaulted, 1);
-	PyObject * const defaults = build_defaults(all_names, by_name);
+	struct default_table const table = build_defaults(all_names, by_name);
 
-	TEST_ASSERT_NULL(defaults);
+	TEST_ASSERT_NULL(table.defaults);
+	TEST_ASSERT_NULL(table.indices);
 	TEST_ASSERT_TRUE(PyErr_ExceptionMatches(PyExc_TypeError));
 
 	PyErr_Clear();

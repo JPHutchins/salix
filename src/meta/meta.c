@@ -297,6 +297,10 @@ static int StructMeta_clear(PyObject * const self) {
 	Py_CLEAR(struct_class->struct_class_var_positions);
 	PyMem_Free(struct_class->struct_parameter_kinds);
 	struct_class->struct_parameter_kinds = NULL;
+	PyMem_Free(struct_class->struct_field_default_indices);
+	struct_class->struct_field_default_indices = NULL;
+	PyMem_Free(struct_class->struct_init_var_default_indices);
+	struct_class->struct_init_var_default_indices = NULL;
 	struct_class->struct_init_var_count = 0;
 	PyMem_Free(struct_class->struct_slot_offsets);
 	struct_class->struct_slot_offsets = NULL;
