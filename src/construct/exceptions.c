@@ -488,16 +488,9 @@ Py_ssize_t carried_payload_count(StructType * const type, PyObject * const self)
 		return 0;
 	}
 
-	PyObject * args;
+	PY_OWNED(args, exception_args_of(self));
 
-	STRUCT_BEGIN_CRITICAL_SECTION(self);
-	args = Py_XNewRef(((PyBaseExceptionObject *) self)->args);
-	STRUCT_END_CRITICAL_SECTION();
-
-	Py_ssize_t const count = args != NULL ? PyTuple_GET_SIZE(args) : 0;
-	Py_XDECREF(args);
-
-	return count;
+	return args != NULL ? PyTuple_GET_SIZE(args) : 0;
 }
 
 Py_ssize_t explicit_dict_prefix(StructType const * const type, PyObject * const values) {

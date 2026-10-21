@@ -379,18 +379,11 @@ int Struct_init_wrapper(
 	}
 
 	if (is_exception_struct(cls)) {
-		PyObject * args;
-
-		STRUCT_BEGIN_CRITICAL_SECTION(self);
-		args = Py_XNewRef(((PyBaseExceptionObject *) self)->args);
-		STRUCT_END_CRITICAL_SECTION();
-
+		PY_OWNED(args, exception_args_of(self));
 		bool const stored = (
 			args != NULL ||
 			set_exception_args_from_positionals(cls, self, arguments) == RESULT_OK
 		);
-
-		Py_XDECREF(args);
 
 		if (!stored) {
 			return -1;
@@ -631,15 +624,11 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 
 #if PY_VERSION_HEX >= 0x030B0000
 	if (type->struct_group_family) {
-		PyObject * args;
-
-		STRUCT_BEGIN_CRITICAL_SECTION(built);
-		args = Py_XNewRef(((PyBaseExceptionObject *) built)->args);
-		STRUCT_END_CRITICAL_SECTION();
-
 		PY_MOVABLE(group_msg_fallback, NULL);
 
 		if (type->struct_message_index < 0) {
+			PY_OWNED(args, exception_args_of(built));
+
 			group_msg_fallback = (
 				args != NULL && PyTuple_GET_SIZE(
 					args
@@ -647,8 +636,6 @@ PyObject * Struct_from_mapping(PyObject * const module, PyObject * const argumen
 				PyUnicode_FromString("")
 			);
 		}
-
-		Py_XDECREF(args);
 
 		if (
 			(group_msg_fallback == NULL && PyErr_Occurred()) ||

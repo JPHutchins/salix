@@ -4,7 +4,6 @@
 #include "../mixin.h"
 #include "../result.h"
 
-typedef struct StructType StructType;
 struct salix_state;
 
 PyObject * Struct_copy(PyObject * self, PyObject * noargs);
