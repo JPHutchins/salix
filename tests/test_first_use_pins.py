@@ -64,6 +64,42 @@ def test_a_dispatch_table_rebound_after_the_first_struct_deepcopy_is_still_seen(
 
 
 @pytest.mark.parametrize(
+    ("first_use", "change"),
+    [(True, "rebound"), (True, "mutated_in_place"), (False, "rebound")],
+    ids=["rebound_after_first_use", "mutated_in_place_after_first_use", "rebound_before_first_use"],
+)
+def test_a_default_copy_sees_a_dispatch_table_change_as_copy_deepcopy_does_before_or_after_first_use(
+    first_use: bool, change: str
+):
+    assert printed_by_a_fresh_interpreter(f"""
+        import copy
+        import salix
+
+        class Warm(salix.Struct):
+            items: list = [[0]]
+
+        def reduced(value):
+            return (frozenset, (list(value),))
+
+        def rebound():
+            copy.dispatch_table = {{**copy.dispatch_table, set: reduced}}
+
+        def mutated_in_place():
+            copy.dispatch_table[set] = reduced
+
+        if {first_use}:
+            Warm()
+        {change}()
+        declared = {{1, 2}}
+
+        class Holder(salix.Struct):
+            v: set = declared
+
+        print(type(Holder().v).__name__, type(copy.deepcopy(declared)).__name__)
+    """) == "frozenset frozenset"
+
+
+@pytest.mark.parametrize(
     ("first_use", "printed"),
     [(False, "str True"), (True, "Plain True")],
     ids=["replaced_before_first_use", "replaced_after_first_use"],
