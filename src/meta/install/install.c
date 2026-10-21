@@ -45,26 +45,7 @@ static enum parameter_kind * parameter_kinds_of(PyObject * const init_var_flags)
 	return kinds;
 }
 
-static Py_ssize_t * copied_indices(Py_ssize_t const * const indices, Py_ssize_t const count) {
-	Py_ssize_t * const copy = PyMem_New(Py_ssize_t, count > 0 ? count : 1);
-
-	if (copy == NULL) {
-		PyErr_NoMemory();
-
-		return NULL;
-	}
-
-	for (Py_ssize_t i = 0; i < count; i += 1) {
-		copy[i] = indices[i];
-	}
-
-	return copy;
-}
-
-enum result install_parameters(
-	StructType * const struct_class,
-	struct field_plan const * const plan
-) {
+enum result install_parameters(StructType * const struct_class, struct field_plan * const plan) {
 	Py_ssize_t const init_var_count = PyTuple_GET_SIZE(plan->init_var_names);
 	enum parameter_kind * const kinds = (
 		init_var_count > 0 ? parameter_kinds_of(plan->init_var_flags) :
@@ -72,25 +53,6 @@ enum result install_parameters(
 	);
 
 	if (init_var_count > 0 && kinds == NULL) {
-		return RESULT_ERROR;
-	}
-
-	Py_ssize_t * const field_default_indices = copied_indices(
-		plan->field_default_indices,
-		PyList_GET_SIZE(plan->all_names)
-	);
-	Py_ssize_t * const init_var_default_indices = (
-		field_default_indices != NULL ? copied_indices(
-			plan->init_var_default_indices,
-			init_var_count
-		) :
-		NULL
-	);
-
-	if (init_var_default_indices == NULL) {
-		PyMem_Free(field_default_indices);
-		PyMem_Free(kinds);
-
 		return RESULT_ERROR;
 	}
 
@@ -113,12 +75,12 @@ enum result install_parameters(
 	};
 
 	struct_class->struct_defaults = Py_NewRef(plan->defaults);
-	struct_class->struct_field_default_indices = field_default_indices;
+	struct_class->struct_field_default_indices = plan->field_default_indices;
 	struct_class->struct_annotations = Py_NewRef(plan->annotations);
 	struct_class->struct_metadata = Py_NewRef(plan->metadata);
 	struct_class->struct_init_var_names = Py_NewRef(plan->init_var_names);
 	struct_class->struct_init_var_defaults = Py_NewRef(plan->init_var_defaults);
-	struct_class->struct_init_var_default_indices = init_var_default_indices;
+	struct_class->struct_init_var_default_indices = plan->init_var_default_indices;
 	struct_class->struct_init_var_annotations = Py_NewRef(plan->init_var_annotations);
 	struct_class->struct_declared_names = Py_NewRef(plan->declared_names);
 	struct_class->struct_class_var_positions = Py_XNewRef(plan->class_var_positions);
@@ -126,6 +88,8 @@ enum result install_parameters(
 	struct_class->struct_init_var_count = init_var_count;
 	struct_class->struct_field_records = NULL;
 	struct_class->struct_signature = NULL;
+	plan->field_default_indices = NULL;
+	plan->init_var_default_indices = NULL;
 
 	for (size_t i = 0; i < Py_ARRAY_LENGTH(replaced_arrays); i += 1) {
 		PyMem_Free(replaced_arrays[i]);
@@ -141,7 +105,7 @@ enum result install_parameters(
 enum result install_fields(
 	StructType * const struct_class,
 	StructType const * const base,
-	struct field_plan const * const plan,
+	struct field_plan * const plan,
 	struct options const options,
 	bool const resolves_body_eq
 ) {

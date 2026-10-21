@@ -10,7 +10,7 @@ enum result settle_planned(
 	StructType const * base,
 	PyObject * bases,
 	PyObject * name,
-	struct field_plan const * plan,
+	struct field_plan * plan,
 	PyObject * original_namespace,
 	struct options options,
 	struct options inherited,

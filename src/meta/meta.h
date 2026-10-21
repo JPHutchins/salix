@@ -207,11 +207,11 @@ PyObject * build_struct_class(
 enum result install_fields(
 	StructType * struct_class,
 	StructType const * base,
-	struct field_plan const * plan,
+	struct field_plan * plan,
 	struct options options,
 	bool resolves_body_eq
 );
-enum result install_parameters(StructType * struct_class, struct field_plan const * plan);
+enum result install_parameters(StructType * struct_class, struct field_plan * plan);
 enum result install_post_init(StructType * struct_class);
 enum result ensure_singleton(
 	StructType * struct_class,
