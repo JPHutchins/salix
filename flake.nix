@@ -326,7 +326,7 @@
                 ];
               }
               ''
-                python ${./tools/check_wheel.py} ${all}/*.whl
+                python ${./tools/check_wheel} ${all}/*.whl
                 twine check --strict ${all}/*.whl ${sdist}/*.tar.gz
                 touch $out
               '';

@@ -180,7 +180,7 @@ tooling = Task(
     " mypy --strict --warn-unused-ignores --explicit-package-bases"
     " --exclude bench/source-tiers/vendor"
     " setup.py tasks.py build_config.py tools/ bench/",
-    env={"MYPYPATH": "."},
+    env={"MYPYPATH": ".:tools/check_wheel"},
 )
 type_check = Parallel(typed_api, tooling)
 

@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from platforms import run_tool, starts_a_subprocess
 
-CHECK_WHEEL = Path(__file__).resolve().parent.parent / "tools" / "check_wheel.py"
+CHECK_WHEEL = Path(__file__).resolve().parent.parent / "tools" / "check_wheel"
 
 pytestmark = [
     pytest.mark.skipif(not CHECK_WHEEL.exists(), reason="tools/ is not beside these tests"),
@@ -504,12 +504,12 @@ def test_a_wheel_that_outlasts_the_time_bound_fails_with_it(tmp_path):
     completed = run_tool(
         "-c",
         "import sys, time\n"
-        f"sys.path.insert(0, {str(CHECK_WHEEL.parent)!r})\n"
-        "import check_wheel\n"
-        "check_wheel.CHECK_SECONDS = 0.2\n"
-        "check_wheel.check = lambda path: iter(time.sleep(10) or ())\n"
-        f"sys.argv = ['check_wheel.py', {str(hung)!r}]\n"
-        "check_wheel.main()\n",
+        f"sys.path.insert(0, {str(CHECK_WHEEL)!r})\n"
+        "import verdict\n"
+        "verdict.CHECK_SECONDS = 0.2\n"
+        "verdict.check = lambda path: iter(time.sleep(10) or ())\n"
+        f"sys.argv = ['check_wheel', {str(hung)!r}]\n"
+        "verdict.main()\n",
     )
 
     assert completed.returncode == 1
