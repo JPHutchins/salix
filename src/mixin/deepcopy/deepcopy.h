@@ -22,7 +22,7 @@ enum memo_none_entry {
 	MEMO_NONE_ENTRY_ABSENT,
 };
 
-PyObject * deepcopy_tables(struct salix_state * state, PyObject * deepcopy);
+PyObject * deepcopy_tables(struct salix_state state[static 1], PyObject * deepcopy);
 enum deep_route route_of(PyObject * tables, PyObject * value);
 PyObject * deep_value(PyObject * tables, PyObject * memo, PyObject * value);
 

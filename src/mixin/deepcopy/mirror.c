@@ -55,7 +55,7 @@ static PyObject * deepcopy_tables_build(PyObject * const copy_module, PyObject *
 	return py_move(&tables);
 }
 
-PyObject * deepcopy_tables(struct salix_state * const state, PyObject * const deepcopy) {
+PyObject * deepcopy_tables(struct salix_state state[static 1], PyObject * const deepcopy) {
 	PyObject * cached = NULL;
 
 	STRUCT_BEGIN_CRITICAL_SECTION(state->pickle_cache[PICKLE_REDUCE_EX_NAME]);

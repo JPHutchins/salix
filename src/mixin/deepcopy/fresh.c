@@ -95,22 +95,30 @@ static PyObject * dict_of_identities(PyObject * const tables, PyObject * const v
 	return copied != NULL ? proven_copy(&copied, every_entry_keeps_identity(tables, copied)) : NULL;
 }
 
-struct table_entry {
-	enum deepcopy_table table;
-	PyTypeObject * kind;
-	PyObject * entry;
-};
+static int set_reduces_through_the_stdlib(PyObject * const tables) {
+	PyObject * const dispatch = PyTuple_GET_ITEM(tables, DEEPCOPY_DISPATCH);
+	PyObject * const reductors = PyTuple_GET_ITEM(tables, DEEPCOPY_REDUCTORS);
+	PyObject * const list_copier = PyTuple_GET_ITEM(tables, DEEPCOPY_LIST);
 
-static int table_entries_are(
-	PyObject * const tables,
-	size_t const count,
-	struct table_entry const expected[static count]
-) {
-	for (size_t i = 0; i < count; i += 1) {
+	if (!PyDict_CheckExact(reductors) || list_copier == Py_None) {
+		return 0;
+	}
+
+	struct {
+		PyObject * table;
+		PyTypeObject * kind;
+		PyObject * entry;
+	} const stdlib_reduction[] = {
+		{.table = dispatch, .kind = &PySet_Type, .entry = Py_None},
+		{.table = reductors, .kind = &PySet_Type, .entry = Py_None},
+		{.table = dispatch, .kind = &PyList_Type, .entry = list_copier},
+	};
+
+	for (size_t i = 0; i < sizeof stdlib_reduction / sizeof stdlib_reduction[0]; i += 1) {
 		int const matches = table_entry_is(
-			PyTuple_GET_ITEM(tables, expected[i].table),
-			expected[i].kind,
-			expected[i].entry
+			stdlib_reduction[i].table,
+			stdlib_reduction[i].kind,
+			stdlib_reduction[i].entry
 		);
 
 		if (matches <= 0) {
@@ -119,29 +127,6 @@ static int table_entries_are(
 	}
 
 	return 1;
-}
-
-static int set_reduces_through_the_stdlib(PyObject * const tables) {
-	PyObject * const list_copier = PyTuple_GET_ITEM(tables, DEEPCOPY_LIST);
-
-	if (
-		!PyDict_CheckExact(PyTuple_GET_ITEM(tables, DEEPCOPY_REDUCTORS)) ||
-		list_copier == Py_None
-	) {
-		return 0;
-	}
-
-	struct table_entry const stdlib_reduction[] = {
-		{.table = DEEPCOPY_DISPATCH, .kind = &PySet_Type, .entry = Py_None},
-		{.table = DEEPCOPY_REDUCTORS, .kind = &PySet_Type, .entry = Py_None},
-		{.table = DEEPCOPY_DISPATCH, .kind = &PyList_Type, .entry = list_copier},
-	};
-
-	return table_entries_are(
-		tables,
-		sizeof stdlib_reduction / sizeof stdlib_reduction[0],
-		stdlib_reduction
-	);
 }
 
 static PyObject * set_of_identities(PyObject * const tables, PyObject * const value) {

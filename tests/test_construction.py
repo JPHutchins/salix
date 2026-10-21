@@ -5,12 +5,13 @@ import pickle
 import re
 import sys
 import threading
+from collections.abc import Callable
 from types import FrameType
 
 import pytest
 from deepcopy_calls import deepcopy_calls_from_outside_copy
 from platforms import recurses_through_c_until_recursion_error, starts_a_thread
-from values import COPIED_WHEN_EMPTY, NON_EMPTY
+from values import COPIED_WHEN_EMPTY, NON_EMPTY, ClassWhoseMetaclassCannotBeHashed
 
 from salix import Struct, fields, from_mapping, replace, set_field, to_dict
 
@@ -393,35 +394,26 @@ class TestMutableDefaults:
 
         assert 9 not in second_inner
 
-    def test_a_value_a_deepcopy_cannot_carry_is_shared(self):
+    @pytest.mark.parametrize(
+        "uncarryable",
+        [
+            pytest.param(lambda: memoryview(bytearray(b"abc")), id="a_writable_memoryview"),
+            pytest.param(lambda: [ClassWhoseMetaclassCannotBeHashed], id="a_class_whose_metaclass_cannot_be_hashed"),
+        ],
+    )
+    def test_a_value_a_deepcopy_cannot_carry_is_shared(self, uncarryable: Callable[[], object]):
         """The deep path falls back to the old sharing for values deepcopy
         refuses, rather than failing the construction."""
 
-        value = memoryview(bytearray(b"abc"))
+        value = uncarryable()
 
         class Holder(Struct):
             v: object = value
 
+        with pytest.raises(TypeError):
+            copy.deepcopy(value)
+
         assert Holder().v is Holder().v
-
-    def test_a_list_default_holding_a_class_whose_metaclass_cannot_be_hashed_is_shared(self):
-        class UnhashableMetaclass(type):
-            def __hash__(cls):
-                raise TypeError("unhashable metaclass")
-
-        class Meta(type, metaclass=UnhashableMetaclass):
-            pass
-
-        class Unhashable(metaclass=Meta):
-            pass
-
-        class Holder(Struct):
-            items: list = [Unhashable]  # noqa: RUF012
-
-        with pytest.raises(TypeError, match="unhashable metaclass"):
-            copy.deepcopy([Unhashable])
-
-        assert Holder().items is Holder().items
 
     @pytest.mark.parametrize(
         "value",
