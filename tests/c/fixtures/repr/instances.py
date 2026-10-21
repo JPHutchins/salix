@@ -7,7 +7,10 @@ class P(Struct):
 
 
 class Q(Struct):
-    x: str
+    x: int
 
 
-result = {"pair": P(1, 2), "text": Q("value")}
+result = {
+    "pair": P(1, 2),
+    "text": Q("value"),
+}
