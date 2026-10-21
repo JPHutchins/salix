@@ -471,6 +471,49 @@ static void test_the_chain_probe_names_the_first_declined_keyword(void) {
 	Py_DECREF(fixtures);
 }
 
+static PyObject * declined_across(
+	PyObject * const fixtures,
+	char const * const chain,
+	UNITY_LINE_TYPE const line
+) {
+	PyObject * declined = NULL;
+
+	assert_verdict(
+		(struct chain_verdict){.accepts_all = 0, .accepts_weakref = 1, .readable = true},
+		chain_probe(
+			testing_entry(fixtures, chain),
+			testing_entry(fixtures, "b_and_q"),
+			false,
+			&declined
+		),
+		line
+	);
+	UNITY_TEST_ASSERT_NOT_NULL(declined, line, chain);
+
+	return declined;
+}
+
+static void test_across_links_the_last_declining_link_names_its_keyword(void) {
+	PyObject * const fixtures = testing_evaluate(probes_source);
+
+	TEST_ASSERT_EQUAL_INT(
+		0,
+		PyUnicode_CompareWithASCIIString(
+			declined_across(fixtures, "declines_q_then_b", __LINE__),
+			"b"
+		)
+	);
+	TEST_ASSERT_EQUAL_INT(
+		0,
+		PyUnicode_CompareWithASCIIString(
+			declined_across(fixtures, "declines_b_then_q", __LINE__),
+			"q"
+		)
+	);
+
+	Py_DECREF(fixtures);
+}
+
 static void test_an_unreadable_keyword_fails_the_probe(void) {
 	PyObject * const fixtures = testing_evaluate(probes_source);
 
@@ -484,7 +527,7 @@ static void test_an_unreadable_keyword_fails_the_probe(void) {
 		),
 		__LINE__
 	);
-	TEST_ASSERT_NOT_NULL(PyErr_Occurred());
+	TEST_ASSERT_TRUE(PyErr_ExceptionMatches(PyExc_TypeError));
 	PyErr_Clear();
 
 	Py_DECREF(fixtures);
@@ -497,6 +540,7 @@ void handoff_tests(void) {
 	RUN_TEST(test_the_metaclass_chain_holds_each_python_new_above_struct_meta);
 	RUN_TEST(test_the_chain_probe_declines_a_positional_only_name);
 	RUN_TEST(test_the_chain_probe_names_the_first_declined_keyword);
+	RUN_TEST(test_across_links_the_last_declining_link_names_its_keyword);
 	RUN_TEST(test_an_unreadable_keyword_fails_the_probe);
 	RUN_TEST(test_a_variadic_keyword_link_accepts_every_keyword);
 	RUN_TEST(test_a_link_written_in_c_makes_the_chain_unreadable);

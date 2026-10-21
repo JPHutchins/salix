@@ -10,14 +10,21 @@ def names_weakref(metaclass: type, weakref: bool = False) -> None:
     pass
 
 
+def takes_only_q(q: int) -> None:
+    pass
+
+
 result = {
     "positional_only": [positional_only],
     "takes_every_keyword": [takes_every_keyword],
     "names_weakref": [names_weakref],
+    "declines_q_then_b": [positional_only, takes_only_q],
+    "declines_b_then_q": [takes_only_q, positional_only],
     "written_in_c": [len],
     "named": {"b": True, "c": True},
     "positional": {"a": True},
     "anything": {"anything": True},
     "unknowns_after_a_known": {"b": True, "q": True, "r": True},
+    "b_and_q": {"b": True, "q": True},
     "not_a_string_key": {1: True},
 }
