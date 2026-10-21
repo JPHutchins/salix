@@ -2,6 +2,7 @@ import copy
 import weakref
 
 import pytest
+from platforms import printed_by_a_fresh_interpreter, starts_a_subprocess
 
 from salix import Struct
 
@@ -346,3 +347,25 @@ def test_a_self_reference_in_a_field_still_points_at_the_source():
 
     assert copied is not instance
     assert copied.other is instance
+
+
+@starts_a_subprocess
+def test_the_salix_module_lives_exactly_as_long_as_a_struct_object_can_reach_it():
+    assert printed_by_a_fresh_interpreter("""
+        import copy, gc, sys, weakref
+        import salix
+        module = weakref.ref(sys.modules['salix'])
+        class Point(salix.Struct):
+            x: list
+        instance = Point([1])
+        del Point
+        for name in [name for name in sys.modules if name == 'salix' or name.startswith('salix.')]:
+            del sys.modules[name]
+        del salix
+        gc.collect()
+        alive_through_an_instance = module() is not None
+        copies = copy.copy(instance).x is instance.x and copy.deepcopy(instance).x == [1]
+        del instance
+        gc.collect()
+        print(alive_through_an_instance, copies, module() is None)
+    """) == "True True True"
