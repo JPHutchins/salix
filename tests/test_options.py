@@ -57,15 +57,6 @@ def test_an_unclaimed_keyword_fails_the_class():
             x: int
 
 
-def test_a_deferred_dataclass_option_is_rejected_rather_than_ignored():
-    """kw_only is not implemented; silently accepting it would be the bug."""
-
-    with pytest.raises(TypeError, match="takes no keyword arguments"):
-
-        class Unsupported(Struct, kw_only=True):
-            x: int
-
-
 class TestPep487Keywords:
     def test_a_hierarchy_declares_its_own_class_keyword(self):
         class Base(Struct):

@@ -4,6 +4,7 @@
 
 #include "meta.h"
 #include "../construct/construct.h"
+#include "../fields.h"
 #include "../mixin.h"
 #include "../options.h"
 #include "../owned.h"
@@ -219,26 +220,58 @@ static struct declarer unreachable_declarer(
 	);
 }
 
+static enum result refuse_keyword_only_exception_field(struct field_plan const * const plan) {
+	for (Py_ssize_t i = 0; i < PyList_GET_SIZE(plan->parameter_names); i += 1) {
+		PyObject * const name = PyList_GET_ITEM(plan->parameter_names, i);
+		int const keyword_only = PySet_Contains(plan->keyword_only_names, name);
+
+		if (keyword_only != 0) {
+			if (keyword_only == 1) {
+				PyErr_Format(
+					PyExc_TypeError,
+					"an exception struct cannot take keyword-only field '%U': "
+					"its args are built from its fields",
+					name
+				);
+			}
+
+			return RESULT_ERROR;
+		}
+	}
+
+	PyErr_SetString(
+		PyExc_SystemError,
+		"salix internal error: a keyword-only count names no keyword-only parameter"
+	);
+
+	return RESULT_ERROR;
+}
+
 enum result refuse_unreachable_parameters(
 	PyObject * const bases,
 	PyTypeObject * const winner,
 	StructType const * const base,
-	PyObject * const init_var_names
+	struct field_plan const * const plan
 ) {
 	for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(bases); i += 1) {
 		PyObject * const candidate = PyTuple_GET_ITEM(bases, i);
+		bool const exception_base = PyType_FastSubclass(
+			(PyTypeObject *) candidate,
+			Py_TPFLAGS_BASE_EXC_SUBCLASS
+		);
 
-		if (
-			PyTuple_GET_SIZE(init_var_names) > 0 &&
-			PyType_FastSubclass((PyTypeObject *) candidate, Py_TPFLAGS_BASE_EXC_SUBCLASS)
-		) {
+		if (exception_base && PyTuple_GET_SIZE(plan->init_var_names) > 0) {
 			PyErr_Format(
 				PyExc_TypeError,
 				"an exception struct cannot take InitVar '%U': its args are built from its fields",
-				PyTuple_GET_ITEM(init_var_names, 0)
+				PyTuple_GET_ITEM(plan->init_var_names, 0)
 			);
 
 			return RESULT_ERROR;
+		}
+
+		if (exception_base && PySet_GET_SIZE(plan->keyword_only_names) > 0) {
+			return refuse_keyword_only_exception_field(plan);
 		}
 
 		if (

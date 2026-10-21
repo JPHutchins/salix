@@ -129,9 +129,10 @@ base-type copy when the constructor signature is not the iterable one — a
 `defaultdict` falls back and becomes a plain `dict`, its factory dropped.
 A value a deepcopy cannot carry (a writable memoryview — one uncarryable
 element shares the whole container, and one uncarryable field the whole
-`frozen=False` struct) falls back to sharing the declared object. A field
-without a default cannot follow one that has it: append defaulted fields, or
-default the new field too. For the four and a `frozen=False` struct,
+`frozen=False` struct) falls back to sharing the declared object. A
+positional field without a default cannot follow one that has it: append
+defaulted fields, default the new field too, or make it keyword-only. For the
+four and a `frozen=False` struct,
 `__struct_defaults__` holds the class's own copy, severed from whatever the
 class body named: appending to the module-level object afterwards does not
 reach the class. The getters hand the stored objects out, not copies: do not
@@ -142,6 +143,38 @@ collection — `pyrsistent`'s `pvector` and `pmap`, or `immutables.Map` — than
 as a tuple or dict. It hashes, so as a default it is shared rather than
 copied, and `replace(record, items=record.items.set(key, value))` builds the
 new collection from the old one's untouched structure instead of copying it.
+
+## Keyword-only fields
+
+`kw_only=True` makes the fields a class body declares keyword-only,
+`dataclasses.KW_ONLY` makes the fields after it keyword-only, and
+`field(kw_only=...)` decides for one field over both. As in `dataclasses`,
+keyword-only parameters follow the positional ones, may be required after a
+default, and are left out of `__match_args__`:
+
+```python
+from dataclasses import KW_ONLY
+
+from salix import Struct, field
+
+
+class Request(Struct):
+    url: str
+    timeout: float = 10.0
+    _: KW_ONLY
+    method: str
+    retries: int = field(default=3)
+
+
+assert Request("https://example.org", method="GET").retries == 3
+assert Request.__match_args__ == ("url", "timeout")
+```
+
+`field()` takes only `default` and `kw_only`; any other `dataclasses.field`
+option is refused. An exception struct refuses a keyword-only field, because
+its `args` are built from its fields. `__struct_defaults__` stays aligned to
+the trailing fields, holding `MISSING` for a required keyword-only field among
+them.
 
 ## ClassVar and InitVar
 
@@ -193,10 +226,10 @@ assert [(field.name, field.type, field.default) for field in fields(Option)] == 
 assert fields(Option)[0].annotated_metadata == ("what to call it",)
 ```
 
-`MISSING` is salix's own sentinel, not `dataclasses.MISSING`. A struct field
-takes no `field()` options, so `default_factory` is `MISSING`, `metadata` is
-empty, and the flags hold their stock defaults; the `Annotated` extras are
-`annotated_metadata`. A `Field` is read-only, and its `__replace__` derives a
+`MISSING` is salix's own sentinel, not `dataclasses.MISSING`. A struct's
+`field()` takes only `default` and `kw_only`, so `default_factory` is
+`MISSING`, `metadata` is empty, and the other flags hold their stock defaults;
+the `Annotated` extras are `annotated_metadata`. A `Field` is read-only, and its `__replace__` derives a
 changed one. `ClassVar` and `InitVar` names are not fields.
 
 `to_dict()` reads an instance's set fields into a new dict, in declaration

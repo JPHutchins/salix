@@ -6,7 +6,7 @@
 #include "owned.h"
 
 enum : Py_ssize_t {
-	OPTION_COUNT = OPTION_WEAKREF + 1,
+	OPTION_COUNT = OPTION_KW_ONLY + 1,
 };
 
 struct option_lookup {
@@ -21,6 +21,7 @@ char const * const option_keywords[OPTION_COUNT] = {
 	[OPTION_REPR] = "repr",
 	[OPTION_MATCH_ARGS] = "match_args",
 	[OPTION_WEAKREF] = "weakref",
+	[OPTION_KW_ONLY] = "kw_only",
 };
 
 static struct option_lookup find_option(PyObject * keyword);
@@ -136,6 +137,9 @@ static struct options with_option(
 			break;
 		case OPTION_WEAKREF:
 			updated.weakref = value;
+			break;
+		case OPTION_KW_ONLY:
+			updated.kw_only = value;
 			break;
 	}
 

@@ -1,9 +1,16 @@
 from collections.abc import Mapping
-from typing import Any, Final, Protocol, TypeVar, final
+from typing import Any, Final, Protocol, TypeVar, final, overload
 
 from typing_extensions import ParamSpec, Self, dataclass_transform
 
-@dataclass_transform(frozen_default=True)
+_T = TypeVar("_T")
+
+@overload
+def field(*, default: _T, kw_only: bool = ...) -> _T: ...
+@overload
+def field(*, kw_only: bool = ...) -> Any: ...
+
+@dataclass_transform(frozen_default=True, field_specifiers=(field,))
 class Struct:
     _struct_fields_: Final[tuple[str, ...]]
     _struct_defaults_: Final[tuple[Any, ...]]
@@ -25,6 +32,7 @@ class Struct:
         repr: bool = True,
         match_args: bool = True,
         weakref: bool = False,
+        kw_only: bool = False,
     ) -> None: ...
 
 _StructT = TypeVar("_StructT", bound=Struct)

@@ -11,7 +11,12 @@
 #include "../../types.h"
 #include "namespace.h"
 
-static enum result set_match_args(PyObject * namespace, PyObject * parameter_names, bool wanted);
+static enum result set_match_args(
+	PyObject * namespace,
+	struct field_plan const * plan,
+	bool wanted
+);
+static enum result unwrap_field_specifiers(PyObject * namespace, struct field_plan const * plan);
 static enum result apply_options(
 	PyObject * namespace,
 	struct options options,
@@ -42,9 +47,7 @@ static PyObject * unmangled(PyObject * class_name, PyObject * field_name);
 
 PyObject * build_class_namespace(
 	PyObject * const original_namespace,
-	PyObject * const all_names,
-	PyObject * const parameter_names,
-	PyObject * const new_names,
+	struct field_plan const * const plan,
 	struct options const options,
 	StructType const * const base,
 	bool const adds_weakref_slot,
@@ -55,16 +58,17 @@ PyObject * build_class_namespace(
 	bool const inherits_body_eq,
 	bool const derive_not_equal
 ) {
-	PY_OWNED(slots, build_slots(new_names, adds_weakref_slot));
+	PY_OWNED(slots, build_slots(plan->new_names, adds_weakref_slot));
 	PY_MOVABLE(namespace, PyDict_Copy(original_namespace));
 
 	if (
 		slots != NULL &&
 		namespace != NULL &&
-		drop_class_variables(namespace, all_names) == RESULT_OK &&
+		drop_class_variables(namespace, plan->all_names) == RESULT_OK &&
+		unwrap_field_specifiers(namespace, plan) == RESULT_OK &&
 		drop_none_signature(namespace) == RESULT_OK &&
 		PyDict_SetItemString(namespace, "__slots__", slots) == 0 &&
-		set_match_args(namespace, parameter_names, options.match_args) == RESULT_OK &&
+		set_match_args(namespace, plan, options.match_args) == RESULT_OK &&
 		(
 			apply_options(
 				namespace,
@@ -257,14 +261,14 @@ enum result refuse_reserved_metadata_names(
 
 static enum result set_match_args(
 	PyObject * const namespace,
-	PyObject * const parameter_names,
+	struct field_plan const * const plan,
 	bool const wanted
 ) {
 	if (!wanted) {
 		return RESULT_OK;
 	}
 
-	PY_OWNED(match_args, PyList_AsTuple(parameter_names));
+	PY_OWNED(match_args, positional_parameter_names(plan));
 
 	return (
 		match_args != NULL && PyDict_SetItemString(
@@ -434,6 +438,79 @@ static enum result drop_class_variables(PyObject * const namespace, PyObject * c
 		int const present = PyDict_Contains(namespace, field_name);
 
 		if (present < 0 || (present == 1 && PyDict_DelItem(namespace, field_name) < 0)) {
+			return RESULT_ERROR;
+		}
+	}
+
+	return RESULT_OK;
+}
+
+static bool binds_a_field_specifier(PyObject * const namespace) {
+	Py_ssize_t position = 0;
+	PyObject * name;
+	PyObject * value;
+
+	while (PyDict_Next(namespace, &position, &name, &value)) {
+		if (field_specifier_of(value).tag == FIELD_SPECIFIER_PRESENT) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+static enum result unwrap_field_specifiers(
+	PyObject * const namespace,
+	struct field_plan const * const plan
+) {
+	if (!binds_a_field_specifier(namespace)) {
+		return RESULT_OK;
+	}
+
+	PY_OWNED(names, PyDict_Keys(namespace));
+
+	if (names == NULL) {
+		return RESULT_ERROR;
+	}
+
+	for (Py_ssize_t i = 0; i < PyList_GET_SIZE(names); i += 1) {
+		PyObject * const name = PyList_GET_ITEM(names, i);
+		PY_OWNED(bound, dict_value_ref(namespace, name));
+
+		if (bound == NULL && PyErr_Occurred()) {
+			return RESULT_ERROR;
+		}
+
+		struct field_specifier const specifier = field_specifier_of(bound);
+
+		if (specifier.tag == FIELD_SPECIFIER_ABSENT) {
+			continue;
+		}
+
+		int const parameter = PySequence_Contains(plan->parameter_names, name);
+
+		if (parameter < 0) {
+			return RESULT_ERROR;
+		}
+
+		if (parameter == 0) {
+			PyErr_Format(
+				PyExc_TypeError,
+				"'%U' is bound to field(), so it needs an annotation that makes it a field",
+				name
+			);
+
+			return RESULT_ERROR;
+		}
+
+		if (
+			specifier.default_value != NULL ? PyDict_SetItem(
+				namespace,
+				name,
+				specifier.default_value
+			) < 0 :
+			PyDict_DelItem(namespace, name) < 0
+		) {
 			return RESULT_ERROR;
 		}
 	}

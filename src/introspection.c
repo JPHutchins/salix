@@ -302,7 +302,15 @@ static PyObject * field_records_of(StructType const * const type) {
 		return NULL;
 	}
 
-	for (Py_ssize_t position = 0; position < count; position += 1) {
+	Py_ssize_t position = 0;
+
+	for (Py_ssize_t parameter = 0; parameter < struct_parameter_count(type); parameter += 1) {
+		struct parameter_shape const shape = struct_parameter_shape(type, parameter);
+
+		if (shape.kind != PARAMETER_FIELD) {
+			continue;
+		}
+
 		PyObject * const declared = struct_field_default(type, position);
 		PyObject * const record = field_new(
 			(PyObject * const[FIELD_ATTRIBUTE_COUNT]){
@@ -315,7 +323,7 @@ static PyObject * field_records_of(StructType const * const type) {
 				[FIELD_HASH] = Py_None,
 				[FIELD_COMPARE] = Py_True,
 				[FIELD_METADATA] = state->empty_metadata,
-				[FIELD_KW_ONLY] = Py_False,
+				[FIELD_KW_ONLY] = shape.keyword_only ? Py_True : Py_False,
 				[FIELD_ANNOTATED_METADATA] = PyTuple_GET_ITEM(type->struct_metadata, position),
 			}
 		);
@@ -325,6 +333,7 @@ static PyObject * field_records_of(StructType const * const type) {
 		}
 
 		PyTuple_SET_ITEM(records, position, record);
+		position += 1;
 	}
 
 	return py_move(&records);

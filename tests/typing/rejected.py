@@ -1,7 +1,7 @@
 import sys
-from dataclasses import InitVar, dataclass
+from dataclasses import KW_ONLY, InitVar, dataclass
 
-from salix import Struct, fields, replace, set_field, to_dict
+from salix import Struct, field, fields, replace, set_field, to_dict
 
 
 class Point(Struct):
@@ -24,6 +24,21 @@ class Ordered(Struct, order=True):
 
 class NoMatchArgs(Struct, match_args=False):
     rank: int
+
+
+class KeywordOnly(Struct, kw_only=True):
+    x: int
+
+
+class AfterTheMarker(Struct):
+    x: int
+    _: KW_ONLY
+    y: int
+
+
+class OneKeywordOnlyField(Struct):
+    x: int = 1
+    y: int = field(kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -51,6 +66,22 @@ def a_missing_argument_is_rejected() -> None:
 
 def an_extra_argument_is_rejected() -> None:
     Point(1, "two", 3)  # type: ignore[call-arg]
+
+
+def a_keyword_only_field_passed_by_position_is_rejected() -> None:
+    KeywordOnly(1)  # type: ignore[call-arg]
+
+
+def a_field_after_the_marker_passed_by_position_is_rejected() -> None:
+    AfterTheMarker(1, 2)  # type: ignore[call-arg]
+
+
+def a_keyword_only_field_specifier_passed_by_position_is_rejected() -> None:
+    OneKeywordOnlyField(1, 2)  # type: ignore[call-arg]
+
+
+def a_field_option_salix_does_not_take_is_rejected() -> None:
+    field(default_factory=list)  # type: ignore[call-overload]
 
 
 def a_missing_init_var_is_rejected() -> None:

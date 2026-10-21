@@ -226,7 +226,7 @@ enum result settle_planned(
 	bool const derive_not_equal
 ) {
 	PY_OWNED(planned, PyList_AsTuple(plan->all_names));
-	PY_OWNED(planned_parameters, PyList_AsTuple(plan->parameter_names));
+	PY_OWNED(planned_parameters, positional_parameter_names(plan));
 
 	if (planned == NULL || planned_parameters == NULL) {
 		return RESULT_ERROR;

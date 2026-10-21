@@ -9,8 +9,47 @@
 static void form_probes_clear(struct form_probes * const probes) {
 	Py_CLEAR(probes->class_var);
 	Py_CLEAR(probes->init_var);
+	Py_CLEAR(probes->keyword_only_marker);
 	Py_CLEAR(probes->class_var_name);
 	Py_CLEAR(probes->init_var_name);
+	Py_CLEAR(probes->keyword_only_marker_name);
+}
+
+static enum result forget_default(PyObject * const default_by_name, PyObject * const name) {
+	int const present = PyDict_Contains(default_by_name, name);
+
+	return (
+		present < 0 || (present == 1 && PyDict_DelItem(default_by_name, name) < 0) ? RESULT_ERROR :
+		RESULT_OK
+	);
+}
+
+static bool chooses_keyword_only(struct field_specifier const specifier, bool const by_context) {
+	switch (specifier.keyword_only) {
+		case KEYWORD_ONLY_CHOSEN:
+			return true;
+		case KEYWORD_ONLY_DECLINED:
+			return false;
+		case KEYWORD_ONLY_UNSPECIFIED:
+			break;
+	}
+
+	return by_context;
+}
+
+static enum result record_keyword_only(
+	PyObject * const keyword_only_names,
+	PyObject * const name,
+	bool const keyword_only
+) {
+	return (
+		(
+			keyword_only ? PySet_Add(keyword_only_names, name) :
+			PySet_GET_SIZE(keyword_only_names) == 0 ? 0 :
+			PySet_Discard(keyword_only_names, name)
+		) < 0 ? RESULT_ERROR :
+		RESULT_OK
+	);
 }
 
 struct annotation_entry {
@@ -186,7 +225,15 @@ static enum result remove_parameter(
 	Py_ssize_t const position
 ) {
 	return (
-		PyList_SetItem(parameters->init_var_flags, position, Py_NewRef(Py_None)) == 0 ? RESULT_OK :
+		(
+			(
+				PySet_Discard(
+					parameters->keyword_only_names,
+					PyList_GET_ITEM(parameters->names, position)
+				) >= 0
+			) &&
+			PyList_SetItem(parameters->init_var_flags, position, Py_NewRef(Py_None)) == 0
+		) ? RESULT_OK :
 		RESULT_ERROR
 	);
 }
@@ -199,7 +246,8 @@ enum result append_declared(
 	PyObject * const new_names,
 	PyObject * const default_by_name,
 	PyObject * const mro_default_names,
-	PyObject * const empty_extras
+	PyObject * const empty_extras,
+	bool const class_keyword_only
 ) {
 	if (PyDict_GET_SIZE(annotations) == 0) {
 		return RESULT_OK;
@@ -225,6 +273,9 @@ enum result append_declared(
 		return RESULT_ERROR;
 	}
 
+	bool after_keyword_only_marker = false;
+	bool keyword_only_marker_probed = false;
+
 	for (Py_ssize_t at = 0; at < PyList_GET_SIZE(declared); ++at) {
 		PyObject * const field_name = PyList_GET_ITEM(declared, at);
 
@@ -241,8 +292,13 @@ enum result append_declared(
 		if (PyUnicode_Check(annotation) && probes.class_var_name == NULL) {
 			probes.class_var_name = PyUnicode_FromString(CLASS_VAR_FORM.name);
 			probes.init_var_name = PyUnicode_FromString(INIT_VAR_FORM.name);
+			probes.keyword_only_marker_name = PyUnicode_FromString("KW_ONLY");
 
-			if (probes.class_var_name == NULL || probes.init_var_name == NULL) {
+			if (
+				probes.class_var_name == NULL ||
+				probes.init_var_name == NULL ||
+				probes.keyword_only_marker_name == NULL
+			) {
 				return RESULT_ERROR;
 			}
 		}
@@ -251,6 +307,41 @@ enum result append_declared(
 			PyErr_SetString(PyExc_TypeError, "annotation keys must be strings");
 
 			return RESULT_ERROR;
+		}
+
+		if (
+			!keyword_only_marker_probed &&
+			!PyType_Check(annotation) &&
+			!PyUnicode_Check(annotation)
+		) {
+			probes.keyword_only_marker = module_attribute("dataclasses", "KW_ONLY");
+			keyword_only_marker_probed = true;
+
+			if (probes.keyword_only_marker == NULL && PyErr_Occurred()) {
+				return RESULT_ERROR;
+			}
+		}
+
+		bool const marker = marks_keyword_only(annotation, &probes);
+
+		if (PyErr_Occurred()) {
+			return RESULT_ERROR;
+		}
+
+		if (marker) {
+			if (after_keyword_only_marker) {
+				PyErr_Format(
+					PyExc_TypeError,
+					"'%U' is KW_ONLY, but KW_ONLY has already been specified",
+					field_name
+				);
+
+				return RESULT_ERROR;
+			}
+
+			after_keyword_only_marker = true;
+
+			continue;
 		}
 
 		if (refuse_reserved_name(field_name) != RESULT_OK) {
@@ -267,15 +358,34 @@ enum result append_declared(
 			return RESULT_ERROR;
 		}
 
-		PY_OWNED(declared_default, dict_value_ref(namespace, field_name));
+		PY_OWNED(bound, dict_value_ref(namespace, field_name));
 
-		if (declared_default == NULL) {
-			if (PyErr_Occurred()) {
-				return RESULT_ERROR;
-			}
-		} else if (PyDict_SetItem(default_by_name, field_name, declared_default) < 0) {
+		if (bound == NULL && PyErr_Occurred()) {
 			return RESULT_ERROR;
 		}
+
+		struct field_specifier const specifier = field_specifier_of(bound);
+		PyObject * const declared_default = (
+			specifier.tag == FIELD_SPECIFIER_PRESENT ? specifier.default_value :
+			bound
+		);
+
+		if (
+			declared_default != NULL ? PyDict_SetItem(
+				default_by_name,
+				field_name,
+				declared_default
+			) < 0 :
+			specifier.tag == FIELD_SPECIFIER_PRESENT &&
+				forget_default(default_by_name, field_name) != RESULT_OK
+		) {
+			return RESULT_ERROR;
+		}
+
+		bool const keyword_only = chooses_keyword_only(
+			specifier,
+			after_keyword_only_marker || class_keyword_only
+		);
 
 		struct inheritance_lookup const inherited =
 			inherited_position(parameters->names, inherited_count, field_name);
@@ -300,6 +410,7 @@ enum result append_declared(
 		if (
 			redeclared &&
 			declared_default == NULL &&
+			specifier.tag == FIELD_SPECIFIER_ABSENT &&
 			PyList_GET_ITEM(parameters->init_var_flags, inherited.position) == Py_None &&
 			PyList_Append(mro_default_names, field_name) < 0
 		) {
@@ -327,6 +438,13 @@ enum result append_declared(
 							empty_extras
 						) != RESULT_OK
 					)
+				) ||
+				(
+					record_keyword_only(
+						parameters->keyword_only_names,
+						field_name,
+						keyword_only
+					) != RESULT_OK
 				)
 			) {
 				return RESULT_ERROR;
@@ -349,6 +467,17 @@ enum result append_declared(
 					"write it below the fields, without an annotation",
 					field_name,
 					special.name
+				);
+
+				return RESULT_ERROR;
+			}
+
+			if (specifier.tag == FIELD_SPECIFIER_PRESENT) {
+				PyErr_Format(
+					PyExc_TypeError,
+					"'%U' is annotated ClassVar, and field() describes a field; %s",
+					field_name,
+					CLASS_VAR_FORM.instead
 				);
 
 				return RESULT_ERROR;
@@ -398,6 +527,16 @@ enum result append_declared(
 				special.instead
 			);
 
+			return RESULT_ERROR;
+		}
+
+		if (
+			record_keyword_only(
+				parameters->keyword_only_names,
+				field_name,
+				keyword_only
+			) != RESULT_OK
+		) {
 			return RESULT_ERROR;
 		}
 

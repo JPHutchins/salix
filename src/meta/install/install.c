@@ -25,34 +25,75 @@ static Py_ssize_t * resolve_member_offsets(
 	Py_ssize_t * member_count
 );
 
-static enum parameter_kind * parameter_kinds_of(PyObject * const init_var_flags) {
-	Py_ssize_t const parameter_count = PyTuple_GET_SIZE(init_var_flags);
-	enum parameter_kind * const kinds = PyMem_New(enum parameter_kind, parameter_count);
+struct parameter_table {
+	enum { PARAMETER_TABLE_FAILED, PARAMETER_TABLE_POSITIONAL_FIELDS, PARAMETER_TABLE_BUILT } tag;
+	struct parameter_shape * shapes;
+	Py_ssize_t positional_count;
+};
 
-	if (kinds == NULL) {
+static struct parameter_table parameter_table_of(struct field_plan const * const plan) {
+	Py_ssize_t const parameter_count = PyList_GET_SIZE(plan->parameter_names);
+
+	if (
+		PyTuple_GET_SIZE(plan->init_var_names) == 0 &&
+		PySet_GET_SIZE(plan->keyword_only_names) == 0
+	) {
+		return (struct parameter_table){
+			.tag = PARAMETER_TABLE_POSITIONAL_FIELDS,
+			.positional_count = parameter_count,
+		};
+	}
+
+	struct parameter_shape * const shapes =
+		PyMem_New(struct parameter_shape, parameter_count > 0 ? parameter_count : 1);
+
+	if (shapes == NULL) {
 		PyErr_NoMemory();
 
-		return NULL;
+		return (struct parameter_table){.tag = PARAMETER_TABLE_FAILED};
 	}
+
+	Py_ssize_t positional_count = 0;
 
 	for (Py_ssize_t i = 0; i < parameter_count; i += 1) {
-		kinds[i] = (
-			PyTuple_GET_ITEM(init_var_flags, i) == Py_True ? PARAMETER_INIT_VAR :
-			PARAMETER_FIELD
+		int const keyword_only = PySet_Contains(
+			plan->keyword_only_names,
+			PyList_GET_ITEM(plan->parameter_names, i)
 		);
+
+		if (keyword_only < 0) {
+			PyMem_Free(shapes);
+
+			return (struct parameter_table){.tag = PARAMETER_TABLE_FAILED};
+		}
+
+		shapes[i] = (struct parameter_shape){
+			.kind = (
+				PyTuple_GET_SIZE(
+					plan->init_var_flags
+				) > 0 && PyTuple_GET_ITEM(
+					plan->init_var_flags,
+					i
+				) == Py_True ? PARAMETER_INIT_VAR :
+				PARAMETER_FIELD
+			),
+			.keyword_only = keyword_only == 1,
+		};
+		positional_count += keyword_only == 0;
 	}
 
-	return kinds;
+	return (struct parameter_table){
+		.tag = PARAMETER_TABLE_BUILT,
+		.shapes = shapes,
+		.positional_count = positional_count,
+	};
 }
 
 enum result install_parameters(StructType * const struct_class, struct field_plan * const plan) {
 	Py_ssize_t const init_var_count = PyTuple_GET_SIZE(plan->init_var_names);
-	enum parameter_kind * const kinds = (
-		init_var_count > 0 ? parameter_kinds_of(plan->init_var_flags) :
-		NULL
-	);
+	struct parameter_table const table = parameter_table_of(plan);
 
-	if (init_var_count > 0 && kinds == NULL) {
+	if (table.tag == PARAMETER_TABLE_FAILED) {
 		return RESULT_ERROR;
 	}
 
@@ -71,7 +112,7 @@ enum result install_parameters(StructType * const struct_class, struct field_pla
 	void * const replaced_arrays[] = {
 		struct_class->struct_field_default_indices,
 		struct_class->struct_init_var_default_indices,
-		struct_class->struct_parameter_kinds,
+		struct_class->struct_parameter_shapes,
 	};
 
 	struct_class->struct_defaults = Py_NewRef(plan->defaults);
@@ -84,7 +125,8 @@ enum result install_parameters(StructType * const struct_class, struct field_pla
 	struct_class->struct_init_var_annotations = Py_NewRef(plan->init_var_annotations);
 	struct_class->struct_declared_names = Py_NewRef(plan->declared_names);
 	struct_class->struct_class_var_positions = Py_XNewRef(plan->class_var_positions);
-	struct_class->struct_parameter_kinds = kinds;
+	struct_class->struct_parameter_shapes = table.shapes;
+	struct_class->struct_positional_count = table.positional_count;
 	struct_class->struct_init_var_count = init_var_count;
 	struct_class->struct_field_records = NULL;
 	struct_class->struct_signature = NULL;

@@ -170,20 +170,31 @@ enum result bind_parameters(
 ) {
 	Py_ssize_t field_index = 0;
 	Py_ssize_t init_var_index = 0;
+	Py_ssize_t bound = 0;
 
-	for (Py_ssize_t position = 0; position < positional_count; position += 1) {
-		switch (struct_parameter_kind(type, position)) {
+	for (Py_ssize_t position = 0; bound < positional_count; position += 1) {
+		struct parameter_shape const shape = struct_parameter_shape(type, position);
+
+		switch (shape.kind) {
 			case PARAMETER_FIELD:
-				*struct_slot(type, self, field_index) = Py_NewRef(arguments[position]);
+				if (!shape.keyword_only) {
+					*struct_slot(type, self, field_index) = Py_NewRef(arguments[bound]);
+					bound += 1;
+				}
+
 				field_index += 1;
 
 				break;
 			case PARAMETER_INIT_VAR:
-				PyTuple_SET_ITEM(
-					post_init_arguments,
-					1 + init_var_index,
-					Py_NewRef(arguments[position])
-				);
+				if (!shape.keyword_only) {
+					PyTuple_SET_ITEM(
+						post_init_arguments,
+						1 + init_var_index,
+						Py_NewRef(arguments[bound])
+					);
+					bound += 1;
+				}
+
 				init_var_index += 1;
 
 				break;
@@ -209,11 +220,16 @@ enum result bind_parameters(
 	return RESULT_OK;
 }
 
-static enum result refuse_missing(StructType const * const type, PyObject * const name) {
+static enum result refuse_missing(
+	StructType const * const type,
+	PyObject * const name,
+	bool const keyword_only
+) {
 	PyErr_Format(
 		PyExc_TypeError,
-		"%.200s() missing required argument '%U'",
+		"%.200s() missing required %sargument '%U'",
 		struct_type_name(type),
+		keyword_only ? "keyword-only " : "",
 		name
 	);
 
@@ -229,7 +245,9 @@ enum result refuse_missing_parameters(
 	Py_ssize_t init_var_index = 0;
 
 	for (Py_ssize_t position = 0; position < struct_parameter_count(type); position += 1) {
-		switch (struct_parameter_kind(type, position)) {
+		struct parameter_shape const shape = struct_parameter_shape(type, position);
+
+		switch (shape.kind) {
 			case PARAMETER_FIELD:
 				if (
 					struct_field_default(type, field_index) == NULL &&
@@ -237,7 +255,8 @@ enum result refuse_missing_parameters(
 				) {
 					return refuse_missing(
 						type,
-						PyTuple_GET_ITEM(type->struct_field_names, field_index)
+						PyTuple_GET_ITEM(type->struct_field_names, field_index),
+						shape.keyword_only
 					);
 				}
 
@@ -251,7 +270,8 @@ enum result refuse_missing_parameters(
 				) {
 					return refuse_missing(
 						type,
-						PyTuple_GET_ITEM(type->struct_init_var_names, init_var_index)
+						PyTuple_GET_ITEM(type->struct_init_var_names, init_var_index),
+						shape.keyword_only
 					);
 				}
 

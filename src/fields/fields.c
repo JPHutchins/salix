@@ -59,7 +59,12 @@ struct default_table {
 	Py_ssize_t * indices;
 };
 
-static struct default_table build_defaults(PyObject * all_names, PyObject * default_by_name);
+static struct default_table build_defaults(
+	PyObject * names,
+	PyObject * default_by_name,
+	PyObject * keyword_only_names,
+	PyObject * missing
+);
 static enum result refuse_misordered_parameters(
 	struct parameter_lists const * parameters,
 	PyObject * default_by_name
@@ -69,7 +74,9 @@ static PyObject * checked_annotations(PyObject * namespace);
 struct field_plan field_plan_build(
 	StructType const * const base,
 	PyObject * const bases,
-	PyObject * const namespace
+	PyObject * const namespace,
+	bool const class_keyword_only,
+	PyObject * const missing
 ) {
 	struct field_plan plan = {0};
 
@@ -87,14 +94,17 @@ struct field_plan field_plan_build(
 	PY_OWNED(default_by_name, PyDict_New());
 	PY_OWNED(mro_default_names, PyList_New(0));
 	PY_OWNED(empty_extras, PyTuple_New(0));
+	PY_OWNED(keyword_only_names, PySet_New(NULL));
 	struct parameter_lists const parameters = {
 		.names = parameter_names,
 		.init_var_flags = init_var_flags,
 		.annotations = annotation_values,
 		.metadata = metadata_values,
+		.keyword_only_names = keyword_only_names,
 	};
 
 	if (
+		keyword_only_names == NULL ||
 		parameter_names == NULL ||
 		init_var_flags == NULL ||
 		annotation_values == NULL ||
@@ -128,7 +138,8 @@ struct field_plan field_plan_build(
 			new_names,
 			default_by_name,
 			mro_default_names,
-			empty_extras
+			empty_extras,
+			class_keyword_only
 		) != RESULT_OK
 	) {
 		return plan;
@@ -145,8 +156,11 @@ struct field_plan field_plan_build(
 	plan_built.declared_annotations = Py_NewRef(annotations);
 	plan_built.mro_default_names = PyList_AsTuple(mro_default_names);
 	plan_built.default_by_name = Py_NewRef(default_by_name);
+	plan_built.keyword_only_names = PyFrozenSet_New(keyword_only_names);
+	plan_built.missing = Py_NewRef(missing);
 
 	if (
+		plan_built.keyword_only_names == NULL ||
 		plan_built.declared_names == NULL ||
 		plan_built.declared_annotations == NULL ||
 		plan_built.mro_default_names == NULL ||
@@ -156,6 +170,29 @@ struct field_plan field_plan_build(
 	}
 
 	return plan_built;
+}
+
+PyObject * positional_parameter_names(struct field_plan const * const plan) {
+	if (PySet_GET_SIZE(plan->keyword_only_names) == 0) {
+		return PyList_AsTuple(plan->parameter_names);
+	}
+
+	PY_MOVABLE(positional, PyList_New(0));
+
+	if (positional == NULL) {
+		return NULL;
+	}
+
+	for (Py_ssize_t i = 0; i < PyList_GET_SIZE(plan->parameter_names); i += 1) {
+		PyObject * const name = PyList_GET_ITEM(plan->parameter_names, i);
+		int const keyword_only = PySet_Contains(plan->keyword_only_names, name);
+
+		if (keyword_only < 0 || (keyword_only == 0 && PyList_Append(positional, name) < 0)) {
+			return NULL;
+		}
+	}
+
+	return PyList_AsTuple(positional);
 }
 
 void field_plan_clear(struct field_plan * const plan) {
@@ -178,6 +215,8 @@ void field_plan_clear(struct field_plan * const plan) {
 	Py_CLEAR(plan->class_var_positions);
 	Py_CLEAR(plan->mro_default_names);
 	Py_CLEAR(plan->default_by_name);
+	Py_CLEAR(plan->keyword_only_names);
+	Py_CLEAR(plan->missing);
 }
 
 static PyObject * class_value_in_mro(PyTypeObject * const created, PyObject * const name) {
@@ -253,6 +292,7 @@ static enum result plan_defaults(struct field_plan * const plan) {
 				&(struct parameter_lists){
 					.names = plan->parameter_names,
 					.init_var_flags = plan->init_var_flags,
+					.keyword_only_names = plan->keyword_only_names,
 				},
 				plan->default_by_name
 			) != RESULT_OK
@@ -261,11 +301,18 @@ static enum result plan_defaults(struct field_plan * const plan) {
 		return RESULT_ERROR;
 	}
 
-	struct default_table const field_table = build_defaults(plan->all_names, plan->default_by_name);
+	struct default_table const field_table = build_defaults(
+		plan->all_names,
+		plan->default_by_name,
+		plan->keyword_only_names,
+		plan->missing
+	);
 	struct default_table const init_var_table = (
 		field_table.defaults != NULL ? build_defaults(
 			plan->init_var_names,
-			plan->default_by_name
+			plan->default_by_name,
+			plan->keyword_only_names,
+			plan->missing
 		) :
 		(struct default_table){0}
 	);
@@ -334,9 +381,17 @@ static enum result refuse_misordered_parameters(
 		PyObject * const parameter_name = PySequence_Fast_GET_ITEM(parameters->names, i);
 		PyObject * const init_var_flag = PySequence_Fast_GET_ITEM(parameters->init_var_flags, i);
 		int const has_default = PyDict_Contains(default_by_name, parameter_name);
+		int const keyword_only = (
+			has_default < 0 ? -1 :
+			PySet_Contains(parameters->keyword_only_names, parameter_name)
+		);
 
-		if (has_default < 0) {
+		if (keyword_only < 0) {
 			return RESULT_ERROR;
+		}
+
+		if (keyword_only == 1) {
+			continue;
 		}
 
 		if (has_default == 1) {
@@ -615,11 +670,13 @@ struct inheritance_lookup inherited_position(
 }
 
 static struct default_table build_defaults(
-	PyObject * const all_names,
-	PyObject * const default_by_name
+	PyObject * const names,
+	PyObject * const default_by_name,
+	PyObject * const keyword_only_names,
+	PyObject * const missing
 ) {
-	Py_ssize_t const field_count = PySequence_Fast_GET_SIZE(all_names);
-	Py_ssize_t * const indices = PyMem_New(Py_ssize_t, field_count > 0 ? field_count : 1);
+	Py_ssize_t const count = PySequence_Fast_GET_SIZE(names);
+	Py_ssize_t * const indices = PyMem_New(Py_ssize_t, count > 0 ? count : 1);
 
 	if (indices == NULL) {
 		PyErr_NoMemory();
@@ -627,38 +684,49 @@ static struct default_table build_defaults(
 		return (struct default_table){0};
 	}
 
-	Py_ssize_t default_count = 0;
+	Py_ssize_t first_default = count;
+	bool positional_default_seen = false;
 
-	for (Py_ssize_t i = 0; i < field_count; ++i) {
-		PyObject * const field_name = PySequence_Fast_GET_ITEM(all_names, i);
-		int const has_default = PyDict_Contains(default_by_name, field_name);
+	for (Py_ssize_t i = 0; i < count; ++i) {
+		PyObject * const name = PySequence_Fast_GET_ITEM(names, i);
+		int const has_default = PyDict_Contains(default_by_name, name);
+		int const keyword_only = (
+			has_default < 0 ? -1 :
+			PySet_GET_SIZE(keyword_only_names) == 0 ? 0 :
+			PySet_Contains(keyword_only_names, name)
+		);
 
-		if (has_default < 0) {
+		if (keyword_only < 0) {
 			PyMem_Free(indices);
 
 			return (struct default_table){0};
 		}
 
-		if (has_default == 0 && default_count > 0) {
+		if (has_default == 0 && keyword_only == 0 && positional_default_seen) {
 			PyMem_Free(indices);
 
-			if (refuse_reserved_name(field_name) != RESULT_OK) {
+			if (refuse_reserved_name(name) != RESULT_OK) {
 				return (struct default_table){0};
 			}
 
 			PyErr_Format(
 				PyExc_TypeError,
 				"non-default field '%U' follows a field with a default",
-				field_name
+				name
 			);
 
 			return (struct default_table){0};
 		}
 
-		indices[i] = has_default == 1 ? default_count++ : NO_DEFAULT;
+		positional_default_seen = (
+			positional_default_seen ||
+			(has_default == 1 && keyword_only == 0)
+		);
+		first_default = has_default == 1 && first_default == count ? i : first_default;
+		indices[i] = has_default == 1 ? i - first_default : NO_DEFAULT;
 	}
 
-	PyObject * const defaults = PyTuple_New(default_count);
+	PyObject * const defaults = PyTuple_New(count - first_default);
 
 	if (defaults == NULL) {
 		PyMem_Free(indices);
@@ -666,23 +734,29 @@ static struct default_table build_defaults(
 		return (struct default_table){0};
 	}
 
-	for (Py_ssize_t i = 0; i < field_count; ++i) {
-		if (indices[i] != NO_DEFAULT) {
-			PY_OWNED(
-				value,
-				dict_value_ref(default_by_name, PySequence_Fast_GET_ITEM(all_names, i))
-			);
-			PyObject * const stored = value != NULL ? struct_default_copy(NULL, value) : NULL;
+	for (Py_ssize_t i = first_default; i < count; ++i) {
+		PY_OWNED(
+			value,
+			(
+				indices[i] != NO_DEFAULT ?
+					dict_value_ref(default_by_name, PySequence_Fast_GET_ITEM(names, i)) :
+				Py_NewRef(missing)
+			)
+		);
+		PyObject * const stored = (
+			value == NULL ? NULL :
+			indices[i] != NO_DEFAULT ? struct_default_copy(NULL, value) :
+			Py_NewRef(value)
+		);
 
-			if (stored == NULL) {
-				Py_DECREF(defaults);
-				PyMem_Free(indices);
+		if (stored == NULL) {
+			Py_DECREF(defaults);
+			PyMem_Free(indices);
 
-				return (struct default_table){0};
-			}
-
-			PyTuple_SET_ITEM(defaults, indices[i], stored);
+			return (struct default_table){0};
 		}
+
+		PyTuple_SET_ITEM(defaults, i - first_default, stored);
 	}
 
 	return (struct default_table){.defaults = defaults, .indices = indices};
@@ -718,11 +792,21 @@ static PyObject * defaults_for(char const * const * const names, Py_ssize_t cons
 	return mapping;
 }
 
+static PyObject * name_set_of(char const * const * const names, Py_ssize_t const count) {
+	PyObject * const list = names_of(names, count);
+	PyObject * const set = PySet_New(list);
+
+	Py_DECREF(list);
+
+	return set;
+}
+
 static void test_no_defaults_produces_an_empty_tuple(void) {
 	char const * const names[] = {"a", "b"};
 	PyObject * const all_names = names_of(names, 2);
 	PyObject * const by_name = defaults_for(names, 0);
-	struct default_table const table = build_defaults(all_names, by_name);
+	PyObject * const keyword_only = name_set_of(names, 0);
+	struct default_table const table = build_defaults(all_names, by_name, keyword_only, Py_None);
 
 	TEST_ASSERT_NOT_NULL(table.defaults);
 	TEST_ASSERT_EQUAL_INT(0, PyTuple_GET_SIZE(table.defaults));
@@ -731,6 +815,7 @@ static void test_no_defaults_produces_an_empty_tuple(void) {
 
 	Py_DECREF(table.defaults);
 	PyMem_Free(table.indices);
+	Py_DECREF(keyword_only);
 	Py_DECREF(by_name);
 	Py_DECREF(all_names);
 }
@@ -740,7 +825,8 @@ static void test_only_the_trailing_run_becomes_defaults(void) {
 	char const * const defaulted[] = {"b", "c"};
 	PyObject * const all_names = names_of(names, 3);
 	PyObject * const by_name = defaults_for(defaulted, 2);
-	struct default_table const table = build_defaults(all_names, by_name);
+	PyObject * const keyword_only = name_set_of(names, 0);
+	struct default_table const table = build_defaults(all_names, by_name, keyword_only, Py_None);
 
 	TEST_ASSERT_NOT_NULL(table.defaults);
 	TEST_ASSERT_EQUAL_INT(2, PyTuple_GET_SIZE(table.defaults));
@@ -751,6 +837,34 @@ static void test_only_the_trailing_run_becomes_defaults(void) {
 
 	Py_DECREF(table.defaults);
 	PyMem_Free(table.indices);
+	Py_DECREF(keyword_only);
+	Py_DECREF(by_name);
+	Py_DECREF(all_names);
+}
+
+static void test_a_required_keyword_only_field_inside_the_trailing_defaults_holds_the_sentinel(
+	void
+) {
+	char const * const names[] = {"a", "b", "c"};
+	char const * const defaulted[] = {"a", "c"};
+	char const * const keyword_only_names[] = {"b"};
+	PyObject * const all_names = names_of(names, 3);
+	PyObject * const by_name = defaults_for(defaulted, 2);
+	PyObject * const keyword_only = name_set_of(keyword_only_names, 1);
+	struct default_table const table = build_defaults(all_names, by_name, keyword_only, Py_None);
+
+	TEST_ASSERT_NOT_NULL(table.defaults);
+	TEST_ASSERT_EQUAL_INT(3, PyTuple_GET_SIZE(table.defaults));
+	TEST_ASSERT_EQUAL_INT(0, PyLong_AsLong(PyTuple_GET_ITEM(table.defaults, 0)));
+	TEST_ASSERT_EQUAL_PTR(Py_None, PyTuple_GET_ITEM(table.defaults, 1));
+	TEST_ASSERT_EQUAL_INT(1, PyLong_AsLong(PyTuple_GET_ITEM(table.defaults, 2)));
+	TEST_ASSERT_EQUAL_INT(0, table.indices[0]);
+	TEST_ASSERT_EQUAL_INT(NO_DEFAULT, table.indices[1]);
+	TEST_ASSERT_EQUAL_INT(2, table.indices[2]);
+
+	Py_DECREF(table.defaults);
+	PyMem_Free(table.indices);
+	Py_DECREF(keyword_only);
 	Py_DECREF(by_name);
 	Py_DECREF(all_names);
 }
@@ -760,13 +874,15 @@ static void test_a_required_field_after_a_default_is_rejected(void) {
 	char const * const defaulted[] = {"a"};
 	PyObject * const all_names = names_of(names, 2);
 	PyObject * const by_name = defaults_for(defaulted, 1);
-	struct default_table const table = build_defaults(all_names, by_name);
+	PyObject * const keyword_only = name_set_of(names, 0);
+	struct default_table const table = build_defaults(all_names, by_name, keyword_only, Py_None);
 
 	TEST_ASSERT_NULL(table.defaults);
 	TEST_ASSERT_NULL(table.indices);
 	TEST_ASSERT_TRUE(PyErr_ExceptionMatches(PyExc_TypeError));
 
 	PyErr_Clear();
+	Py_DECREF(keyword_only);
 	Py_DECREF(by_name);
 	Py_DECREF(all_names);
 }
@@ -848,6 +964,7 @@ void fields_tests(void) {
 
 	RUN_TEST(test_no_defaults_produces_an_empty_tuple);
 	RUN_TEST(test_only_the_trailing_run_becomes_defaults);
+	RUN_TEST(test_a_required_keyword_only_field_inside_the_trailing_defaults_holds_the_sentinel);
 	RUN_TEST(test_a_required_field_after_a_default_is_rejected);
 	RUN_TEST(test_a_class_var_whose_get_returns_null_without_an_error_fails_the_redeclaration);
 }
