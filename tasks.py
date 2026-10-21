@@ -1,5 +1,6 @@
 import json
 import re
+from collections.abc import Iterator
 from enum import Enum, auto
 from pathlib import Path
 from typing import NamedTuple, TypedDict
@@ -9,6 +10,7 @@ from camas import (
     Claude,
     Config,
     Parallel,
+    Pipe,
     Project,
     Sequential,
     Task,
@@ -78,6 +80,7 @@ README_FENCES = " --markdown-docs README.md"
 README_FENCES_FROM_TESTS = " --markdown-docs ../README.md"
 ENVIRONMENT_PER_INTERPRETER = {"UV_PROJECT_ENVIRONMENT": ".venvs/{PY}"}
 
+ISOLATED_RUN = "uv run --no-project --isolated"
 MAKE_ENV = "uv venv --clear --python {PYTHON} --managed-python .venvs/{PY}"
 make_env = Task(MAKE_ENV, mutates=True)
 
@@ -148,7 +151,7 @@ c_analyzer = Task(
 )
 analyze = Sequential(compile_flags, Parallel(c_tidy, c_analyzer))
 
-TYPE_CHECK = "uv run --no-project --with typing_extensions"
+TYPE_CHECK = ISOLATED_RUN + " --with typing_extensions"
 MYPY = "mypy==2.4.0"
 PYRIGHT = "pyright==1.1.414"
 TY = "ty==0.0.63"
@@ -183,7 +186,7 @@ tooling = Task(
 )
 type_check = Parallel(typed_api, tooling)
 
-RUFF_CHECK = "uv run --no-project --with ruff ruff check"
+RUFF_CHECK = ISOLATED_RUN + " --with ruff ruff check"
 HUNDREDS_OF_DIAGNOSTICS = 64_000
 LINT_FORMAT = AgentFormat("--output-format rdjson", "rdjson", limit=HUNDREDS_OF_DIAGNOSTICS)
 lint = Parallel(
@@ -252,7 +255,6 @@ free_threaded = Parallel(
     variants=tuple({"FT": python, "FT_PYTHON": f"{PINNED[python]}t"} for python in FREE_THREADED),
     env=FREE_THREADED_ROOT,
 )
-ISOLATED_RUN = "uv run --no-project --isolated --managed-python --python "
 HEADER_GATES = (
     {"BEFORE": "3.13.11", "AFTER": "3.13.12"},
     {"BEFORE": "3.14.3", "AFTER": "3.14.4"},
@@ -269,20 +271,20 @@ HEADER_GATE_README = (
 header_gates = Parallel(
     Sequential(
         Task(
-            ISOLATED_RUN + "{BEFORE} --with setuptools"
+            ISOLATED_RUN + " --managed-python --python {BEFORE} --with setuptools"
             " python setup.py build_ext --build-lib build/{BEFORE} --build-temp build/{BEFORE}-temp",
             mutates=True,
             env=STRICT_BUILD,
         ),
         Task(
-            ISOLATED_RUN + "{BEFORE} python -c 'import salix'",
+            ISOLATED_RUN + " --managed-python --python {BEFORE} python -c 'import salix'",
             cwd=Path("tests"),
             env=HEADER_GATE_BUILD,
         ),
         Parallel(
             *(
                 Task(
-                    ISOLATED_RUN + interpreter + run,
+                    ISOLATED_RUN + " --managed-python --python " + interpreter + run,
                     cwd=Path("tests"),
                     env=HEADER_GATE_BUILD,
                 )
@@ -327,7 +329,7 @@ pyodide = Sequential(
 in_place_build = Task("uv run python setup.py build_ext --inplace", mutates=True, env=STRICT_BUILD)
 benchmark = Sequential(in_place_build, bench)
 CONFORMANCE_PYTHON = "3.14.6"
-CONFORMANCE_RUN = ISOLATED_RUN + CONFORMANCE_PYTHON
+CONFORMANCE_RUN = ISOLATED_RUN + f" --managed-python --python {CONFORMANCE_PYTHON}"
 conformance = Sequential(
     Task(
         CONFORMANCE_RUN + " --with setuptools python setup.py build_ext --inplace",
@@ -342,7 +344,7 @@ conformance = Sequential(
 )
 check = Parallel(test, free_threaded, format_check, lock_check, lint, analyze, c_test, type_check)
 
-WHEEL_RUN = ISOLATED_RUN + "{PY} --no-cache"
+WHEEL_RUN = ISOLATED_RUN + " --no-cache --managed-python --python {PY}"
 wheel_guard = Task(
     WHEEL_RUN + " --no-index --find-links ../result-wheels"
     f' --with "salix=={VERSION}"'
@@ -443,5 +445,33 @@ ci = Parallel(
     type_check,
     conformance,
 )
+
+
+
+def leaf_commands(node: Task | Parallel | Sequential | Pipe) -> Iterator[str]:
+    match node:
+        case Task():
+            yield from (node.cmd,) if isinstance(node.cmd, str) else node.cmd
+        case Parallel() | Sequential() | Pipe():
+            for child in node.tasks:
+                yield from leaf_commands(child)
+
+
+def runs_in_a_caller_environment(command: str) -> bool:
+    words = command.split()
+    return "--no-project" in words and "--isolated" not in words and not any(
+        word.startswith(".venvs/") for word in words
+    )
+
+
+UNISOLATED_RUNS = sorted(
+    {
+        command
+        for root in (check, ci, coverage, pyodide, instructions)
+        for command in leaf_commands(root)
+        if runs_in_a_caller_environment(command)
+    }
+)
+assert not UNISOLATED_RUNS, UNISOLATED_RUNS
 
 _ = Config(default_task=check, github_task=ci, agent=Claude(fix=format, check=check))
