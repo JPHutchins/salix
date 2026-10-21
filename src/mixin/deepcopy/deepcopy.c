@@ -28,16 +28,12 @@ PyObject * Struct_deepcopy(PyObject * const self, PyObject * const memo) {
 	}
 
 	PY_OWNED(key, PyLong_FromVoidPtr(self));
-	enum memo_none_entry const none_entry = (
-		key != NULL ? copy_reads_memo_none() :
-		MEMO_NONE_ENTRY_ERROR
-	);
 
-	if (none_entry == MEMO_NONE_ENTRY_ERROR) {
+	if (key == NULL) {
 		return NULL;
 	}
 
-	PY_MOVABLE(seeded, memo_entry(memo, key, none_entry));
+	PY_MOVABLE(seeded, memo_entry(memo, key));
 
 	if (seeded == NULL && PyErr_Occurred()) {
 		return NULL;
