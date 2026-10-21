@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import csv
 import hashlib
+import re
 import struct
 import sys
 import zipfile
@@ -35,9 +36,14 @@ ELF_MACHINES = {0x3E: "x86-64", 0xB7: "aarch64"}
 MACHO_MACHINES = {0x01000007: "x86-64", 0x0100000C: "aarch64"}
 PE_MACHINES = {0x8664: "x86-64", 0xAA64: "aarch64"}
 
+ELF_SECTION_RELA = 4
 ELF_SECTION_DYNSYM = 11
+ELF_SECTION_VERNEED = 0x6FFFFFFE
 ELF_BINDINGS_EXPORTED = frozenset({1, 2, 10})
 ELF_VISIBILITIES_EXPORTED = frozenset({0, 3})
+ELF_RELOCATIONS_REFUSED: dict[str, dict[int, str]] = {"x86-64": {36: "R_X86_64_TLSDESC"}}
+MANYLINUX_TAG = re.compile(r"manylinux_(\d+)_(\d+)_")
+NUMBERED_GLIBC = re.compile(r"GLIBC_(\d+(?:\.\d+)*)")
 MACHO_LOAD_SYMTAB = 0x2
 MACHO_LOAD_DYSYMTAB = 0xB
 MACHO_REQUIRED_COMMANDS = {MACHO_LOAD_SYMTAB: ("LC_SYMTAB", 24), MACHO_LOAD_DYSYMTAB: ("LC_DYSYMTAB", 80)}
@@ -142,6 +148,37 @@ def check(path: Path) -> Iterator[Failure]:
             f"{modules[0]} exports {sorted(exported)}, not {symbol} alone or with the linker's {sorted(linker)}",
         )
 
+    manylinux = MANYLINUX_TAG.match(platform_tag)
+
+    if manylinux is not None:
+        floor = tuple(int(part) for part in manylinux.groups())
+        yield from (
+            Failure(path.name, f"{modules[0]} {problem}")
+            for problem in beyond_the_glibc_floor(binary, actual.machine, floor)
+        )
+
+
+def beyond_the_glibc_floor(binary: bytes, machine: str, floor: tuple[int, ...]) -> Iterator[str]:
+    beyond = sorted(
+        version
+        for version in elf_needed_versions(binary)
+        if version.startswith("GLIBC_") and not within(version, floor)
+    )
+
+    if beyond:
+        yield f"needs {beyond}, which glibc {'.'.join(map(str, floor))} lacks"
+
+    refused = ELF_RELOCATIONS_REFUSED.get(machine, {})
+    descriptors = sorted(refused[kind] for kind in elf_relocation_kinds(binary) & refused.keys())
+
+    if descriptors:
+        yield f"reaches its thread-locals through {descriptors}, the gnu2 TLS dialect"
+
+
+def within(version: str, floor: tuple[int, ...]) -> bool:
+    numbered = NUMBERED_GLIBC.fullmatch(version)
+    return numbered is not None and tuple(int(part) for part in numbered[1].split(".")) <= floor
+
 
 def init_symbol(payload: str) -> str:
     directory, _, filename = payload.rpartition("/")
@@ -160,22 +197,27 @@ class ElfSection(NamedTuple):
     offset: int
     size: int
     link: int
+    info: int
     entry_size: int
 
 
 def elf_section(binary: bytes, start: int) -> ElfSection:
-    _, kind, _, _, offset, size, link, _, _, entry_size = struct.unpack_from("<IIQQQQIIQQ", binary, start)
-    return ElfSection(kind, offset, size, link, entry_size)
+    _, kind, _, _, offset, size, link, info, _, entry_size = struct.unpack_from("<IIQQQQIIQQ", binary, start)
+    return ElfSection(kind, offset, size, link, info, entry_size)
 
 
-def elf_exports(binary: bytes) -> frozenset[str]:
+def elf_sections(binary: bytes) -> list[ElfSection]:
     (section_table,) = struct.unpack_from("<Q", binary, 0x28)
     section_size, section_count = struct.unpack_from("<HH", binary, 0x3A)
 
     if section_count == 0:
         raise ValueError("the section headers are stripped")
 
-    sections = [elf_section(binary, section_table + index * section_size) for index in range(section_count)]
+    return [elf_section(binary, section_table + index * section_size) for index in range(section_count)]
+
+
+def elf_exports(binary: bytes) -> frozenset[str]:
+    sections = elf_sections(binary)
 
     return frozenset(
         c_string(binary, sections[symbols.link].offset + name)
@@ -188,6 +230,42 @@ def elf_exports(binary: bytes) -> frozenset[str]:
         if section != 0
         and info >> 4 in ELF_BINDINGS_EXPORTED
         and other & 3 in ELF_VISIBILITIES_EXPORTED
+    )
+
+
+def elf_needed_versions(binary: bytes) -> frozenset[str]:
+    sections = elf_sections(binary)
+
+    return frozenset(
+        c_string(binary, sections[needs.link].offset + name)
+        for needs in sections
+        if needs.kind == ELF_SECTION_VERNEED
+        for name in elf_version_names(binary, needs.offset, needs.info)
+    )
+
+
+def elf_version_names(binary: bytes, need: int, need_count: int) -> Iterator[int]:
+    for _ in range(need_count):
+        _, version_count, _, first_version, next_need = struct.unpack_from("<HHIII", binary, need)
+        version = need + first_version
+
+        for _ in range(version_count):
+            _, _, _, name, next_version = struct.unpack_from("<IHHII", binary, version)
+            yield name
+            version += next_version
+
+        need += next_need
+
+
+def elf_relocation_kinds(binary: bytes) -> frozenset[int]:
+    return frozenset(
+        info & 0xFFFFFFFF
+        for relocations in elf_sections(binary)
+        if relocations.kind == ELF_SECTION_RELA
+        for (info,) in (
+            struct.unpack_from("<Q", binary, start + 8)
+            for start in range(relocations.offset, relocations.offset + relocations.size, relocations.entry_size)
+        )
     )
 
 
