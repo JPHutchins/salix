@@ -5,8 +5,6 @@
 #include "../result.h"
 #include "../types.h"
 
-typedef struct StructType StructType;
-
 struct field_lookup {
 	enum { FIELD_LOOKUP_FOUND, FIELD_LOOKUP_MISSING, FIELD_LOOKUP_ERROR } tag;
 	Py_ssize_t index;
@@ -110,6 +108,8 @@ enum result group_members_from_fields(StructType * type, PyObject * self, PyObje
 
 enum result store_group_args(StructType * type, PyObject * self, bool from_fields);
 #endif
+
+PyObject * exception_args_of(PyObject * self);
 
 enum result set_exception_args_from_fields(
 	StructType * type,

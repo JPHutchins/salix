@@ -174,11 +174,7 @@ PyObject * Struct_replace(
 		PY_MOVABLE(replaced, NULL);
 
 		if (type->struct_family_owned || type->struct_group_family) {
-			PY_MOVABLE(positionals, NULL);
-
-			STRUCT_BEGIN_CRITICAL_SECTION(self);
-			positionals = Py_XNewRef(((PyBaseExceptionObject *) self)->args);
-			STRUCT_END_CRITICAL_SECTION();
+			PY_MOVABLE(positionals, exception_args_of(self));
 
 			if (positionals == NULL) {
 				positionals = PyTuple_New(0);
