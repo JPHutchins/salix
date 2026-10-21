@@ -96,6 +96,38 @@ def pe(data_directory_count: int, magic: int = 0x20B) -> bytes:
     )
 
 
+def elf_module(machine: int, versions: tuple[str, ...], relocation_kinds: tuple[int, ...]) -> bytes:
+    strings = b"\0" + b"".join(name.encode() + b"\0" for name in ("PyInit_salix", "libc.so.6", *versions))
+
+    def string(name: str) -> int:
+        return strings.index(name.encode() + b"\0")
+
+    symbols = bytes(24) + struct.pack("<IBBHQQ", string("PyInit_salix"), 0x12, 0, 1, 0, 0)
+    needs = struct.pack("<HHIII", 1, len(versions), string("libc.so.6"), 16, 0) + b"".join(
+        struct.pack("<IHHII", 0, 0, 2 + index, string(version), 16 if index < len(versions) - 1 else 0)
+        for index, version in enumerate(versions)
+    )
+    relocations = b"".join(struct.pack("<QQq", 0, kind, 0) for kind in relocation_kinds)
+    bodies = [symbols, strings, needs, relocations]
+    starts = [64 + sum(len(body) for body in bodies[:index]) for index in range(len(bodies))]
+    section_headers = bytes(64) + b"".join(
+        struct.pack("<IIQQQQIIQQ", 0, kind, 0, 0, start, len(body), link, info, 8, entry_size)
+        for (kind, link, info, entry_size), start, body in zip(
+            [(11, 2, 1, 24), (3, 0, 0, 0), (0x6FFFFFFE, 2, 1, 0), (4, 1, 0, 24)], starts, bodies, strict=True
+        )
+    )
+    header = (
+        b"\x7fELF\x02\x01\x01"
+        + bytes(9)
+        + struct.pack(
+            "<HHIQQQIHHHHHH", 3, machine, 1, 0, 0, starts[-1] + len(relocations), 0, 64, 0, 0, 64, len(bodies) + 1, 2
+        )
+    )
+    return header + b"".join(bodies) + section_headers
+
+
+X86_64_RELATIVE_AND_DTPMOD64 = (8, 16)
+
 WASM_HEADER = b"\0asm\x01\0\0\0"
 
 
@@ -123,6 +155,7 @@ WASM_WITH_AN_ENDLESS_LEB128 = WASM_HEADER + bytes([7]) + b"\x80" * 10
 WASM_WITH_64_BIT_MEMORY = WASM_HEADER + wasm_section(2, wasm_name("env") + wasm_name("memory") + b"\x02\x04\x01")
 
 ELF = ("manylinux_2_17_x86_64", "salix/__init__.cpython-313-x86_64-linux-gnu.so")
+ELF_AARCH64 = ("manylinux_2_17_aarch64", "salix/__init__.cpython-313-aarch64-linux-gnu.so")
 MACHO = ("macosx_10_13_x86_64", "salix/__init__.cpython-313-darwin.so")
 PE = ("win_amd64", "salix/__init__.cp313-win_amd64.pyd")
 WASM = ("pyemscripten_2026_0_wasm32", "salix/__init__.cpython-313-wasm32-emscripten.so")
@@ -246,3 +279,40 @@ def test_one_unreadable_wheel_does_not_hide_the_others(tmp_path):
     assert completed.returncode == 1
     assert completed.stdout.splitlines() == [f"FAIL {unreadable.name}", f"FAIL {misshapen.name}"]
     assert "tag win_amd64 implies" in completed.stderr
+
+
+@pytest.mark.parametrize(
+    ("target", "payload"),
+    [
+        (ELF, elf_module(0x3E, ("GLIBC_2.2.5", "GLIBC_2.3"), X86_64_RELATIVE_AND_DTPMOD64)),
+        (ELF, elf_module(0x3E, ("GLIBC_2.17",), X86_64_RELATIVE_AND_DTPMOD64)),
+        (ELF_AARCH64, elf_module(0xB7, ("GLIBC_2.17",), (1027, 1031))),
+    ],
+    ids=["x86-64-glibc-2.3", "x86-64-glibc-2.17", "aarch64-tls-descriptors"],
+)
+def test_a_manylinux_module_within_its_tags_glibc_passes(target, payload, tmp_path):
+    completed = check(wheel(tmp_path, *target, payload))
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.startswith("ok ")
+
+
+@pytest.mark.parametrize(
+    "version",
+    ["GLIBC_2.18", "GLIBC_2.34", "GLIBC_ABI_GNU2_TLS", "GLIBC_PRIVATE"],
+)
+def test_a_manylinux_module_needing_what_its_tags_glibc_lacks_fails(version, tmp_path):
+    payload = elf_module(0x3E, ("GLIBC_2.2.5", version), X86_64_RELATIVE_AND_DTPMOD64)
+    completed = check(wheel(tmp_path, *ELF, payload))
+
+    assert completed.returncode == 1
+    assert f"needs ['{version}'], which glibc 2.17 lacks" in completed.stderr
+    assert "could not be checked" not in completed.stderr
+
+
+def test_a_manylinux_x86_64_module_using_tls_descriptors_fails(tmp_path):
+    payload = elf_module(0x3E, ("GLIBC_2.2.5",), (8, 36))
+    completed = check(wheel(tmp_path, *ELF, payload))
+
+    assert completed.returncode == 1
+    assert "reaches its thread-locals through ['R_X86_64_TLSDESC'], the gnu2 TLS dialect" in completed.stderr
