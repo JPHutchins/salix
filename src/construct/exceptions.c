@@ -185,7 +185,7 @@ static enum result store_exception_args(PyObject * const self, PyObject * const 
 	return derive_members_string(self);
 }
 
-static PyObject * exception_args_of(PyObject * const self) {
+PyObject * exception_args_of(PyObject * const self) {
 	PyObject * args;
 
 	STRUCT_BEGIN_CRITICAL_SECTION(self);
