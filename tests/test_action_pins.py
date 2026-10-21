@@ -7,9 +7,10 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 USE = re.compile(r"^\s*(?:-\s+)?uses:\s*([^\s#]+)", re.MULTILINE)
 DIGEST = re.compile(r"[0-9a-f]{40}")
+VERSION_TAG = re.compile(r"v\d+(?:\.\d+)*(?:-[0-9A-Za-z.]+)?")
 TAG_PINNED_REUSABLE_WORKFLOWS = frozenset({"JPHutchins/code-review/.github/workflows/review-reusable.yaml"})
 
-pytestmark = pytest.mark.skipif(
+reads_the_workflows = pytest.mark.skipif(
     not (ROOT / ".github").is_dir(), reason=".github is not beside these tests"
 )
 
@@ -26,6 +27,7 @@ def workflow_uses() -> list[tuple[str, str]]:
     return [use for workflow in (ROOT / ".github").rglob("*.y*ml") for use in remote_uses(workflow.read_text(encoding="utf-8"))]
 
 
+@reads_the_workflows
 def test_each_action_is_pinned_to_one_digest_across_the_workflows_and_actions() -> None:
     actions = Counter(action for action, reference in set(workflow_uses()) if DIGEST.fullmatch(reference))
 
@@ -33,12 +35,28 @@ def test_each_action_is_pinned_to_one_digest_across_the_workflows_and_actions() 
     assert [action for action, digests in actions.items() if digests > 1] == []
 
 
-def test_every_remote_use_is_pinned_by_digest_except_the_tagged_review_workflow() -> None:
+@reads_the_workflows
+def test_every_remote_use_is_pinned_by_digest_or_is_an_exempted_workflow_at_a_version_tag() -> None:
     assert [
         (action, reference)
         for action, reference in workflow_uses()
-        if not DIGEST.fullmatch(reference) and action not in TAG_PINNED_REUSABLE_WORKFLOWS
+        if not DIGEST.fullmatch(reference)
+        and not (action in TAG_PINNED_REUSABLE_WORKFLOWS and VERSION_TAG.fullmatch(reference))
     ] == []
+
+
+@reads_the_workflows
+def test_each_tag_pinned_exemption_is_still_used() -> None:
+    assert {action for action, _ in workflow_uses()} >= TAG_PINNED_REUSABLE_WORKFLOWS
+
+
+@pytest.mark.parametrize(
+    ("reference", "is_a_version_tag"),
+    [("v0.1.0-alpha.70", True), ("v1", True), ("main", False), ("v1-", False), (f"{'a' * 40}", False)],
+    ids=["pre-release", "major", "branch", "dangling-suffix", "digest"],
+)
+def test_an_exempted_workflow_must_name_a_version_tag(reference: str, is_a_version_tag: bool) -> None:
+    assert bool(VERSION_TAG.fullmatch(reference)) is is_a_version_tag
 
 
 @pytest.mark.parametrize(
