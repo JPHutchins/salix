@@ -1198,6 +1198,8 @@ def test_an_annotation_that_rewrites_the_annotations_changes_nothing_the_walk_re
 
     Built = type(Struct)("Rewritten", (Struct,), {"__annotations__": annotations})
 
+    assert "doomed" not in annotations
+    assert "grown0" in annotations
     assert Built._struct_fields_ == ("first", "doomed", "last")
 
 
@@ -1273,6 +1275,7 @@ def test_a_str_after_an_object_annotation_is_matched_and_one_injected_during_the
 
     Built = type(Struct)("Injected", (Struct,), {"__annotations__": annotations})
 
+    assert annotations["late"] == "ClassVar[int]"
     assert Built._struct_fields_ == ("first", "late")
 
 

@@ -1356,6 +1356,8 @@ class TestFieldsReboundDuringClassCreation:
                 limit: ClassVar[int] = 1
 
     def test_a_hook_deleting_a_redeclared_class_var_and_its_annotation_is_refused(self) -> None:
+        annotations = {"limit": ClassVar[int]}
+
         class Base(Struct):
             limit: ClassVar[int] = 1
 
@@ -1365,7 +1367,9 @@ class TestFieldsReboundDuringClassCreation:
                 del cls.__annotations__["limit"]
 
         with pytest.raises(TypeError, match=r"Sub\.limit does not reach its ClassVar's value"):
-            type(Base)("Sub", (Base,), {"__annotations__": {"limit": ClassVar[int]}, "limit": 2})
+            type(Base)("Sub", (Base,), {"__annotations__": annotations, "limit": 2})
+
+        assert annotations == {}
 
     def test_a_diamond_reaching_a_sibling_s_class_var_refinement_builds_in_either_order(
         self,
