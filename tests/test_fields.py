@@ -1,8 +1,6 @@
 import copy
 import gc
-import os
 import pickle
-import subprocess
 import sys
 import types
 import weakref
@@ -10,9 +8,8 @@ from dataclasses import InitVar
 from typing import Annotated, ClassVar, Generic, TypeVar
 
 import pytest
-from platforms import starts_a_subprocess
+from platforms import printed_by_a_fresh_interpreter, starts_a_subprocess
 
-import salix
 from salix import MISSING, Field, Struct, fields
 
 META = type(Struct)
@@ -261,50 +258,28 @@ def test_a_class_its_records_reach_back_to_is_collected():
 
 @starts_a_subprocess
 def test_fields_still_answer_after_the_module_leaves_sys_modules():
-    package_parent = os.path.dirname(os.path.dirname(salix.__file__))
-    probe = (
-        "import gc, sys\n"
-        f"sys.path.insert(0, {package_parent!r})\n"
-        "import salix\n"
-        "fields, missing = salix.fields, salix.MISSING\n"
-        "class Point(salix.Struct):\n"
-        "    x: int\n"
-        "del sys.modules['salix'], salix\n"
-        "gc.collect()\n"
-        "print(fields(Point)[0].default is missing)\n"
-    )
-    result = subprocess.run(
-        [sys.executable, "-I", "-c", probe],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=True,
-    )
-
-    assert result.stdout.strip() == "True"
+    assert printed_by_a_fresh_interpreter("""
+        import gc, sys
+        import salix
+        fields, missing = salix.fields, salix.MISSING
+        class Point(salix.Struct):
+            x: int
+        del sys.modules['salix'], salix
+        gc.collect()
+        print(fields(Point)[0].default is missing)
+    """) == "True"
 
 
 @starts_a_subprocess
 def test_reading_fields_imports_nothing():
-    package_parent = os.path.dirname(os.path.dirname(salix.__file__))
-    probe = (
-        "import sys\n"
-        f"sys.path.insert(0, {package_parent!r})\n"
-        "before = set(sys.modules)\n"
-        "import salix\n"
-        "class Point(salix.Struct):\n"
-        "    x: int\n"
-        "    y: str = 'y'\n"
-        "salix.fields(Point)\n"
-        "salix.fields(Point(1))\n"
-        "print(sorted(set(sys.modules) - before))\n"
-    )
-    result = subprocess.run(
-        [sys.executable, "-I", "-c", probe],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=True,
-    )
-
-    assert result.stdout.strip() == "['salix']"
+    assert printed_by_a_fresh_interpreter("""
+        import sys
+        before = set(sys.modules)
+        import salix
+        class Point(salix.Struct):
+            x: int
+            y: str = 'y'
+        salix.fields(Point)
+        salix.fields(Point(1))
+        print(sorted(set(sys.modules) - before))
+    """) == "['salix']"

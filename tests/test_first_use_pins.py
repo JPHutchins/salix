@@ -1,45 +1,22 @@
-import os
-import subprocess
-import sys
-import textwrap
-
 import pytest
-from platforms import starts_a_subprocess
-
-import salix
+from platforms import printed_by_a_fresh_interpreter, starts_a_subprocess
 
 pytestmark = starts_a_subprocess
 
 
-def printed_by_a_fresh_interpreter(probe: str) -> str:
-    package_parent = os.path.dirname(os.path.dirname(salix.__file__))
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-I",
-            "-c",
-            f"import sys\nsys.path.insert(0, {package_parent!r})\n{textwrap.dedent(probe)}",
-        ],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=True,
-    )
-    return result.stdout.strip()
-
-
 @pytest.mark.parametrize(
-    ("change", "struct_field"),
+    ("first_use", "change", "printed"),
     [
-        ("copy._deepcopy_dispatch = {**copy._deepcopy_dispatch, list: changed}", "[1]"),
-        ("copy._deepcopy_dispatch[list] = changed", "changed"),
+        (True, "rebound", "'changed' [1] True"),
+        (True, "mutated_in_place", "'changed' 'changed' True"),
+        (False, "rebound", "'changed' 'changed' True"),
     ],
-    ids=["rebound", "mutated_in_place"],
+    ids=["rebound_after_first_use", "mutated_in_place_after_first_use", "rebound_before_first_use"],
 )
 def test_a_deepcopy_dispatch_rebound_after_the_first_struct_deepcopy_is_not_seen_but_one_mutated_in_place_is(
-    change: str, struct_field: str
+    first_use: bool, change: str, printed: str
 ):
-    printed = printed_by_a_fresh_interpreter(f"""
+    assert printed_by_a_fresh_interpreter(f"""
         import copy
         import salix
 
@@ -49,16 +26,23 @@ def test_a_deepcopy_dispatch_rebound_after_the_first_struct_deepcopy_is_not_seen
         def changed(value, memo):
             return "changed"
 
-        copy.deepcopy(Holder([1]))
-        {change}
-        print(copy.deepcopy([1]), copy.deepcopy(Holder([1])).items)
-    """)
+        def rebound():
+            copy._deepcopy_dispatch = {{**copy._deepcopy_dispatch, list: changed}}
 
-    assert printed == f"changed {struct_field}"
+        def mutated_in_place():
+            copy._deepcopy_dispatch[list] = changed
+
+        if {first_use}:
+            copy.deepcopy(Holder([0]))
+        {change}()
+        source = [1]
+        field = copy.deepcopy(Holder(source)).items
+        print(repr(copy.deepcopy([1])), repr(field), field is not source)
+    """) == printed
 
 
 def test_a_dispatch_table_rebound_after_the_first_struct_deepcopy_is_still_seen():
-    printed = printed_by_a_fresh_interpreter("""
+    assert printed_by_a_fresh_interpreter("""
         import copy
         import salix
 
@@ -71,21 +55,18 @@ def test_a_dispatch_table_rebound_after_the_first_struct_deepcopy_is_still_seen(
         copy.deepcopy(Point(1))
         copy.dispatch_table = {**copy.dispatch_table, Point: reduced}
         print(copy.deepcopy(Point(1)), Point(1).__deepcopy__({}))
-    """)
-
-    assert printed == "reduced reduced"
+    """) == "reduced reduced"
 
 
 @pytest.mark.parametrize(
-    ("first_deepcopy", "field_type"),
-    [("", "str"), ("copy.deepcopy(Holder(Plain()))", "Plain")],
+    ("first_use", "printed"),
+    [(False, "str True"), (True, "Plain True")],
     ids=["replaced_before_first_use", "replaced_after_first_use"],
 )
-def test_a_copy_module_replaced_after_the_first_struct_deepcopy_is_not_seen(
-    first_deepcopy: str, field_type: str
-):
-    printed = printed_by_a_fresh_interpreter(f"""
+def test_a_copy_module_replaced_after_the_first_struct_deepcopy_is_not_seen(first_use: bool, printed: str):
+    assert printed_by_a_fresh_interpreter(f"""
         import copy
+        import sys
         import types
         import salix
 
@@ -95,64 +76,66 @@ def test_a_copy_module_replaced_after_the_first_struct_deepcopy_is_not_seen(
         class Holder(salix.Struct):
             value: object
 
-        {first_deepcopy}
+        if {first_use}:
+            copy.deepcopy(Holder(Plain()))
         replacement = types.ModuleType("copy")
         replacement.__dict__.update(copy.__dict__)
         replacement.deepcopy = lambda value, memo=None: "replaced"
         sys.modules["copy"] = replacement
-        print(type(Holder(Plain()).__deepcopy__({{}}).value).__name__)
-    """)
-
-    assert printed == field_type
+        original = Plain()
+        copied = Holder(original).__deepcopy__({{}}).value
+        print(type(copied).__name__, copied is not original)
+    """) == printed
 
 
 @pytest.mark.parametrize(
-    ("swap", "reduces_with_the_current_module"),
+    ("first_use", "swap", "reduces_with_the_current_module"),
     [
-        ("importlib.reload(copyreg)", "True"),
-        (
-            "specification = importlib.util.find_spec('copyreg')\n"
-            "        fresh = importlib.util.module_from_spec(specification)\n"
-            "        specification.loader.exec_module(fresh)\n"
-            "        sys.modules['copyreg'] = fresh",
-            "False",
-        ),
+        (True, "reloaded", "True"),
+        (True, "replaced_in_sys_modules", "False"),
+        (False, "replaced_in_sys_modules", "True"),
     ],
-    ids=["reloaded", "replaced_in_sys_modules"],
+    ids=["reloaded_after_first_use", "replaced_after_first_use", "replaced_before_first_use"],
 )
 def test_a_copyreg_reloaded_after_the_first_pickle_is_seen_but_one_replaced_in_sys_modules_is_not(
-    swap: str, reduces_with_the_current_module: str
+    first_use: bool, swap: str, reduces_with_the_current_module: str
 ):
-    printed = printed_by_a_fresh_interpreter(f"""
+    assert printed_by_a_fresh_interpreter(f"""
         import copyreg
-        import importlib
         import importlib.util
-        import pickle
+        import sys
         import salix
 
         class Point(salix.Struct):
             x: int
 
-        Point(1).__reduce_ex__(2)
-        {swap}
-        reduced_with = Point(1).__reduce_ex__(2)[0]
-        restored = pickle.loads(pickle.dumps(Point(1), 2))
-        print(reduced_with is sys.modules["copyreg"].__newobj__, restored == Point(1))
-    """)
+        def reloaded():
+            importlib.reload(copyreg)
 
-    assert printed == f"{reduces_with_the_current_module} True"
+        def replaced_in_sys_modules():
+            specification = importlib.util.find_spec("copyreg")
+            fresh = importlib.util.module_from_spec(specification)
+            sys.modules["copyreg"] = fresh
+            specification.loader.exec_module(fresh)
+
+        if {first_use}:
+            Point(1).__reduce_ex__(2)
+        {swap}()
+        print(Point(1).__reduce_ex__(2)[0] is sys.modules["copyreg"].__newobj__)
+    """) == reduces_with_the_current_module
 
 
 @pytest.mark.parametrize(
-    ("deepcopy_at_first_use", "deepcopy_calls"),
-    [("real", "0"), ("lambda value, memo=None: real(value, memo)", "1")],
+    ("deepcopy_at_first_use", "printed"),
+    [("real", "0 [1, 2]"), ("lambda value, memo=None: real(value, memo)", "1 [1, 2]")],
     ids=["stdlib_at_first_use", "replaced_at_first_use"],
 )
 def test_the_deepcopy_fast_path_is_decided_by_the_copy_dot_deepcopy_bound_at_the_first_struct_deepcopy(
-    deepcopy_at_first_use: str, deepcopy_calls: str
+    deepcopy_at_first_use: str, printed: str
 ):
-    printed = printed_by_a_fresh_interpreter(f"""
+    assert printed_by_a_fresh_interpreter(f"""
         import copy
+        import sys
         import salix
 
         real = copy.deepcopy
@@ -179,9 +162,8 @@ def test_the_deepcopy_fast_path_is_decided_by_the_copy_dot_deepcopy_bound_at_the
                 calls += 1
 
         sys.setprofile(profile)
-        Defaulted()
+        constructed = Defaulted()
         sys.setprofile(None)
-        print(calls)
-    """)
-
-    assert printed == deepcopy_calls
+        constructed.items.append(3)
+        print(calls, Defaulted().items)
+    """) == printed
