@@ -1,5 +1,6 @@
 import json
 import re
+import shlex
 from collections.abc import Iterator
 from enum import Enum, auto
 from pathlib import Path
@@ -16,6 +17,7 @@ from camas import (
     Task,
     by_suffix,
 )
+from camas.v0.task import ProjectRef
 
 C_SOURCES = by_suffix((".c", ".h"), default=tuple(sorted(str(p) for p in Path("src").rglob("*.[ch]"))))
 
@@ -151,7 +153,8 @@ c_analyzer = Task(
 )
 analyze = Sequential(compile_flags, Parallel(c_tidy, c_analyzer))
 
-TYPE_CHECK = ISOLATED_RUN + " --with typing_extensions"
+ISOLATED_TOOL_RUN = ISOLATED_RUN + " --managed-python --python " + PYTHONS[0]
+TYPE_CHECK = ISOLATED_TOOL_RUN + " --with typing_extensions"
 MYPY = "mypy==2.4.0"
 PYRIGHT = "pyright==1.1.414"
 TY = "ty==0.0.63"
@@ -186,7 +189,7 @@ tooling = Task(
 )
 type_check = Parallel(typed_api, tooling)
 
-RUFF_CHECK = ISOLATED_RUN + " --with ruff ruff check"
+RUFF_CHECK = ISOLATED_TOOL_RUN + " --with ruff ruff check"
 HUNDREDS_OF_DIAGNOSTICS = 64_000
 LINT_FORMAT = AgentFormat("--output-format rdjson", "rdjson", limit=HUNDREDS_OF_DIAGNOSTICS)
 lint = Parallel(
@@ -448,28 +451,34 @@ ci = Parallel(
 
 
 
-def leaf_commands(node: Task | Parallel | Sequential | Pipe) -> Iterator[str]:
+def leaf_commands(node: Task | Parallel | Sequential | Pipe | ProjectRef) -> Iterator[tuple[str, ...]]:
     match node:
-        case Task():
-            yield from (node.cmd,) if isinstance(node.cmd, str) else node.cmd
+        case Task(cmd=str() as command):
+            yield tuple(shlex.split(command))
+        case Task(cmd=tuple() as argv):
+            yield argv
         case Parallel() | Sequential() | Pipe():
             for child in node.tasks:
                 yield from leaf_commands(child)
+        case ProjectRef():
+            return
+        case _:
+            raise TypeError(node)
 
 
-def runs_in_a_caller_environment(command: str) -> bool:
-    words = command.split()
-    return "--no-project" in words and "--isolated" not in words and not any(
-        word.startswith(".venvs/") for word in words
+def runs_in_a_caller_environment(argv: tuple[str, ...]) -> bool:
+    return "--no-project" in argv and "--isolated" not in argv and not any(
+        word.startswith(".venvs/") for word in argv
     )
 
 
 UNISOLATED_RUNS = sorted(
     {
-        command
-        for root in (check, ci, coverage, pyodide, instructions)
-        for command in leaf_commands(root)
-        if runs_in_a_caller_environment(command)
+        shlex.join(argv)
+        for node in list(globals().values())
+        if isinstance(node, Task | Parallel | Sequential | Pipe)
+        for argv in leaf_commands(node)
+        if runs_in_a_caller_environment(argv)
     }
 )
 assert not UNISOLATED_RUNS, UNISOLATED_RUNS
