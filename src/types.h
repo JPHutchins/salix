@@ -497,11 +497,6 @@ static inline bool refused_until_created(
 	return true;
 }
 
-static inline void struct_clear_derived_caches(StructType * const type) {
-	Py_CLEAR(type->struct_field_records);
-	Py_CLEAR(type->struct_signature);
-}
-
 static inline PyObject * struct_tuple_or_empty(PyObject * const tuple) {
 	return tuple != NULL ? Py_NewRef(tuple) : PyTuple_New(0);
 }

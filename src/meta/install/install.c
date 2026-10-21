@@ -45,48 +45,20 @@ static enum parameter_kind * parameter_kinds_of(PyObject * const init_var_flags)
 	return kinds;
 }
 
-static Py_ssize_t * default_indices_of(
-	PyObject * const names,
-	PyObject * const default_by_name,
-	PyObject * const defaults
-) {
-	Py_ssize_t const count = PySequence_Fast_GET_SIZE(names);
-	Py_ssize_t * const indices = PyMem_New(Py_ssize_t, count + 1);
+static Py_ssize_t * copied_indices(Py_ssize_t const * const indices, Py_ssize_t const count) {
+	Py_ssize_t * const copy = PyMem_New(Py_ssize_t, count > 0 ? count : 1);
 
-	if (indices == NULL) {
+	if (copy == NULL) {
 		PyErr_NoMemory();
 
 		return NULL;
 	}
 
-	Py_ssize_t next_index = 0;
-
 	for (Py_ssize_t i = 0; i < count; i += 1) {
-		int const has_default = PyDict_Contains(
-			default_by_name,
-			PySequence_Fast_GET_ITEM(names, i)
-		);
-
-		if (has_default < 0) {
-			PyMem_Free(indices);
-
-			return NULL;
-		}
-
-		indices[i] = has_default == 1 ? next_index++ : NO_DEFAULT;
+		copy[i] = indices[i];
 	}
 
-	if (next_index != PyTuple_GET_SIZE(defaults)) {
-		PyMem_Free(indices);
-		PyErr_SetString(
-			PyExc_SystemError,
-			"salix internal error: a default table does not match its defaulted names"
-		);
-
-		return NULL;
-	}
-
-	return indices;
+	return copy;
 }
 
 enum result install_parameters(
@@ -103,13 +75,14 @@ enum result install_parameters(
 		return RESULT_ERROR;
 	}
 
-	Py_ssize_t * const field_default_indices =
-		default_indices_of(plan->all_names, plan->default_by_name, plan->defaults);
+	Py_ssize_t * const field_default_indices = copied_indices(
+		plan->field_default_indices,
+		PyList_GET_SIZE(plan->all_names)
+	);
 	Py_ssize_t * const init_var_default_indices = (
-		field_default_indices != NULL ? default_indices_of(
-			plan->init_var_names,
-			plan->default_by_name,
-			plan->init_var_defaults
+		field_default_indices != NULL ? copied_indices(
+			plan->init_var_default_indices,
+			init_var_count
 		) :
 		NULL
 	);
@@ -121,18 +94,46 @@ enum result install_parameters(
 		return RESULT_ERROR;
 	}
 
-	PyMem_Free(struct_class->struct_field_default_indices);
+	PyObject * const replaced_tables[] = {
+		struct_class->struct_defaults,
+		struct_class->struct_annotations,
+		struct_class->struct_metadata,
+		struct_class->struct_init_var_names,
+		struct_class->struct_init_var_defaults,
+		struct_class->struct_init_var_annotations,
+		struct_class->struct_declared_names,
+		struct_class->struct_class_var_positions,
+		struct_class->struct_field_records,
+		struct_class->struct_signature,
+	};
+	void * const replaced_arrays[] = {
+		struct_class->struct_field_default_indices,
+		struct_class->struct_init_var_default_indices,
+		struct_class->struct_parameter_kinds,
+	};
+
+	struct_class->struct_defaults = Py_NewRef(plan->defaults);
 	struct_class->struct_field_default_indices = field_default_indices;
-	PyMem_Free(struct_class->struct_init_var_default_indices);
+	struct_class->struct_annotations = Py_NewRef(plan->annotations);
+	struct_class->struct_metadata = Py_NewRef(plan->metadata);
+	struct_class->struct_init_var_names = Py_NewRef(plan->init_var_names);
+	struct_class->struct_init_var_defaults = Py_NewRef(plan->init_var_defaults);
 	struct_class->struct_init_var_default_indices = init_var_default_indices;
-	PyMem_Free(struct_class->struct_parameter_kinds);
+	struct_class->struct_init_var_annotations = Py_NewRef(plan->init_var_annotations);
+	struct_class->struct_declared_names = Py_NewRef(plan->declared_names);
+	struct_class->struct_class_var_positions = Py_XNewRef(plan->class_var_positions);
 	struct_class->struct_parameter_kinds = kinds;
-	Py_XSETREF(struct_class->struct_init_var_names, Py_NewRef(plan->init_var_names));
-	Py_XSETREF(struct_class->struct_init_var_defaults, Py_NewRef(plan->init_var_defaults));
-	Py_XSETREF(struct_class->struct_init_var_annotations, Py_NewRef(plan->init_var_annotations));
-	Py_XSETREF(struct_class->struct_declared_names, Py_NewRef(plan->declared_names));
-	Py_XSETREF(struct_class->struct_class_var_positions, Py_XNewRef(plan->class_var_positions));
 	struct_class->struct_init_var_count = init_var_count;
+	struct_class->struct_field_records = NULL;
+	struct_class->struct_signature = NULL;
+
+	for (size_t i = 0; i < Py_ARRAY_LENGTH(replaced_arrays); i += 1) {
+		PyMem_Free(replaced_arrays[i]);
+	}
+
+	for (size_t i = 0; i < Py_ARRAY_LENGTH(replaced_tables); i += 1) {
+		Py_XDECREF(replaced_tables[i]);
+	}
 
 	return RESULT_OK;
 }
@@ -175,16 +176,12 @@ enum result install_fields(
 
 	if (installed == RESULT_OK) {
 		struct_class->struct_field_names = py_move(&field_names);
-		struct_class->struct_defaults = Py_NewRef(plan->defaults);
-		struct_class->struct_annotations = Py_NewRef(plan->annotations);
-		struct_class->struct_metadata = Py_NewRef(plan->metadata);
 		struct_class->struct_slot_offsets = offsets;
 		struct_class->struct_member_offsets = member_offsets;
 		struct_class->struct_member_count = member_count;
 		struct_class->struct_field_count = field_count;
 		struct_class->struct_options = options;
 		struct_class->struct_resolves_body_eq = resolves_body_eq;
-		struct_clear_derived_caches(struct_class);
 	}
 
 	STRUCT_END_CRITICAL_SECTION();

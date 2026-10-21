@@ -19,11 +19,11 @@ static enum result require_init_vars(
 ) {
 	for (Py_ssize_t i = 0; i < type->struct_init_var_count; i += 1) {
 		PyObject * const init_var_name = PyTuple_GET_ITEM(type->struct_init_var_names, i);
-		int const given = (
-			struct_init_var_default(type, i) != NULL ? 1 :
+		int const supplied = (
 			keyword_names != NULL ? PySequence_Contains(keyword_names, init_var_name) :
 			0
 		);
+		int const given = supplied != 0 ? supplied : struct_init_var_default(type, i) != NULL;
 
 		if (given < 0) {
 			return RESULT_ERROR;

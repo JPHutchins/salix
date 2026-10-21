@@ -456,11 +456,7 @@ enum result settle_planned(
 	enum result installed = RESULT_ERROR;
 
 	STRUCT_BEGIN_CRITICAL_SECTION(struct_class);
-	Py_SETREF(struct_class->struct_defaults, Py_NewRef(plan->defaults));
-	Py_SETREF(struct_class->struct_annotations, Py_NewRef(plan->annotations));
-	Py_SETREF(struct_class->struct_metadata, Py_NewRef(plan->metadata));
 	installed = install_parameters(struct_class, plan);
-	struct_clear_derived_caches(struct_class);
 	STRUCT_END_CRITICAL_SECTION();
 
 	if (installed != RESULT_OK) {
