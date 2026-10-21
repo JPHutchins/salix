@@ -44,7 +44,8 @@ ELF_SECTION_NOBITS = 8
 ELF_SECTION_DYNSYM = 11
 ELF_SECTION_VERNEED = 0x6FFFFFFE
 ELF_VERSION_ENTRY_SIZE = 16
-ELF_RELA_ENTRY_SIZE = 24
+ELF_SECTION_HEADER_SIZE = 64
+ELF_ENTRY_SIZES = {ELF_SECTION_RELA: 24, ELF_SECTION_DYNSYM: 24}
 ELF_BINDINGS_EXPORTED = frozenset({1, 2, 10})
 ELF_VISIBILITIES_EXPORTED = frozenset({0, 3})
 ELF_RELOCATIONS_REFUSED: dict[str, dict[int, str]] = {"x86-64": {36: "R_X86_64_TLSDESC"}}
@@ -227,19 +228,30 @@ def elf_sections(binary: bytes) -> list[ElfSection]:
     if section_count == 0:
         raise ValueError("the section headers are stripped")
 
-    sections = [elf_section(binary, section_table + index * section_size) for index in range(section_count)]
-    misplaced = [
-        index
-        for index, section in enumerate(sections)
-        if (section.kind not in (ELF_SECTION_NULL, ELF_SECTION_NOBITS) and section.offset + section.size > len(binary))
-        or (
-            section.kind == ELF_SECTION_RELA
-            and (section.entry_size != ELF_RELA_ENTRY_SIZE or section.size % ELF_RELA_ENTRY_SIZE != 0)
-        )
-    ]
+    if section_size != ELF_SECTION_HEADER_SIZE:
+        raise ValueError(f"the section headers are {section_size} bytes each, not {ELF_SECTION_HEADER_SIZE}")
 
-    if misplaced:
-        raise ValueError(f"sections {misplaced} run past the file's {len(binary)} bytes or misstate their entries")
+    sections = [elf_section(binary, section_table + index * section_size) for index in range(section_count)]
+    stored = sorted(
+        (section for section in sections if section.kind not in (ELF_SECTION_NULL, ELF_SECTION_NOBITS) and section.size),
+        key=lambda section: section.offset,
+    )
+    misshapen = [
+        section
+        for section in sections
+        if section.kind in ELF_ENTRY_SIZES
+        and (section.entry_size != ELF_ENTRY_SIZES[section.kind] or section.size % ELF_ENTRY_SIZES[section.kind] != 0)
+    ]
+    overlapping = [later for earlier, later in itertools.pairwise(stored) if earlier.offset + earlier.size > later.offset]
+
+    if stored and stored[-1].offset + stored[-1].size > len(binary):
+        raise ValueError(f"a section at {stored[-1].offset}+{stored[-1].size} runs past the file's {len(binary)} bytes")
+
+    if overlapping or misshapen:
+        raise ValueError(
+            f"sections at {[section.offset for section in overlapping]} overlap the section before them, and"
+            f" sections at {[section.offset for section in misshapen]} misstate their entry size"
+        )
 
     return sections
 
@@ -281,16 +293,23 @@ def elf_needed_versions(binary: bytes, sections: list[ElfSection]) -> frozenset[
 
 
 def elf_version_names(binary: bytes, needs: ElfSection) -> Iterator[int]:
-    chain = list(chained_entries(binary, needs, needs.offset, "<HHIII"))
-    declared = len(chain) + sum(version_count for _, (_, version_count, _, _, _) in chain)
+    slots = needs.size // ELF_VERSION_ENTRY_SIZE
+    walked = 0
+    declared = 0
 
-    if len(chain) != needs.info:
-        raise ValueError(f"the version-need section declares {needs.info} needs but chains {len(chain)}")
+    for need, (_, version_count, _, first_version, _) in chained_entries(binary, needs, needs.offset, "<HHIII"):
+        walked += 1
+        declared += 1 + version_count
 
-    if declared > needs.size // ELF_VERSION_ENTRY_SIZE:
-        raise ValueError(f"the version needs declare {declared} entries, more than their {needs.size} bytes hold")
+        if walked > needs.info or declared > slots:
+            raise ValueError(
+                f"the version needs outgrow their section: {walked} needs of {needs.info} declared,"
+                f" {declared} entries in {slots} slots"
+            )
 
-    for need, (_, version_count, _, first_version, _) in chain:
+        if first_version < ELF_VERSION_ENTRY_SIZE:
+            raise ValueError(f"the version need at {need} puts its first version {first_version} bytes in, inside itself")
+
         names = [
             name
             for _, (_, _, _, name, _) in itertools.islice(
@@ -298,13 +317,16 @@ def elf_version_names(binary: bytes, needs: ElfSection) -> Iterator[int]:
             )
         ]
 
-        if first_version < ELF_VERSION_ENTRY_SIZE or len(names) != version_count:
+        if len(names) != version_count:
             raise ValueError(
-                f"the version need at {need} declares {version_count} versions {first_version} bytes in,"
-                f" but chains {len(names)}"
+                f"the version need at {need} declares {version_count} versions but chains"
+                f" {'more' if len(names) > version_count else len(names)}"
             )
 
         yield from names
+
+    if walked != needs.info:
+        raise ValueError(f"the version-need section declares {needs.info} needs but chains {walked}")
 
 
 def chained_entries(
@@ -514,6 +536,11 @@ def wasm_byte(body: bytes | memoryview, offset: int) -> int:
     return body[offset]
 
 
+def wasm_skip(body: memoryview, offset: int, count: int) -> int:
+    wasm_byte(body, offset + count - 1)
+    return offset + count
+
+
 def wasm_limits(binary: memoryview, offset: int) -> tuple[int, int]:
     flags = wasm_byte(binary, offset)
     _, offset = leb128(binary, offset + 1)
@@ -552,7 +579,7 @@ def wasm_memories(binary: bytes) -> Iterator[int]:
                         flags, offset = wasm_limits(section.body, offset + 1)
                         yield flags
                     case WasmImport.GLOBAL:
-                        offset += 3
+                        offset = wasm_skip(section.body, offset, 3)
                     case WasmImport.TAG:
                         _, offset = leb128(section.body, offset + 2)
 

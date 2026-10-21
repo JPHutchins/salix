@@ -39,9 +39,9 @@ def wheel(where: Path, platform: str, payload_name: str, payload: bytes) -> Path
     return path
 
 
-def check(path: Path) -> subprocess.CompletedProcess[str]:
+def check(*paths: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, str(CHECK_WHEEL), str(path)],
+        [sys.executable, str(CHECK_WHEEL), *map(str, paths)],
         capture_output=True,
         encoding="utf-8",
         env={**os.environ, "PYTHONIOENCODING": "utf-8"},
@@ -109,6 +109,9 @@ def elf_module(
     needs_link: int = 2,
     last_name: int | None = None,
     relocation_entry_size: int = 24,
+    symbol_entry_size: int = 24,
+    section_header_size: int = 64,
+    duplicated_section: int | None = None,
 ) -> bytes:
     strings = b"\0" + b"".join(
         name.encode() + b"\0" for name in ("PyInit_salix", "ld-linux.so.2", "GLIBC_2.3", "libc.so.6", *versions)
@@ -145,20 +148,40 @@ def elf_module(
     relocations = b"".join(struct.pack("<QQq", 0, first_symbol | kind, 0) for kind in relocation_kinds)
     bodies = [symbols, strings, needs, relocations]
     starts = [64 + sum(len(body) for body in bodies[:index]) for index in range(len(bodies))]
-    section_headers = bytes(64) + b"".join(
+    headers = [
         struct.pack("<IIQQQQIIQQ", 0, kind, 0, 0, start, len(body), link, info, 8, entry_size)
         for (kind, link, info, entry_size), start, body in zip(
-            [(11, 2, 1, 24), (3, 0, 0, 0), (0x6FFFFFFE, needs_link, need_count, 0), (4, 1, 0, relocation_entry_size)],
+            [
+                (11, 2, 1, symbol_entry_size),
+                (3, 0, 0, 0),
+                (0x6FFFFFFE, needs_link, need_count, 0),
+                (4, 1, 0, relocation_entry_size),
+            ],
             starts,
             bodies,
             strict=True,
         )
-    )
+    ]
+    duplicates = [] if duplicated_section is None else [headers[duplicated_section - 1]]
+    section_headers = bytes(64) + b"".join(headers + duplicates)
     header = (
         b"\x7fELF\x02\x01\x01"
         + bytes(9)
         + struct.pack(
-            "<HHIQQQIHHHHHH", 3, machine, 1, 0, 0, starts[-1] + len(relocations), 0, 64, 0, 0, 64, len(bodies) + 1, 2
+            "<HHIQQQIHHHHHH",
+            3,
+            machine,
+            1,
+            0,
+            0,
+            starts[-1] + len(relocations),
+            0,
+            64,
+            0,
+            0,
+            section_header_size,
+            len(bodies) + 1 + len(duplicates),
+            2,
         )
     )
     return header + b"".join(bodies) + section_headers
@@ -224,7 +247,16 @@ WASM = ("pyemscripten_2026_0_wasm32", "salix/__init__.cpython-313-wasm32-emscrip
         (WASM, WASM_WITH_AN_ENDLESS_LEB128, "longer than 64 bits"),
         (WASM, WASM_WITH_AN_IMPORT_NAME_PAST_ITS_SECTION, "runs past its section's 3"),
         (WASM, wasm_exporting(*WASM_SIDE_MODULE_EXPORTS, memory=b""), "declares and imports no memory"),
-        (WASM, WASM_HEADER + WASM_MEMORY_IMPORT + wasm_section(7, wasm_name("PyInit_salix")), "runs past its section's"),
+        (
+            WASM,
+            WASM_HEADER + WASM_MEMORY_IMPORT + wasm_section(7, wasm_name("PyInit_salix")),
+            "a read at 14 runs past its section's 14 bytes",
+        ),
+        (
+            WASM,
+            WASM_HEADER + wasm_section(2, wasm_name("env") + wasm_name("g") + b"\x03"),
+            "a read at 9 runs past its section's 8 bytes",
+        ),
     ],
     ids=[
         "truncated-elf",
@@ -243,6 +275,7 @@ WASM = ("pyemscripten_2026_0_wasm32", "salix/__init__.cpython-313-wasm32-emscrip
         "wasm-import-name-past-its-section",
         "wasm-without-memory",
         "wasm-export-without-a-kind",
+        "wasm-global-import-without-its-type",
     ],
 )
 def test_a_payload_that_cannot_be_read_fails_that_wheel_cleanly(target, payload, reason, tmp_path):
@@ -319,13 +352,7 @@ def test_one_unreadable_wheel_does_not_hide_the_others(tmp_path):
     second.mkdir()
     unreadable = wheel(first, *ELF, ELF_MAGIC_ONLY)
     misshapen = wheel(second, *PE, TRUNCATED_ELF)
-    completed = subprocess.run(
-        [sys.executable, str(CHECK_WHEEL), str(unreadable), str(misshapen)],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=60,
-    )
+    completed = check(unreadable, misshapen)
 
     assert completed.returncode == 1
     assert completed.stdout.splitlines() == [f"FAIL {unreadable.name}", f"FAIL {misshapen.name}"]
@@ -371,15 +398,18 @@ def test_a_manylinux_module_needing_an_unnumbered_glibc_version_fails(version, t
 @pytest.mark.parametrize(
     ("overrides", "reason"),
     [
-        ({"need_count": 1}, "declares 1 needs but chains 2"),
+        ({"need_count": 1}, "2 needs of 1 declared"),
         ({"need_count": 0xFFFFFFFF}, "declares 4294967295 needs but chains 2"),
-        ({"versions": ("GLIBC_2.17", "GLIBC_2.3"), "version_count": 1}, "declares 1 versions 16 bytes in, but chains 2"),
-        ({"version_count": 0xFFFF}, "more than their 64 bytes hold"),
-        ({"first_version": 0}, "declares 1 versions 0 bytes in"),
+        ({"versions": ("GLIBC_2.17", "GLIBC_2.3"), "version_count": 1}, "declares 1 versions but chains more"),
+        ({"version_count": 0xFFFF}, "65538 entries in 4 slots"),
+        ({"first_version": 0}, "puts its first version 0 bytes in"),
         ({"last_next_need": 8}, "links 8 bytes ahead, into itself"),
         ({"needs_link": 3}, "is not a string in section 3"),
         ({"last_name": 10_000}, "name 10000 is not a string in section 2"),
-        ({"relocation_entry_size": 0}, "misstate their entries"),
+        ({"relocation_entry_size": 0}, "misstate their entry size"),
+        ({"symbol_entry_size": 0}, "misstate their entry size"),
+        ({"section_header_size": 0}, "the section headers are 0 bytes each, not 64"),
+        ({"duplicated_section": 3}, "overlap the section before them"),
     ],
     ids=[
         "need-count-under-the-chain",
@@ -391,6 +421,9 @@ def test_a_manylinux_module_needing_an_unnumbered_glibc_version_fails(version, t
         "needs-linked-to-themselves",
         "name-past-its-string-table",
         "relocations-without-an-entry-size",
+        "symbols-without-an-entry-size",
+        "section-headers-without-a-size",
+        "version-needs-listed-twice",
     ],
 )
 def test_a_version_need_or_relocation_section_that_misstates_itself_fails_that_wheel_cleanly(
