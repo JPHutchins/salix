@@ -360,9 +360,36 @@ static void test_the_metaclass_chain_holds_each_python_new_above_struct_meta(voi
 	Py_DECREF(metaclasses);
 }
 
+static void assert_declined(
+	PyObject * const fixtures,
+	char const * const chain,
+	char const * const keywords,
+	char const * const expected,
+	UNITY_LINE_TYPE const line
+) {
+	PyObject * declined = NULL;
+
+	assert_verdict(
+		(struct chain_verdict){.accepts_all = 0, .accepts_weakref = 1, .readable = true},
+		chain_probe(
+			testing_entry(fixtures, chain),
+			testing_entry(fixtures, keywords),
+			false,
+			&declined
+		),
+		line
+	);
+	UNITY_TEST_ASSERT_NOT_NULL(declined, line, chain);
+	UNITY_TEST_ASSERT_EQUAL_INT(
+		0,
+		PyUnicode_CompareWithASCIIString(declined, expected),
+		line,
+		expected
+	);
+}
+
 static void test_the_chain_probe_declines_a_positional_only_name(void) {
 	PyObject * const fixtures = testing_evaluate(probes_source);
-	PyObject * declined = NULL;
 
 	assert_verdict(
 		(struct chain_verdict){.accepts_all = 1, .accepts_weakref = 1, .readable = true},
@@ -374,18 +401,7 @@ static void test_the_chain_probe_declines_a_positional_only_name(void) {
 		),
 		__LINE__
 	);
-	assert_verdict(
-		(struct chain_verdict){.accepts_all = 0, .accepts_weakref = 1, .readable = true},
-		chain_probe(
-			testing_entry(fixtures, "positional_only"),
-			testing_entry(fixtures, "positional"),
-			false,
-			&declined
-		),
-		__LINE__
-	);
-	TEST_ASSERT_NOT_NULL(declined);
-	TEST_ASSERT_EQUAL_INT(0, PyUnicode_CompareWithASCIIString(declined, "a"));
+	assert_declined(fixtures, "positional_only", "positional", "a", __LINE__);
 
 	Py_DECREF(fixtures);
 }
@@ -453,63 +469,17 @@ static void test_the_weakref_column_reads_each_links_weakref_keyword(void) {
 
 static void test_the_chain_probe_names_the_first_declined_keyword(void) {
 	PyObject * const fixtures = testing_evaluate(probes_source);
-	PyObject * declined = NULL;
 
-	assert_verdict(
-		(struct chain_verdict){.accepts_all = 0, .accepts_weakref = 1, .readable = true},
-		chain_probe(
-			testing_entry(fixtures, "positional_only"),
-			testing_entry(fixtures, "unknowns_after_a_known"),
-			false,
-			&declined
-		),
-		__LINE__
-	);
-	TEST_ASSERT_NOT_NULL(declined);
-	TEST_ASSERT_EQUAL_INT(0, PyUnicode_CompareWithASCIIString(declined, "q"));
+	assert_declined(fixtures, "positional_only", "unknowns_after_a_known", "q", __LINE__);
 
 	Py_DECREF(fixtures);
-}
-
-static PyObject * declined_across(
-	PyObject * const fixtures,
-	char const * const chain,
-	UNITY_LINE_TYPE const line
-) {
-	PyObject * declined = NULL;
-
-	assert_verdict(
-		(struct chain_verdict){.accepts_all = 0, .accepts_weakref = 1, .readable = true},
-		chain_probe(
-			testing_entry(fixtures, chain),
-			testing_entry(fixtures, "b_and_q"),
-			false,
-			&declined
-		),
-		line
-	);
-	UNITY_TEST_ASSERT_NOT_NULL(declined, line, chain);
-
-	return declined;
 }
 
 static void test_across_links_the_last_declining_link_names_its_keyword(void) {
 	PyObject * const fixtures = testing_evaluate(probes_source);
 
-	TEST_ASSERT_EQUAL_INT(
-		0,
-		PyUnicode_CompareWithASCIIString(
-			declined_across(fixtures, "declines_q_then_b", __LINE__),
-			"b"
-		)
-	);
-	TEST_ASSERT_EQUAL_INT(
-		0,
-		PyUnicode_CompareWithASCIIString(
-			declined_across(fixtures, "declines_b_then_q", __LINE__),
-			"q"
-		)
-	);
+	assert_declined(fixtures, "declines_q_then_b", "b_and_q", "b", __LINE__);
+	assert_declined(fixtures, "declines_b_then_q", "b_and_q", "q", __LINE__);
 
 	Py_DECREF(fixtures);
 }
