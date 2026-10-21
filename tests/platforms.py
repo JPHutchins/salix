@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 import textwrap
+from pathlib import Path
 
 import pytest
 
@@ -27,7 +28,7 @@ adds_to_copy_atomic_types_in_place = pytest.mark.skipif(
     not isinstance(COPY_ATOMIC_TYPES, set), reason="copy._atomic_types is a mutable set on 3.14 only"
 )
 
-TESTS_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
+TESTS_DIRECTORY = str(Path(__file__).resolve().parent)
 
 
 def printed_by_a_fresh_interpreter(probe: str, *, imports_test_helpers: bool = False) -> str:
