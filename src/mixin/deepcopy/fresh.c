@@ -59,10 +59,6 @@ static PyObject * proven_copy(PyObject * * const copied, enum keeps_identity con
 }
 
 static PyObject * list_of_identities(PyObject * const tables, PyObject * const value) {
-	if (route_of(tables, value) != DEEP_ROUTE_LIST) {
-		return NULL;
-	}
-
 	PY_MOVABLE(copied, PyList_GetSlice(value, 0, PY_SSIZE_T_MAX));
 
 	return copied != NULL ? proven_copy(&copied, every_item_keeps_identity(tables, copied)) : NULL;
@@ -79,10 +75,6 @@ static int table_entry_is(
 }
 
 static PyObject * dict_of_identities(PyObject * const tables, PyObject * const value) {
-	if (route_of(tables, value) != DEEP_ROUTE_COPY_MODULE) {
-		return NULL;
-	}
-
 	PyObject * const dict_copier = PyTuple_GET_ITEM(tables, DEEPCOPY_DICT);
 	PyObject * const dispatch = PyTuple_GET_ITEM(tables, DEEPCOPY_DISPATCH);
 	int const stdlib_copier = (
@@ -134,10 +126,6 @@ static int set_reduces_through_the_stdlib(PyObject * const tables) {
 }
 
 static PyObject * set_of_identities(PyObject * const tables, PyObject * const value) {
-	if (route_of(tables, value) != DEEP_ROUTE_COPY_MODULE) {
-		return NULL;
-	}
-
 	int const reduces = set_reduces_through_the_stdlib(tables);
 
 	if (reduces <= 0) {
@@ -200,20 +188,24 @@ static bool containers_alias(StructType const * const type, PyObject * const ins
 	return false;
 }
 
-static PyObject * plain_field_copy(PyObject * const tables, PyObject * const field) {
-	switch (item_keeps_identity(tables, field)) {
+static PyObject * identities_of(
+	PyObject * const tables,
+	PyObject * const value,
+	enum deep_route const route
+) {
+	switch (route_keeps_identity(route)) {
 		case KEEPS_IDENTITY_ERROR:
 			return NULL;
 		case KEEPS_IDENTITY_PROVEN:
-			return Py_NewRef(field);
+			return Py_NewRef(value);
 		case KEEPS_IDENTITY_UNPROVEN:
 			break;
 	}
 
 	return (
-		PyList_CheckExact(field) ? list_of_identities(tables, field) :
-		PyDict_CheckExact(field) ? dict_of_identities(tables, field) :
-		PySet_CheckExact(field) ? set_of_identities(tables, field) :
+		route == DEEP_ROUTE_LIST ? list_of_identities(tables, value) :
+		PyDict_CheckExact(value) ? dict_of_identities(tables, value) :
+		PySet_CheckExact(value) ? set_of_identities(tables, value) :
 		NULL
 	);
 }
@@ -258,7 +250,7 @@ static PyObject * plain_struct_copy(PyObject * const tables, PyObject * const va
 			continue;
 		}
 
-		PyObject * const copied = plain_field_copy(tables, field);
+		PyObject * const copied = identities_of(tables, field, route_of(tables, field));
 
 		if (copied == NULL) {
 			return NULL;
@@ -276,9 +268,11 @@ static PyObject * struct_of_identities(
 	PyObject * const value
 ) {
 	PyTypeObject * const cls = Py_TYPE(value);
-	PyObject * const dispatch = PyTuple_GET_ITEM(tables, DEEPCOPY_DISPATCH);
-	bool const reaches_copy_module = route_of(tables, value) == DEEP_ROUTE_COPY_MODULE;
-	int const unregistered = reaches_copy_module ? table_entry_is(dispatch, cls, Py_None) : 0;
+	int const unregistered = table_entry_is(
+		PyTuple_GET_ITEM(tables, DEEPCOPY_DISPATCH),
+		cls,
+		Py_None
+	);
 
 	if (
 		unregistered <= 0 ||
@@ -316,11 +310,12 @@ PyObject * fresh_deepcopy(
 		return NULL;
 	}
 
+	enum deep_route const route = route_of(tables, value);
+
 	return (
-		PyList_CheckExact(value) ? list_of_identities(tables, value) :
-		PyDict_CheckExact(value) ? dict_of_identities(tables, value) :
-		PySet_CheckExact(value) ? set_of_identities(tables, value) :
-		is_struct(value) ? struct_of_identities(state, tables, value) :
-		NULL
+		route == DEEP_ROUTE_COPY_MODULE && is_struct(
+			value
+		) ? struct_of_identities(state, tables, value) :
+		identities_of(tables, value, route)
 	);
 }
