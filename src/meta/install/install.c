@@ -25,37 +25,7 @@ static Py_ssize_t * resolve_member_offsets(
 	Py_ssize_t * member_count
 );
 
-static enum parameter_kind * parameter_kinds_of(PyObject * const init_var_flags) {
-	Py_ssize_t const parameter_count = PyTuple_GET_SIZE(init_var_flags);
-	enum parameter_kind * const kinds = PyMem_New(enum parameter_kind, parameter_count);
-
-	if (kinds == NULL) {
-		PyErr_NoMemory();
-
-		return NULL;
-	}
-
-	for (Py_ssize_t i = 0; i < parameter_count; i += 1) {
-		kinds[i] = (
-			PyTuple_GET_ITEM(init_var_flags, i) == Py_True ? PARAMETER_INIT_VAR :
-			PARAMETER_FIELD
-		);
-	}
-
-	return kinds;
-}
-
-enum result install_parameters(StructType * const struct_class, struct field_plan * const plan) {
-	Py_ssize_t const init_var_count = PyTuple_GET_SIZE(plan->init_var_names);
-	enum parameter_kind * const kinds = (
-		init_var_count > 0 ? parameter_kinds_of(plan->init_var_flags) :
-		NULL
-	);
-
-	if (init_var_count > 0 && kinds == NULL) {
-		return RESULT_ERROR;
-	}
-
+void install_parameters(StructType * const struct_class, struct field_plan * const plan) {
 	PyObject * const replaced_tables[] = {
 		struct_class->struct_defaults,
 		struct_class->struct_annotations,
@@ -71,7 +41,7 @@ enum result install_parameters(StructType * const struct_class, struct field_pla
 	void * const replaced_arrays[] = {
 		struct_class->struct_field_default_indices,
 		struct_class->struct_init_var_default_indices,
-		struct_class->struct_parameter_kinds,
+		struct_class->struct_parameter_shapes,
 	};
 
 	struct_class->struct_defaults = Py_NewRef(plan->defaults);
@@ -84,12 +54,14 @@ enum result install_parameters(StructType * const struct_class, struct field_pla
 	struct_class->struct_init_var_annotations = Py_NewRef(plan->init_var_annotations);
 	struct_class->struct_declared_names = Py_NewRef(plan->declared_names);
 	struct_class->struct_class_var_positions = Py_XNewRef(plan->class_var_positions);
-	struct_class->struct_parameter_kinds = kinds;
-	struct_class->struct_init_var_count = init_var_count;
+	struct_class->struct_parameter_shapes = plan->parameter_shapes;
+	struct_class->struct_positional_count = plan->positional_count;
+	struct_class->struct_init_var_count = PyTuple_GET_SIZE(plan->init_var_names);
 	struct_class->struct_field_records = NULL;
 	struct_class->struct_signature = NULL;
 	plan->field_default_indices = NULL;
 	plan->init_var_default_indices = NULL;
+	plan->parameter_shapes = NULL;
 
 	for (size_t i = 0; i < Py_ARRAY_LENGTH(replaced_arrays); i += 1) {
 		PyMem_Free(replaced_arrays[i]);
@@ -98,8 +70,6 @@ enum result install_parameters(StructType * const struct_class, struct field_pla
 	for (size_t i = 0; i < Py_ARRAY_LENGTH(replaced_tables); i += 1) {
 		Py_XDECREF(replaced_tables[i]);
 	}
-
-	return RESULT_OK;
 }
 
 enum result install_fields(
@@ -133,29 +103,16 @@ enum result install_fields(
 		return RESULT_ERROR;
 	}
 
-	enum result installed = RESULT_ERROR;
-
 	STRUCT_BEGIN_CRITICAL_SECTION(struct_class);
-	installed = install_parameters(struct_class, plan);
-
-	if (installed == RESULT_OK) {
-		struct_class->struct_field_names = py_move(&field_names);
-		struct_class->struct_slot_offsets = offsets;
-		struct_class->struct_member_offsets = member_offsets;
-		struct_class->struct_member_count = member_count;
-		struct_class->struct_field_count = field_count;
-		struct_class->struct_options = options;
-		struct_class->struct_resolves_body_eq = resolves_body_eq;
-	}
-
+	install_parameters(struct_class, plan);
+	struct_class->struct_field_names = py_move(&field_names);
+	struct_class->struct_slot_offsets = offsets;
+	struct_class->struct_member_offsets = member_offsets;
+	struct_class->struct_member_count = member_count;
+	struct_class->struct_field_count = field_count;
+	struct_class->struct_options = options;
+	struct_class->struct_resolves_body_eq = resolves_body_eq;
 	STRUCT_END_CRITICAL_SECTION();
-
-	if (installed != RESULT_OK) {
-		PyMem_Free(member_offsets);
-		PyMem_Free(offsets);
-
-		return RESULT_ERROR;
-	}
 
 	return RESULT_OK;
 }

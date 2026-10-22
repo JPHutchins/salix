@@ -117,6 +117,17 @@ bool init_var_top_level(PyObject * const annotation, struct form_probes const * 
 	);
 }
 
+bool marks_keyword_only(PyObject * const annotation, struct form_probes const * const probes) {
+	if (PyUnicode_Check(annotation)) {
+		return (
+			probes->keyword_only_marker_name != NULL &&
+			names_form_at_top(annotation, probes->keyword_only_marker_name)
+		);
+	}
+
+	return probes->keyword_only_marker != NULL && annotation == probes->keyword_only_marker;
+}
+
 struct special_form special_form_of(
 	PyObject * const annotation,
 	struct form_probes const * const probes

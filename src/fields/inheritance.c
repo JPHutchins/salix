@@ -101,7 +101,12 @@ enum result append_inherited(
 			continue;
 		}
 
-		switch (struct_parameter_kind(base, entry - placeholder_index)) {
+		struct parameter_shape const shape = struct_parameter_shape(
+			base,
+			entry - placeholder_index
+		);
+
+		switch (shape.kind) {
 			case PARAMETER_FIELD: {
 				PyObject * const field_name = PyTuple_GET_ITEM(
 					base->struct_field_names,
@@ -124,6 +129,11 @@ enum result append_inherited(
 							field_name,
 							struct_field_default(base, field_index)
 						) != RESULT_OK
+					) ||
+					(
+						shape.keyword_only &&
+						parameters->keyword_only_names != NULL &&
+						PySet_Add(parameters->keyword_only_names, field_name) < 0
 					)
 				) {
 					return RESULT_ERROR;
@@ -153,6 +163,11 @@ enum result append_inherited(
 							init_var_name,
 							struct_init_var_default(base, init_var_index)
 						) != RESULT_OK
+					) ||
+					(
+						shape.keyword_only &&
+						parameters->keyword_only_names != NULL &&
+						PySet_Add(parameters->keyword_only_names, init_var_name) < 0
 					)
 				) {
 					return RESULT_ERROR;

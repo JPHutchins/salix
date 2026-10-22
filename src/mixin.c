@@ -137,7 +137,8 @@ static PyObject * signature_from_tables(
 	StructType const * const type,
 	PyObject * const parameter_type,
 	PyObject * const signature_type,
-	PyObject * const kind,
+	PyObject * const positional_kind,
+	PyObject * const keyword_only_kind,
 	PyObject * const empty
 ) {
 	PY_OWNED(parameters, PyList_New(struct_parameter_count(type)));
@@ -148,9 +149,12 @@ static PyObject * signature_from_tables(
 
 	Py_ssize_t field_index = 0;
 	Py_ssize_t init_var_index = 0;
+	Py_ssize_t next_positional = 0;
+	Py_ssize_t next_keyword_only = type->struct_positional_count;
 
 	for (Py_ssize_t position = 0; position < struct_parameter_count(type); position += 1) {
-		bool const init_var = struct_parameter_kind(type, position) == PARAMETER_INIT_VAR;
+		struct parameter_shape const shape = struct_parameter_shape(type, position);
+		bool const init_var = shape.kind == PARAMETER_INIT_VAR;
 		Py_ssize_t const index = init_var ? init_var_index : field_index;
 		PyObject * const declared = (
 			init_var ? struct_init_var_default(type, index) :
@@ -164,7 +168,7 @@ static PyObject * signature_from_tables(
 					init_var ? type->struct_init_var_names : type->struct_field_names,
 					index
 				),
-				kind
+				shape.keyword_only ? keyword_only_kind : positional_kind
 			)
 		);
 		PY_OWNED(keywords, PyDict_New());
@@ -195,7 +199,11 @@ static PyObject * signature_from_tables(
 			return NULL;
 		}
 
-		PyList_SET_ITEM(parameters, position, py_move(&parameter));
+		PyList_SET_ITEM(
+			parameters,
+			shape.keyword_only ? next_keyword_only++ : next_positional++,
+			py_move(&parameter)
+		);
 		init_var_index += init_var ? 1 : 0;
 		field_index += init_var ? 0 : 1;
 	}
@@ -390,9 +398,10 @@ PyObject * Struct_get_signature(PyObject * const self, void * const closure) {
 	}
 
 	PY_OWNED(kind, PyObject_GetAttrString(parameter_type, "POSITIONAL_OR_KEYWORD"));
+	PY_OWNED(keyword_only_kind, PyObject_GetAttrString(parameter_type, "KEYWORD_ONLY"));
 	PY_OWNED(empty, PyObject_GetAttrString(parameter_type, "empty"));
 
-	if (kind == NULL || empty == NULL) {
+	if (kind == NULL || keyword_only_kind == NULL || empty == NULL) {
 		return NULL;
 	}
 
@@ -401,7 +410,7 @@ PyObject * Struct_get_signature(PyObject * const self, void * const closure) {
 	STRUCT_BEGIN_CRITICAL_SECTION(type);
 	signature = (
 		type->struct_signature != NULL ? Py_NewRef(type->struct_signature) :
-		signature_from_tables(type, parameter_type, signature_type, kind, empty)
+		signature_from_tables(type, parameter_type, signature_type, kind, keyword_only_kind, empty)
 	);
 
 	if (signature != NULL && type->struct_signature == NULL) {

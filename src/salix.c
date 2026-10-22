@@ -9,6 +9,7 @@
 #define SALIX_STRINGIZE(version) SALIX_STRINGIZE_INNER(version)
 
 #include "construct.h"
+#include "fields.h"
 #include "introspection.h"
 #include "meta/settle/settle.h"
 #include "meta.h"
@@ -67,6 +68,12 @@ static PyMethodDef struct_functions[] = {
 		.ml_meth = Struct_to_dict,
 		.ml_flags = METH_O,
 		.ml_doc = "to_dict(instance) -- the struct's set fields, by name, in declaration order.",
+	},
+	{
+		.ml_name = "field",
+		.ml_meth = (PyCFunction)(void (*)(void)) Struct_field_specifier,
+		.ml_flags = METH_VARARGS | METH_KEYWORDS,
+		.ml_doc = "field(*, default, kw_only) -- one field's default and keyword-only choice.",
 	},
 	{.ml_name = NULL},
 };
@@ -247,6 +254,7 @@ static int struct_exec(PyObject * const module) {
 		pickle_cache_fill(state) != RESULT_OK ||
 		copy_cache_fill(state) != RESULT_OK ||
 		introspection_install(module, state) != RESULT_OK ||
+		field_specifier_install() != RESULT_OK ||
 		add_frozen_instance_error(module, state) != RESULT_OK
 	) {
 		return RESULT_ERROR;

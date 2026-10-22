@@ -10,6 +10,7 @@ struct options {
 	bool repr;
 	bool match_args;
 	bool weakref;
+	bool kw_only;
 };
 
 struct options_request {
@@ -27,6 +28,7 @@ enum option {
 	OPTION_REPR,
 	OPTION_MATCH_ARGS,
 	OPTION_WEAKREF,
+	OPTION_KW_ONLY,
 };
 
 extern char const * const option_keywords[];
@@ -39,6 +41,7 @@ static inline struct options options_initial(void) {
 		.repr = true,
 		.match_args = true,
 		.weakref = false,
+		.kw_only = false,
 	};
 }
 

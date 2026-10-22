@@ -11,7 +11,7 @@ static PyObject * interned_value(StructType const * const type, bool const no_ar
 	return (singleton != NULL && no_arguments) ? Py_NewRef(singleton) : NULL;
 }
 
-static PyObject * construct_with_init_vars(
+static PyObject * construct_by_parameter_table(
 	StructType * const type,
 	PyObject * const * const arguments,
 	Py_ssize_t const positional_count,
@@ -114,12 +114,12 @@ PyObject * Struct_vectorcall(
 	StructType * const type = (StructType *) struct_class;
 	Py_ssize_t const positional_count = PyVectorcall_NARGS(argument_count_and_flags);
 
-	if (positional_count > struct_parameter_count(type)) {
+	if (positional_count > type->struct_positional_count) {
 		PyErr_Format(
 			PyExc_TypeError,
 			"%.200s() takes at most %zd positional arguments but %zd were given",
 			struct_type_name(type),
-			struct_parameter_count(type),
+			type->struct_positional_count,
 			positional_count
 		);
 
@@ -151,8 +151,8 @@ PyObject * Struct_vectorcall(
 		return NULL;
 	}
 
-	if (type->struct_init_var_count > 0) {
-		return construct_with_init_vars(type, arguments, positional_count, keyword_names);
+	if (type->struct_parameter_shapes != NULL) {
+		return construct_by_parameter_table(type, arguments, positional_count, keyword_names);
 	}
 
 	PY_MOVABLE(self, NULL);

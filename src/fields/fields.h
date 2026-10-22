@@ -17,8 +17,10 @@ struct special_form {
 struct form_probes {
 	PyObject * class_var;
 	PyObject * init_var;
+	PyObject * keyword_only_marker;
 	PyObject * class_var_name;
 	PyObject * init_var_name;
+	PyObject * keyword_only_marker_name;
 };
 
 PyObject * module_attribute(char const * module_name, char const * attribute);
@@ -28,6 +30,8 @@ struct special_form special_form_of(PyObject * annotation, struct form_probes co
 bool class_var_top_level(PyObject * annotation, struct form_probes const * probes);
 
 bool init_var_top_level(PyObject * annotation, struct form_probes const * probes);
+
+bool marks_keyword_only(PyObject * annotation, struct form_probes const * probes);
 
 extern struct special_form const CLASS_VAR_FORM;
 extern struct special_form const INIT_VAR_FORM;
@@ -48,6 +52,7 @@ struct parameter_lists {
 	PyObject * init_var_flags;
 	PyObject * annotations;
 	PyObject * metadata;
+	PyObject * keyword_only_names;
 };
 
 enum result refuse_reserved_name(PyObject * field_name);
@@ -92,5 +97,6 @@ enum result append_declared(
 	PyObject * new_names,
 	PyObject * default_by_name,
 	PyObject * mro_default_names,
-	PyObject * empty_extras
+	PyObject * empty_extras,
+	bool class_keyword_only
 );

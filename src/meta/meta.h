@@ -153,9 +153,7 @@ extern char const * const rebind_hash[];
 
 PyObject * build_class_namespace(
 	PyObject * original_namespace,
-	PyObject * all_names,
-	PyObject * parameter_names,
-	PyObject * new_names,
+	struct field_plan const * plan,
 	struct options options,
 	StructType const * base,
 	bool adds_weakref_slot,
@@ -192,7 +190,7 @@ enum result refuse_unreachable_parameters(
 	PyObject * bases,
 	PyTypeObject * winner,
 	StructType const * base,
-	PyObject * init_var_names
+	struct field_plan const * plan
 );
 
 PyObject * build_struct_class(
@@ -211,7 +209,7 @@ enum result install_fields(
 	struct options options,
 	bool resolves_body_eq
 );
-enum result install_parameters(StructType * struct_class, struct field_plan * plan);
+void install_parameters(StructType * struct_class, struct field_plan * plan);
 enum result install_post_init(StructType * struct_class);
 enum result ensure_singleton(
 	StructType * struct_class,

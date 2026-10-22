@@ -33,6 +33,7 @@ BUILD: Final = BuildConfig(
         "src/fields/inheritance.c",
         "src/fields/declarations.c",
         "src/fields/forms.c",
+        "src/fields/specifier.c",
         "src/hash.c",
         "src/introspection.c",
         "src/meta/meta.c",

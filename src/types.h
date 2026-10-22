@@ -20,6 +20,21 @@ enum parameter_kind : unsigned char {
 	PARAMETER_INIT_VAR,
 };
 
+struct parameter_shape {
+	enum parameter_kind kind;
+	bool keyword_only;
+};
+
+static inline struct parameter_shape parameter_shape_at(
+	struct parameter_shape const * const shapes,
+	Py_ssize_t const position
+) {
+	return (
+		shapes != NULL ? shapes[position] :
+		(struct parameter_shape){.kind = PARAMETER_FIELD, .keyword_only = false}
+	);
+}
+
 typedef struct StructType {
 	PyHeapTypeObject heap_type;
 	struct salix_state * struct_state;
@@ -39,13 +54,14 @@ typedef struct StructType {
 	PyObject * struct_init_var_annotations;
 	PyObject * struct_declared_names;
 	PyObject * struct_class_var_positions;
-	enum parameter_kind * struct_parameter_kinds;
+	struct parameter_shape * struct_parameter_shapes;
 	Py_ssize_t * struct_field_default_indices;
 	Py_ssize_t * struct_init_var_default_indices;
 
 	Py_ssize_t struct_field_count;
 	Py_ssize_t struct_member_count;
 	Py_ssize_t struct_init_var_count;
+	Py_ssize_t struct_positional_count;
 	struct options struct_options;
 
 	bool struct_resolves_body_eq;
@@ -401,14 +417,18 @@ static inline Py_ssize_t struct_parameter_count(StructType const * const type) {
 	return type->struct_field_count + type->struct_init_var_count;
 }
 
+static inline struct parameter_shape struct_parameter_shape(
+	StructType const * const type,
+	Py_ssize_t const position
+) {
+	return parameter_shape_at(type->struct_parameter_shapes, position);
+}
+
 static inline enum parameter_kind struct_parameter_kind(
 	StructType const * const type,
 	Py_ssize_t const position
 ) {
-	return (
-		type->struct_parameter_kinds != NULL ? type->struct_parameter_kinds[position] :
-		PARAMETER_FIELD
-	);
+	return struct_parameter_shape(type, position).kind;
 }
 
 enum struct_creation_stage : int {

@@ -1,4 +1,4 @@
-from dataclasses import InitVar
+from dataclasses import KW_ONLY, InitVar
 from typing import Any, ClassVar, Generic, Literal, Protocol, TypeVar
 
 from typing_extensions import assert_type
@@ -8,6 +8,7 @@ from salix import (
     Field,
     FrozenInstanceError,
     Struct,
+    field,
     fields,
     from_mapping,
     replace,
@@ -70,6 +71,23 @@ class Options(Struct, eq=True, repr=False, match_args=False, weakref=True):
     value: int
 
 
+class KeywordOnly(Struct, kw_only=True):
+    x: int
+    y: str = "y"
+
+
+class AfterTheMarker(Struct):
+    x: int = 1
+    _: KW_ONLY
+    y: int
+
+
+class OneKeywordOnlyField(Struct):
+    x: int = 1
+    y: int = field(kw_only=True)
+    z: str = field(default="z")
+
+
 def the_constructor_is_synthesised_from_the_annotations() -> None:
     assert_type(Point(1, "two").x, int)
     assert_type(Point(1, "two").y, str)
@@ -90,6 +108,13 @@ def a_class_var_is_a_class_attribute_and_not_a_constructor_argument() -> None:
 def an_init_var_is_a_constructor_argument_and_not_a_field() -> None:
     assert_type(Seeded(1, 2).a, int)
     assert_type(Seeded(a=1, seed=2), Seeded)
+
+
+def a_keyword_only_field_is_passed_by_name() -> None:
+    assert_type(KeywordOnly(x=1).y, str)
+    assert_type(AfterTheMarker(2, y=3).y, int)
+    assert_type(OneKeywordOnlyField(y=2).z, str)
+    assert_type(OneKeywordOnlyField(3, "w", y=2), OneKeywordOnlyField)
 
 
 def a_mutable_struct_accepts_a_write() -> None:
