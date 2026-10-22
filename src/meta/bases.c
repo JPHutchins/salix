@@ -221,30 +221,24 @@ static struct declarer unreachable_declarer(
 }
 
 static enum result refuse_keyword_only_exception_field(struct field_plan const * const plan) {
-	for (Py_ssize_t i = 0; i < PyList_GET_SIZE(plan->parameter_names); i += 1) {
-		PyObject * const name = PyList_GET_ITEM(plan->parameter_names, i);
-		int const keyword_only = PySet_Contains(plan->keyword_only_names, name);
-
-		if (keyword_only != 0) {
-			if (keyword_only == 1) {
-				PyErr_Format(
-					PyExc_TypeError,
-					"an exception struct cannot take keyword-only field '%U': "
-					"its args are built from its fields",
-					name
-				);
-			}
+	for (
+		Py_ssize_t position = 0;
+		position < PyList_GET_SIZE(plan->parameter_names);
+		position += 1
+	) {
+		if (parameter_shape_at(plan->parameter_shapes, position).keyword_only) {
+			PyErr_Format(
+				PyExc_TypeError,
+				"an exception struct cannot take keyword-only field '%U': "
+				"its args are built from its fields",
+				PyList_GET_ITEM(plan->parameter_names, position)
+			);
 
 			return RESULT_ERROR;
 		}
 	}
 
-	PyErr_SetString(
-		PyExc_SystemError,
-		"salix internal error: a keyword-only count names no keyword-only parameter"
-	);
-
-	return RESULT_ERROR;
+	return RESULT_OK;
 }
 
 enum result refuse_unreachable_parameters(
@@ -270,8 +264,8 @@ enum result refuse_unreachable_parameters(
 			return RESULT_ERROR;
 		}
 
-		if (exception_base && PySet_GET_SIZE(plan->keyword_only_names) > 0) {
-			return refuse_keyword_only_exception_field(plan);
+		if (exception_base && refuse_keyword_only_exception_field(plan) != RESULT_OK) {
+			return RESULT_ERROR;
 		}
 
 		if (

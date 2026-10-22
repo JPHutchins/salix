@@ -132,6 +132,7 @@ enum result append_inherited(
 					) ||
 					(
 						shape.keyword_only &&
+						parameters->keyword_only_names != NULL &&
 						PySet_Add(parameters->keyword_only_names, field_name) < 0
 					)
 				) {
@@ -165,6 +166,7 @@ enum result append_inherited(
 					) ||
 					(
 						shape.keyword_only &&
+						parameters->keyword_only_names != NULL &&
 						PySet_Add(parameters->keyword_only_names, init_var_name) < 0
 					)
 				) {
@@ -208,7 +210,6 @@ static enum result record_merged_order(
 	PY_OWNED(annotations, PyList_New(0));
 	PY_OWNED(metadata, PyList_New(0));
 	PY_OWNED(default_by_name, PyDict_New());
-	PY_OWNED(keyword_only_names, PySet_New(NULL));
 
 	if (
 		names == NULL ||
@@ -216,7 +217,6 @@ static enum result record_merged_order(
 		annotations == NULL ||
 		metadata == NULL ||
 		default_by_name == NULL ||
-		keyword_only_names == NULL ||
 		(
 			append_inherited(
 				struct_base,
@@ -225,7 +225,6 @@ static enum result record_merged_order(
 					.init_var_flags = init_var_flags,
 					.annotations = annotations,
 					.metadata = metadata,
-					.keyword_only_names = keyword_only_names,
 				},
 				default_by_name,
 				empty_extras

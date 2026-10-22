@@ -25,6 +25,16 @@ struct parameter_shape {
 	bool keyword_only;
 };
 
+static inline struct parameter_shape parameter_shape_at(
+	struct parameter_shape const * const shapes,
+	Py_ssize_t const position
+) {
+	return (
+		shapes != NULL ? shapes[position] :
+		(struct parameter_shape){.kind = PARAMETER_FIELD, .keyword_only = false}
+	);
+}
+
 typedef struct StructType {
 	PyHeapTypeObject heap_type;
 	struct salix_state * struct_state;
@@ -411,10 +421,7 @@ static inline struct parameter_shape struct_parameter_shape(
 	StructType const * const type,
 	Py_ssize_t const position
 ) {
-	return (
-		type->struct_parameter_shapes != NULL ? type->struct_parameter_shapes[position] :
-		(struct parameter_shape){.kind = PARAMETER_FIELD, .keyword_only = false}
-	);
+	return parameter_shape_at(type->struct_parameter_shapes, position);
 }
 
 static inline enum parameter_kind struct_parameter_kind(

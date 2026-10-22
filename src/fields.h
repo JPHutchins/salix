@@ -14,6 +14,7 @@ struct field_plan {
 	PyObject * annotations;
 	PyObject * metadata;
 	PyObject * parameter_names;
+	PyObject * positional_names;
 	PyObject * init_var_flags;
 	PyObject * init_var_names;
 	PyObject * init_var_defaults;
@@ -24,7 +25,8 @@ struct field_plan {
 	PyObject * class_var_positions;
 	PyObject * mro_default_names;
 	PyObject * default_by_name;
-	PyObject * keyword_only_names;
+	struct parameter_shape * parameter_shapes;
+	Py_ssize_t positional_count;
 	PyObject * missing;
 };
 
@@ -55,7 +57,6 @@ void field_plan_clear(struct field_plan * plan);
 PyObject * Struct_field_specifier(PyObject * module, PyObject * arguments, PyObject * keywords);
 struct field_specifier field_specifier_of(PyObject * value);
 enum result field_specifier_install(void);
-PyObject * positional_parameter_names(struct field_plan const * plan);
 
 extern char const * const reserved_metadata_names[];
 char const * reserved_metadata_name_of(PyObject * name);
@@ -65,6 +66,6 @@ static inline bool field_plan_failed(struct field_plan const * const plan) {
 		plan->all_names == NULL ||
 		plan->declared_names == NULL ||
 		plan->declared_annotations == NULL ||
-		plan->keyword_only_names == NULL
+		plan->positional_names == NULL
 	);
 }

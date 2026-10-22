@@ -226,9 +226,8 @@ enum result settle_planned(
 	bool const derive_not_equal
 ) {
 	PY_OWNED(planned, PyList_AsTuple(plan->all_names));
-	PY_OWNED(planned_parameters, positional_parameter_names(plan));
 
-	if (planned == NULL || planned_parameters == NULL) {
+	if (planned == NULL) {
 		return RESULT_ERROR;
 	}
 
@@ -432,7 +431,7 @@ enum result settle_planned(
 	}
 
 	if (bindings.match_args_wanted) {
-		if (PyDict_SetItemString(class_dict, "__match_args__", planned_parameters) < 0) {
+		if (PyDict_SetItemString(class_dict, "__match_args__", plan->positional_names) < 0) {
 			return RESULT_ERROR;
 		}
 	} else {
@@ -453,15 +452,9 @@ enum result settle_planned(
 		}
 	}
 
-	enum result installed = RESULT_ERROR;
-
 	STRUCT_BEGIN_CRITICAL_SECTION(struct_class);
-	installed = install_parameters(struct_class, plan);
+	install_parameters(struct_class, plan);
 	STRUCT_END_CRITICAL_SECTION();
-
-	if (installed != RESULT_OK) {
-		return RESULT_ERROR;
-	}
 
 	struct_class->struct_options = options;
 	struct_class->struct_resolves_body_eq = body_defines_eq || inherits_body_eq;

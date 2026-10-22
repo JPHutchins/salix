@@ -315,6 +315,28 @@ def test_field_is_refused_where_it_cannot_describe_a_field() -> None:
             y = field(default=1)
 
 
+def test_a_kw_only_marker_bound_to_field_keeps_the_value_as_stock_does() -> None:
+    bound = field(default=5)
+
+    class Bound(Struct):
+        a: int
+        _: KW_ONLY = bound
+        b: int
+
+    @dataclasses.dataclass
+    class StockBound:
+        a: int
+        _: KW_ONLY = dataclasses.field(default=5)
+        b: int
+
+    def kinds(cls: type) -> list[tuple[str, inspect._ParameterKind]]:
+        return [(parameter.name, parameter.kind) for parameter in inspect.signature(cls).parameters.values()]
+
+    assert kinds(Bound) == kinds(StockBound)
+    assert vars(Bound)["_"] is bound
+    assert isinstance(vars(StockBound)["_"], dataclasses.Field)
+
+
 def test_field_rebinding_an_inherited_field_needs_its_annotation() -> None:
     class Base(Struct):
         x: int

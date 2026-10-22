@@ -268,13 +268,11 @@ static enum result set_match_args(
 		return RESULT_OK;
 	}
 
-	PY_OWNED(match_args, positional_parameter_names(plan));
-
 	return (
-		match_args != NULL && PyDict_SetItemString(
+		PyDict_SetItemString(
 			namespace,
 			"__match_args__",
-			match_args
+			plan->positional_names
 		) == 0 ? RESULT_OK :
 		RESULT_ERROR
 	);
@@ -488,12 +486,16 @@ static enum result unwrap_field_specifiers(
 		}
 
 		int const parameter = PySequence_Contains(plan->parameter_names, name);
+		int const annotated = (
+			parameter != 0 ? parameter :
+			PyDict_Contains(plan->declared_annotations, name)
+		);
 
-		if (parameter < 0) {
+		if (annotated < 0) {
 			return RESULT_ERROR;
 		}
 
-		if (parameter == 0) {
+		if (annotated == 0) {
 			PyErr_Format(
 				PyExc_TypeError,
 				"'%U' is bound to field(), so it needs an annotation that makes it a field",
@@ -504,12 +506,15 @@ static enum result unwrap_field_specifiers(
 		}
 
 		if (
-			specifier.default_value != NULL ? PyDict_SetItem(
-				namespace,
-				name,
-				specifier.default_value
-			) < 0 :
-			PyDict_DelItem(namespace, name) < 0
+			parameter == 1 &&
+			(
+				specifier.default_value != NULL ? PyDict_SetItem(
+					namespace,
+					name,
+					specifier.default_value
+				) < 0 :
+				PyDict_DelItem(namespace, name) < 0
+			)
 		) {
 			return RESULT_ERROR;
 		}
