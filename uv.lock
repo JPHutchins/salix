@@ -3,8 +3,8 @@ revision = 5
 requires-python = ">=3.10"
 resolution-markers = [
     "python_full_version >= '3.15' and sys_platform == 'win32'",
-    "python_full_version == '3.14.*' and sys_platform == 'win32'",
     "python_full_version >= '3.15' and sys_platform != 'win32'",
+    "python_full_version == '3.14.*' and sys_platform == 'win32'",
     "python_full_version == '3.14.*' and sys_platform != 'win32'",
     "python_full_version >= '3.11' and python_full_version < '3.14' and sys_platform == 'win32'",
     "python_full_version >= '3.11' and python_full_version < '3.14' and sys_platform != 'win32'",
@@ -1370,8 +1370,8 @@ version = "2026.6.3"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
     "python_full_version >= '3.15' and sys_platform == 'win32'",
-    "python_full_version == '3.14.*' and sys_platform == 'win32'",
     "python_full_version >= '3.15' and sys_platform != 'win32'",
+    "python_full_version == '3.14.*' and sys_platform == 'win32'",
     "python_full_version == '3.14.*' and sys_platform != 'win32'",
     "python_full_version >= '3.11' and python_full_version < '3.14' and sys_platform == 'win32'",
     "python_full_version >= '3.11' and python_full_version < '3.14' and sys_platform != 'win32'",
@@ -1526,6 +1526,10 @@ version = "0.1.0a2"
 source = { virtual = "." }
 
 [package.dev-dependencies]
+build = [
+    { name = "setuptools" },
+    { name = "tomli", marker = "python_full_version < '3.11'" },
+]
 ci = [
     { name = "camas" },
 ]
@@ -1555,6 +1559,10 @@ type-check = [
 [package.metadata]
 
 [package.metadata.requires-dev]
+build = [
+    { name = "setuptools", specifier = "==82.0.1" },
+    { name = "tomli", marker = "python_full_version < '3.11'", specifier = "==2.4.1" },
+]
 ci = [{ name = "camas", specifier = "==0.1.30" }]
 dev = [
     { name = "camas", extras = ["mcp"], specifier = "==0.1.30" },

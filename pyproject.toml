@@ -52,6 +52,7 @@ salix = ["py.typed", "__init__.pyi"]
 
 [dependency-groups]
 ci = ["camas==0.1.30"]
+build = ["setuptools==82.0.1", "tomli==2.4.1; python_version < '3.11'"]
 lint = ["ruff==0.17.2"]
 type-check = ["mypy==2.4.0", "pyright==1.1.414", "ty==0.0.63", "typing-extensions==4.16.0"]
 tooling = [
