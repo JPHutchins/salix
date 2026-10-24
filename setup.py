@@ -1,4 +1,6 @@
+import hashlib
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -13,9 +15,23 @@ sys.path.insert(0, str(Path(__file__).parent))
 from build_config import BUILD, PLATFORM_FLAGS, STRICT
 
 STRICT_FLAGS = STRICT if os.environ.get("SALIX_STRICT") == "1" else ()
+MACHINE_FLAG = re.compile(r"-m[a-z]")
 
 
 class BaselineCpuBuild(build_ext):
+    def run(self) -> None:
+        artifacts = {
+            Path(self.build_temp) / f"{ext.name}.artifact": Path(self.get_ext_fullpath(ext.name))
+            for ext in self.extensions
+        }
+        self.force = self.force or any(
+            recorded(identity) != digest(artifact) for identity, artifact in artifacts.items()
+        )
+        super().run()
+
+        for identity, artifact in artifacts.items():
+            record(identity, digest(artifact))
+
     def build_extension(self, ext: Extension) -> None:
         commands = (
             [*self.compiler.compiler_so, *ext.extra_compile_args],
@@ -50,13 +66,23 @@ def predefined_macros(command: list[str]) -> set[str]:
 
 
 def refuse_beyond_baseline(command: list[str]) -> None:
-    beyond = predefined_macros(command) - predefined_macros([*command, "-mcpu=baseline"])
+    beyond = predefined_macros(command) - predefined_macros(
+        [*(argument for argument in command if not MACHINE_FLAG.match(argument)), "-mcpu=baseline"]
+    )
 
     if beyond:
         raise SystemExit(
             f"{shlex.join(command)} targets more than the baseline CPU: "
             + ", ".join(sorted(macro.split()[1] for macro in beyond))
         )
+
+
+def digest(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else ""
+
+
+def recorded(path: Path) -> str:
+    return path.read_text(encoding="utf-8") if path.is_file() else ""
 
 
 def record(path: Path, text: str) -> None:
