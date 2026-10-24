@@ -6,7 +6,9 @@
       "zigTarget": "x86_64-linux-gnu.2.17",
       "platformTag": "manylinux_2_17_x86_64",
       "moduleName": "__init__.cpython-{nodot}-x86_64-linux-gnu.so",
-      "extraFlags": [],
+      "extraFlags": [
+        "-mcpu=x86_64"
+      ],
       "linkPythonLibrary": false
     },
     "manylinux-aarch64": {
@@ -23,6 +25,7 @@
       "platformTag": "macosx_10_13_x86_64",
       "moduleName": "__init__.cpython-{nodot}-darwin.so",
       "extraFlags": [
+        "-mcpu=x86_64",
         "-undefined",
         "dynamic_lookup"
       ],
@@ -44,7 +47,9 @@
       "zigTarget": "x86_64-windows-gnu",
       "platformTag": "win_amd64",
       "moduleName": "__init__.pyd",
-      "extraFlags": [],
+      "extraFlags": [
+        "-mcpu=x86_64"
+      ],
       "linkPythonLibrary": true
     },
     "windows-aarch64": {

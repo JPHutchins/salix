@@ -110,7 +110,7 @@ make_env = Task(MAKE_ENV, mutates=True)
 SETUP_BUILD = " python setup.py build_ext"
 BUILD = BUILD_TOOLS.run(" --python .venvs/{PY}/bin/python") + SETUP_BUILD + " --inplace"
 
-STRICT_BUILD = {**BUILD_TOOLS.environment, "SALIX_STRICT": "1", "SALIX_BASELINE_CPU": "1"}
+STRICT_BUILD = {**BUILD_TOOLS.environment, "SALIX_STRICT": "1"}
 
 NIX_INPUTS = (
     "src/",
