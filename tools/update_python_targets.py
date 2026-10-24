@@ -46,7 +46,7 @@ PLATFORMS: dict[str, Platform] = {
         "x86_64-linux-gnu.2.17",
         "manylinux_2_17_x86_64",
         "__init__.cpython-{nodot}-x86_64-linux-gnu.so",
-        (),
+        ("-mcpu=x86_64",),
         False,
     ),
     "manylinux-aarch64": Platform(
@@ -62,7 +62,7 @@ PLATFORMS: dict[str, Platform] = {
         "x86_64-macos.10.13",
         "macosx_10_13_x86_64",
         "__init__.cpython-{nodot}-darwin.so",
-        ("-undefined", "dynamic_lookup"),
+        ("-mcpu=x86_64", "-undefined", "dynamic_lookup"),
         False,
     ),
     "macos-aarch64": Platform(
@@ -78,7 +78,7 @@ PLATFORMS: dict[str, Platform] = {
         "x86_64-windows-gnu",
         "win_amd64",
         "__init__.pyd",
-        (),
+        ("-mcpu=x86_64",),
         True,
     ),
     "windows-aarch64": Platform(
