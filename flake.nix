@@ -262,7 +262,8 @@
               pkgs.gdb
               pkgs.git
               jphfmt
-            ];
+            ]
+            ++ pkgs.lib.optional pkgs.stdenv.hostPlatform.isx86_64 pkgs.elfx86exts;
 
             shellHook = ''
               unset PYTHONPATH
