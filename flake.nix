@@ -250,6 +250,7 @@
         system:
         let
           inherit (forSystem.${system}) pkgs jphfmt;
+          zigCC = "zig cc -mcpu=baseline";
         in
         {
           default = pkgs.mkShell {
@@ -261,13 +262,14 @@
               pkgs.gdb
               pkgs.git
               jphfmt
-            ];
+            ]
+            ++ pkgs.lib.optional pkgs.stdenv.hostPlatform.isx86_64 pkgs.elfx86exts;
 
             shellHook = ''
               unset PYTHONPATH
 
-              export CC="zig cc"
-              export LDSHARED="zig cc -shared"
+              export CC="${zigCC}"
+              export LDSHARED="${zigCC} -shared"
             '';
           };
         }

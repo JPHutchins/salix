@@ -88,7 +88,7 @@ BUILD = (
     " python setup.py build_ext --inplace"
 )
 
-STRICT_BUILD = {"SALIX_STRICT": "1"}
+STRICT_BUILD = {"SALIX_STRICT": "1", "SALIX_BASELINE_CPU": "1"}
 
 NIX_INPUTS = (
     "src/",
