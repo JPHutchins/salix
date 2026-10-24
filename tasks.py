@@ -88,7 +88,7 @@ BUILD = (
     " python setup.py build_ext --inplace"
 )
 
-STRICT_BUILD = {"SALIX_STRICT": "1"}
+STRICT_BUILD = {"SALIX_STRICT": "1", "SALIX_BASELINE_CPU": "1"}
 
 NIX_INPUTS = (
     "src/",
@@ -127,9 +127,6 @@ INTERPRETER_GUARD = (
     " + ('t' if sysconfig.get_config_var('Py_GIL_DISABLED') else '') == '{PYTHON}'\""
 )
 interpreter_guard = Task(INTERPRETER_GUARD)
-cpu_baseline_guard = Task(
-    "bash -c 'diff <(echo | $CC -dM -E -x c - | sort) <(echo | zig cc -mcpu=baseline -dM -E -x c - | sort)'"
-)
 compile_flags = Task("uv run --no-sync python tools/compile_flags.py", mutates=True)
 
 clean = Task(
@@ -223,7 +220,6 @@ test = Parallel(
 
 instructions = Parallel(
     Sequential(
-        cpu_baseline_guard,
         build,
         interpreter_guard,
         Task("nix shell --inputs-from . nixpkgs#valgrind --command .venvs/{PY}/bin/python bench/instructions.py"),
@@ -344,9 +340,7 @@ conformance = Sequential(
         when=".",
     ),
 )
-check = Parallel(
-    cpu_baseline_guard, test, free_threaded, format_check, lock_check, lint, analyze, c_test, type_check
-)
+check = Parallel(test, free_threaded, format_check, lock_check, lint, analyze, c_test, type_check)
 
 WHEEL_RUN = ISOLATED_RUN + " --no-cache --managed-python --python {PY}"
 wheel_guard = Task(
@@ -439,7 +433,6 @@ coverage = Parallel(
 )
 
 ci = Parallel(
-    cpu_baseline_guard,
     flake_check,
     free_threaded,
     header_gates,

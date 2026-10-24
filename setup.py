@@ -1,15 +1,69 @@
 import os
+import shlex
+import subprocess
 import sys
 import sysconfig
 from pathlib import Path
 
 from setuptools import Extension, setup
+from setuptools.command.build_ext import build_ext
 
 sys.path.insert(0, str(Path(__file__).parent))
 
 from build_config import BUILD, PLATFORM_FLAGS, STRICT
 
 STRICT_FLAGS = STRICT if os.environ.get("SALIX_STRICT") == "1" else ()
+
+
+class BaselineCpuBuild(build_ext):
+    def build_extension(self, ext: Extension) -> None:
+        commands = (
+            [*self.compiler.compiler_so, *ext.extra_compile_args],
+            [*self.compiler.linker_so, *ext.extra_link_args],
+        )
+
+        for command in commands:
+            refuse_beyond_baseline(command)
+
+        fingerprint = Path(self.build_temp) / f"{ext.name}.commands"
+        record(fingerprint, "".join(f"{shlex.join(command)}\n" for command in commands))
+        ext.depends = [*ext.depends, str(fingerprint)]
+        super().build_extension(ext)
+
+
+def predefined_macros(command: list[str]) -> set[str]:
+    try:
+        return set(
+            subprocess.run(
+                [*command, "-dM", "-E", "-x", "c", "-"],
+                input="",
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.splitlines()
+        )
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise SystemExit(
+            f"{shlex.join(command)} cannot be checked against the baseline CPU"
+            " (it needs zig cc's -mcpu=baseline; build inside nix develop)"
+        ) from error
+
+
+def refuse_beyond_baseline(command: list[str]) -> None:
+    beyond = predefined_macros(command) - predefined_macros([*command, "-mcpu=baseline"])
+
+    if beyond:
+        raise SystemExit(
+            f"{shlex.join(command)} targets more than the baseline CPU: "
+            + ", ".join(sorted(macro.split()[1] for macro in beyond))
+        )
+
+
+def record(path: Path, text: str) -> None:
+    if not path.is_file() or path.read_text(encoding="utf-8") != text:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+
 
 setup(
     ext_modules=[
@@ -23,4 +77,5 @@ setup(
             ],
         ),
     ],
+    cmdclass={"build_ext": BaselineCpuBuild} if os.environ.get("SALIX_BASELINE_CPU") == "1" else {},
 )
