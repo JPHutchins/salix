@@ -79,6 +79,8 @@ README_FENCES_FROM_TESTS = " --markdown-docs ../README.md"
 ENVIRONMENT_PER_INTERPRETER = {"UV_PROJECT_ENVIRONMENT": ".venvs/{PY}"}
 
 ISOLATED_RUN = "uv run --no-project --isolated"
+LOCKED_RUN = f"env -u PYTHONPATH uv run --isolated --frozen --managed-python --python {PINNED[PYTHONS[0]]} --only-group"
+LOCKED_GROUPS = ("lint", "type-check", "tooling")
 MAKE_ENV = "uv venv --clear --python {PYTHON} --managed-python .venvs/{PY}"
 make_env = Task(MAKE_ENV, mutates=True)
 
@@ -149,20 +151,17 @@ c_analyzer = Task(
 )
 analyze = Sequential(compile_flags, Parallel(c_tidy, c_analyzer))
 
-TYPE_CHECK = "uv run --no-project --with typing_extensions"
-MYPY = "mypy==2.4.0"
-PYRIGHT = "pyright==1.1.414"
-TY = "ty==0.0.63"
+TYPE_CHECK = LOCKED_RUN + " type-check"
 mypy = Task(
-    TYPE_CHECK + " --with " + MYPY + " mypy --strict --warn-unused-ignores"
+    TYPE_CHECK + " mypy --strict --warn-unused-ignores"
     " --python-version {CHECKED_PYTHON} tests/typing"
 )
 pyright = Task(
-    TYPE_CHECK + " --with " + PYRIGHT + " pyright --pythonversion {CHECKED_PYTHON} tests/typing"
+    TYPE_CHECK + " pyright --pythonversion {CHECKED_PYTHON} tests/typing"
 )
 
 ty = Task(
-    TYPE_CHECK + " --with " + TY + " ty check --python-version {CHECKED_PYTHON}"
+    TYPE_CHECK + " ty check --python-version {CHECKED_PYTHON}"
     " tests/typing/accepted.py"
 )
 typed_api = Parallel(
@@ -175,18 +174,22 @@ typed_api = Parallel(
 )
 
 tooling = Task(
-    TYPE_CHECK + " --with " + MYPY + " --with camas --with setuptools --with types-setuptools"
-    " --with msgspec --with record-type"
-    " mypy --strict --warn-unused-ignores --explicit-package-bases"
+    LOCKED_RUN + " tooling mypy --strict --warn-unused-ignores --explicit-package-bases"
     " --exclude bench/source-tiers/vendor"
     " setup.py tasks.py build_config.py tools/ bench/",
     env={"MYPYPATH": ".:tools/check_wheel"},
 )
 type_check = Parallel(typed_api, tooling)
 
-RUFF_CHECK = "uv run --no-project --with ruff ruff check"
+RUFF_CHECK = LOCKED_RUN + " lint ruff check"
 HUNDREDS_OF_DIAGNOSTICS = 64_000
 LINT_FORMAT = AgentFormat("--output-format rdjson", "rdjson", limit=HUNDREDS_OF_DIAGNOSTICS)
+locked_tools = Parallel(
+    *(
+        Task(f"uv run --no-sync python tools/locked_tools.py {group} {LOCKED_RUN} {group}", name=f"locked_tools.{group}")
+        for group in LOCKED_GROUPS
+    )
+)
 lint = Parallel(
     Task(
         RUFF_CHECK + " . --extend-exclude tests/test_generics_pep695.py",
@@ -340,7 +343,9 @@ conformance = Sequential(
         when=".",
     ),
 )
-check = Parallel(test, free_threaded, format_check, lock_check, lint, analyze, c_test, type_check)
+check = Parallel(
+    test, free_threaded, format_check, lock_check, locked_tools, lint, analyze, c_test, type_check
+)
 
 WHEEL_RUN = ISOLATED_RUN + " --no-cache --managed-python --python {PY}"
 wheel_guard = Task(
@@ -438,6 +443,7 @@ ci = Parallel(
     header_gates,
     format_check,
     lock_check,
+    locked_tools,
     lint,
     analyze,
     type_check,
