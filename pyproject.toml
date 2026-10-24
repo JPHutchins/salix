@@ -52,6 +52,18 @@ salix = ["py.typed", "__init__.pyi"]
 
 [dependency-groups]
 ci = ["camas==0.1.30"]
+build = ["setuptools==82.0.1", "tomli==2.4.1; python_version < '3.11'"]
+lint = ["ruff==0.17.2"]
+type-check = ["mypy==2.4.0", "pyright==1.1.414", "ty==0.0.63", "typing-extensions==4.16.0"]
+tooling = [
+    { include-group = "ci" },
+    { include-group = "build" },
+    { include-group = "type-check" },
+    "msgspec==0.21.1",
+    "packaging==26.2",
+    "record-type==2023.1.post1; python_version >= '3.11'",
+    "types-setuptools==84.0.0.20261006",
+]
 dev = ["setuptools>=77", "camas[mcp]==0.1.30"]
 
 [tool.pyright]

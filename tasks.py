@@ -32,6 +32,7 @@ def release_order(python: str) -> tuple[int, ...]:
 
 
 NEWEST = max(PYTHONS, key=release_order)
+OLDEST = min(PYTHONS, key=release_order)
 
 _PROJECT_VERSION = re.search(
     r'^version = "([^"]+)"',
@@ -71,24 +72,45 @@ FREE_THREADED = tuple(
     python for python in PINNED if python.endswith("t") and python not in UNTESTED
 )
 
+CLEARED_PYTHONPATH = {"PYTHONPATH": ""}
+PROJECT_PYTHON = PINNED[PYTHONS[0]]
+
+
+def managed(python: str) -> str:
+    return f" --managed-python --python {python}"
+
+
+class Locked(NamedTuple):
+    source: str
+    environment: dict[str, str]
+    checked_on: str
+
+    def run(self, interpreter: str) -> str:
+        return f"uv run --isolated --frozen{interpreter} {self.source}"
+
+
+LINT = Locked("--only-group lint", CLEARED_PYTHONPATH, managed(PROJECT_PYTHON))
+TYPE_CHECKERS = Locked("--only-group type-check", CLEARED_PYTHONPATH, managed(PROJECT_PYTHON))
+TOOLING = Locked("--only-group tooling", CLEARED_PYTHONPATH, managed(PROJECT_PYTHON))
+BUILD_TOOLS = Locked("--only-group build", CLEARED_PYTHONPATH, managed(PINNED[OLDEST]))
+TEST_DEPENDENCIES = Locked("--package salix-tests", CLEARED_PYTHONPATH, managed(PINNED[OLDEST]))
+LOCKED_SOURCES = (LINT, TYPE_CHECKERS, TOOLING, BUILD_TOOLS, TEST_DEPENDENCIES)
+
 PYTEST = (
-    "uv run --package salix-tests --managed-python --python {PYTHON} python -m pytest"
+    "uv run --frozen --package salix-tests --managed-python --python {PYTHON} python -m pytest"
 )
 README_FENCES = " --markdown-docs README.md"
 README_FENCES_FROM_TESTS = " --markdown-docs ../README.md"
-ENVIRONMENT_PER_INTERPRETER = {"UV_PROJECT_ENVIRONMENT": ".venvs/{PY}"}
+ENVIRONMENT_PER_INTERPRETER = {**CLEARED_PYTHONPATH, "UV_PROJECT_ENVIRONMENT": ".venvs/{PY}"}
 
 ISOLATED_RUN = "uv run --no-project --isolated"
 MAKE_ENV = "uv venv --clear --python {PYTHON} --managed-python .venvs/{PY}"
 make_env = Task(MAKE_ENV, mutates=True)
 
-BUILD = (
-    "uv run --no-project --python .venvs/{PY}/bin/python --with setuptools"
-    ' --with "tomli>=2; python_version < \'3.11\'"'
-    " python setup.py build_ext --inplace"
-)
+SETUP_BUILD = " python setup.py build_ext"
+BUILD = BUILD_TOOLS.run(" --python .venvs/{PY}/bin/python") + SETUP_BUILD + " --inplace"
 
-STRICT_BUILD = {"SALIX_STRICT": "1", "SALIX_BASELINE_CPU": "1"}
+STRICT_BUILD = {**BUILD_TOOLS.environment, "SALIX_STRICT": "1", "SALIX_BASELINE_CPU": "1"}
 
 NIX_INPUTS = (
     "src/",
@@ -149,21 +171,21 @@ c_analyzer = Task(
 )
 analyze = Sequential(compile_flags, Parallel(c_tidy, c_analyzer))
 
-TYPE_CHECK = "uv run --no-project --with typing_extensions"
-MYPY = "mypy==2.4.0"
-PYRIGHT = "pyright==1.1.414"
-TY = "ty==0.0.63"
+TYPE_CHECK = TYPE_CHECKERS.run(TYPE_CHECKERS.checked_on)
 mypy = Task(
-    TYPE_CHECK + " --with " + MYPY + " mypy --strict --warn-unused-ignores"
-    " --python-version {CHECKED_PYTHON} tests/typing"
+    TYPE_CHECK + " mypy --strict --warn-unused-ignores"
+    " --python-version {CHECKED_PYTHON} tests/typing",
+    env=TYPE_CHECKERS.environment,
 )
 pyright = Task(
-    TYPE_CHECK + " --with " + PYRIGHT + " pyright --pythonversion {CHECKED_PYTHON} tests/typing"
+    TYPE_CHECK + " pyright --pythonversion {CHECKED_PYTHON} tests/typing",
+    env=TYPE_CHECKERS.environment,
 )
 
 ty = Task(
-    TYPE_CHECK + " --with " + TY + " ty check --python-version {CHECKED_PYTHON}"
-    " tests/typing/accepted.py"
+    TYPE_CHECK + " ty check --python-version {CHECKED_PYTHON}"
+    " tests/typing/accepted.py",
+    env=TYPE_CHECKERS.environment,
 )
 typed_api = Parallel(
     mypy,
@@ -175,26 +197,39 @@ typed_api = Parallel(
 )
 
 tooling = Task(
-    TYPE_CHECK + " --with " + MYPY + " --with camas --with setuptools --with types-setuptools"
-    " --with msgspec --with record-type"
-    " mypy --strict --warn-unused-ignores --explicit-package-bases"
+    TOOLING.run(TOOLING.checked_on) + " mypy --strict --warn-unused-ignores --explicit-package-bases"
     " --exclude bench/source-tiers/vendor"
     " setup.py tasks.py build_config.py tools/ bench/",
-    env={"MYPYPATH": ".:tools/check_wheel"},
+    env={**TOOLING.environment, "MYPYPATH": ".:tools/check_wheel"},
 )
 type_check = Parallel(typed_api, tooling)
 
-RUFF_CHECK = "uv run --no-project --with ruff ruff check"
+RUFF_CHECK = LINT.run(LINT.checked_on) + " ruff check"
 HUNDREDS_OF_DIAGNOSTICS = 64_000
 LINT_FORMAT = AgentFormat("--output-format rdjson", "rdjson", limit=HUNDREDS_OF_DIAGNOSTICS)
+locked_tools = Parallel(
+    *(
+        Task(
+            TOOLING.run(TOOLING.checked_on)
+            + " python tools/locked_tools.py "
+            + "".join(f"{name}={value} " for name, value in locked.environment.items())
+            + locked.run(locked.checked_on),
+            env=TOOLING.environment,
+            name=f"locked_tools.{locked.source.split()[-1]}",
+        )
+        for locked in LOCKED_SOURCES
+    )
+)
 lint = Parallel(
     Task(
         RUFF_CHECK + " . --extend-exclude tests/test_generics_pep695.py",
+        env=LINT.environment,
         agent_format=LINT_FORMAT,
     ),
     Task(
         RUFF_CHECK + " --target-version py312 tests/test_generics_pep695.py",
         when=("tests/test_generics_pep695.py", "pyproject.toml"),
+        env=LINT.environment,
         agent_format=LINT_FORMAT,
     ),
 )
@@ -258,19 +293,13 @@ HEADER_GATES = (
     {"BEFORE": "3.14.3", "AFTER": "3.14.4"},
 )
 HEADER_GATE_BUILD = {"PYTHONPATH": "../build/{BEFORE}"}
-HEADER_GATE_SUITE = (
-    " --with pytest --with hypothesis --with packaging --with pyrsistent"
-    " python -m pytest -p no:cacheprovider --ignore=test_check_wheel.py ."
-)
-HEADER_GATE_README = (
-    " --with pytest --with pytest-markdown-docs python -m pytest -p no:cacheprovider"
-    + README_FENCES_FROM_TESTS
-)
+HEADER_GATE_SUITE = " python -m pytest -p no:cacheprovider --ignore=test_check_wheel.py ."
+HEADER_GATE_README = " python -m pytest -p no:cacheprovider" + README_FENCES_FROM_TESTS
 header_gates = Parallel(
     Sequential(
         Task(
-            ISOLATED_RUN + " --managed-python --python {BEFORE} --with setuptools"
-            " python setup.py build_ext --build-lib build/{BEFORE} --build-temp build/{BEFORE}-temp",
+            BUILD_TOOLS.run(managed("{BEFORE}")) + SETUP_BUILD
+            + " --build-lib build/{BEFORE} --build-temp build/{BEFORE}-temp",
             mutates=True,
             env=STRICT_BUILD,
         ),
@@ -282,9 +311,9 @@ header_gates = Parallel(
         Parallel(
             *(
                 Task(
-                    ISOLATED_RUN + " --managed-python --python " + interpreter + run,
+                    TEST_DEPENDENCIES.run(managed(interpreter)) + run,
                     cwd=Path("tests"),
-                    env=HEADER_GATE_BUILD,
+                    env={**TEST_DEPENDENCIES.environment, **HEADER_GATE_BUILD},
                 )
                 for interpreter in ("{BEFORE}", "{AFTER}")
                 for run in (HEADER_GATE_SUITE, HEADER_GATE_README)
@@ -324,13 +353,13 @@ pyodide = Sequential(
     ),
 )
 
-in_place_build = Task("uv run python setup.py build_ext --inplace", mutates=True, env=STRICT_BUILD)
+in_place_build = Task(BUILD_TOOLS.run("") + SETUP_BUILD + " --inplace", mutates=True, env=STRICT_BUILD)
 benchmark = Sequential(in_place_build, bench)
 CONFORMANCE_PYTHON = "3.14.6"
-CONFORMANCE_RUN = ISOLATED_RUN + f" --managed-python --python {CONFORMANCE_PYTHON}"
+CONFORMANCE_RUN = ISOLATED_RUN + managed(CONFORMANCE_PYTHON)
 conformance = Sequential(
     Task(
-        CONFORMANCE_RUN + " --with setuptools python setup.py build_ext --inplace",
+        BUILD_TOOLS.run(managed(CONFORMANCE_PYTHON)) + SETUP_BUILD + " --inplace",
         mutates=True,
         env=STRICT_BUILD,
     ),
@@ -340,11 +369,13 @@ conformance = Sequential(
         when=".",
     ),
 )
-check = Parallel(test, free_threaded, format_check, lock_check, lint, analyze, c_test, type_check)
+check = Parallel(
+    test, free_threaded, format_check, lock_check, locked_tools, lint, analyze, c_test, type_check
+)
 
-WHEEL_RUN = ISOLATED_RUN + " --no-cache --managed-python --python {PY}"
+WHEEL_OPTIONS = " --no-cache" + managed("{PY}")
 wheel_guard = Task(
-    WHEEL_RUN + " --no-index --find-links ../result-wheels"
+    ISOLATED_RUN + WHEEL_OPTIONS + " --no-index --find-links ../result-wheels"
     f' --with "salix=={VERSION}"'
     " python -c \"import salix, sysconfig; from importlib.metadata import distribution;"
     " assert bool(sysconfig.get_config_var('Py_GIL_DISABLED')) == '{ABI_TAG}'.endswith('t');"
@@ -352,17 +383,16 @@ wheel_guard = Task(
     " if line.startswith('Tag: ')];"
     " assert any(tag.endswith('-{ABI_TAG}-{PLATFORM_TAG}') for tag in tags), tags\"",
     cwd=Path("tests"),
+    env=CLEARED_PYTHONPATH,
 )
-WHEEL_PYTEST = WHEEL_RUN + f' --find-links ../result-wheels --with "salix=={VERSION}" --with pytest'
-wheel_test = Task(
-    WHEEL_PYTEST + " --with hypothesis --with pyrsistent python -m pytest .",
-    cwd=Path("tests"),
-    env={"SALIX_REQUIRE_INSTALLED": "1"},
+WHEEL_PYTEST = (
+    TEST_DEPENDENCIES.run(WHEEL_OPTIONS)
+    + f' --find-links ../result-wheels --with "salix=={VERSION}" python -m pytest'
 )
+WHEEL_TEST_ENVIRONMENT = {**TEST_DEPENDENCIES.environment, "SALIX_REQUIRE_INSTALLED": "1"}
+wheel_test = Task(WHEEL_PYTEST + " .", cwd=Path("tests"), env=WHEEL_TEST_ENVIRONMENT)
 wheel_readme_fences = Task(
-    WHEEL_PYTEST + " --with pytest-markdown-docs python -m pytest" + README_FENCES_FROM_TESTS,
-    cwd=Path("tests"),
-    env={"SALIX_REQUIRE_INSTALLED": "1"},
+    WHEEL_PYTEST + README_FENCES_FROM_TESTS, cwd=Path("tests"), env=WHEEL_TEST_ENVIRONMENT
 )
 
 
@@ -438,6 +468,7 @@ ci = Parallel(
     header_gates,
     format_check,
     lock_check,
+    locked_tools,
     lint,
     analyze,
     type_check,
