@@ -266,7 +266,7 @@
             shellHook = ''
               unset PYTHONPATH
 
-              export CC="zig cc"
+              export CC="zig cc -mcpu=baseline"
               export LDSHARED="zig cc -shared"
             '';
           };
