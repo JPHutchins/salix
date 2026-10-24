@@ -39,6 +39,7 @@ class Platform(NamedTuple):
 
 
 UNBUILDABLE: frozenset[tuple[str, str]] = frozenset({("-freethreaded", "windows-aarch64")})
+X86_64_BASELINE_CPU = ("-mcpu=x86_64",)
 
 PLATFORMS: dict[str, Platform] = {
     "manylinux-x86_64": Platform(
@@ -46,7 +47,7 @@ PLATFORMS: dict[str, Platform] = {
         "x86_64-linux-gnu.2.17",
         "manylinux_2_17_x86_64",
         "__init__.cpython-{nodot}-x86_64-linux-gnu.so",
-        ("-mcpu=x86_64",),
+        X86_64_BASELINE_CPU,
         False,
     ),
     "manylinux-aarch64": Platform(
@@ -62,7 +63,7 @@ PLATFORMS: dict[str, Platform] = {
         "x86_64-macos.10.13",
         "macosx_10_13_x86_64",
         "__init__.cpython-{nodot}-darwin.so",
-        ("-mcpu=x86_64", "-undefined", "dynamic_lookup"),
+        (*X86_64_BASELINE_CPU, "-undefined", "dynamic_lookup"),
         False,
     ),
     "macos-aarch64": Platform(
@@ -78,7 +79,7 @@ PLATFORMS: dict[str, Platform] = {
         "x86_64-windows-gnu",
         "win_amd64",
         "__init__.pyd",
-        ("-mcpu=x86_64",),
+        X86_64_BASELINE_CPU,
         True,
     ),
     "windows-aarch64": Platform(
