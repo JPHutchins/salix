@@ -61,6 +61,7 @@ assert all(
     for name, pin in _PINS.items()
 )
 PINNED = {name: pin["version"] for name, pin in _PINS.items()}
+PINNED_REQUESTS = {name: f"{version}t" if name.endswith("t") else version for name, version in PINNED.items()}
 assert any(name.endswith("t") for name in PINNED)
 
 _UNTESTED_PYTHONS = json.loads(Path("nix/untested-pythons.json").read_text(encoding="utf-8"))
@@ -285,7 +286,7 @@ free_threaded = Parallel(
             )
         ),
     ),
-    variants=tuple({"FT": python, "FT_PYTHON": f"{PINNED[python]}t"} for python in FREE_THREADED),
+    variants=tuple({"FT": python, "FT_PYTHON": PINNED_REQUESTS[python]} for python in FREE_THREADED),
     env=FREE_THREADED_ROOT,
 )
 HEADER_GATES = (
@@ -373,7 +374,7 @@ check = Parallel(
     test, free_threaded, format_check, lock_check, locked_tools, lint, analyze, c_test, type_check
 )
 
-WHEEL_OPTIONS = " --no-cache" + managed("{PY}")
+WHEEL_OPTIONS = " --no-cache" + managed("{PYTHON}")
 wheel_guard = Task(
     ISOLATED_RUN + WHEEL_OPTIONS + " --no-index --find-links ../result-wheels"
     f' --with "salix=={VERSION}"'
@@ -453,7 +454,8 @@ coverage = Parallel(
     variants=tuple(
         {
             "OS": name,
-            "PY": runner.interpreter_request.format(pin),
+            "PY": pin,
+            "PYTHON": runner.interpreter_request.format(PINNED_REQUESTS[pin]),
             "ABI_TAG": _PINS[pin]["abiTag"],
             "PLATFORM_TAG": PLATFORM_TAGS[runner.platform],
         }
