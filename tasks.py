@@ -97,9 +97,7 @@ BUILD_TOOLS = Locked("--only-group build", CLEARED_PYTHONPATH, managed(PINNED[OL
 TEST_DEPENDENCIES = Locked("--package salix-tests", CLEARED_PYTHONPATH, managed(PINNED[OLDEST]))
 LOCKED_SOURCES = (LINT, TYPE_CHECKERS, TOOLING, BUILD_TOOLS, TEST_DEPENDENCIES)
 
-PYTEST = (
-    "uv run --frozen --package salix-tests --managed-python --python {PYTHON} python -m pytest"
-)
+PYTEST = "uv run --frozen" + managed("{PYTHON}") + f" {TEST_DEPENDENCIES.source} python -m pytest"
 README_FENCES = " --markdown-docs README.md"
 README_FENCES_FROM_TESTS = " --markdown-docs ../README.md"
 ENVIRONMENT_PER_INTERPRETER = {**CLEARED_PYTHONPATH, "UV_PROJECT_ENVIRONMENT": ".venvs/{PY}"}
