@@ -18,7 +18,7 @@ jobs:
       github.event.workflow_run.event == 'pull_request' &&
       (github.event.workflow_run.conclusion == 'success' ||
        github.event.workflow_run.conclusion == 'failure')
-    uses: JPHutchins/code-review/.github/workflows/review-reusable.yaml@57ec8fd6cfed3f793d0efae5dfdf55f26737cb1b # v0.1.0-alpha.74
+    uses: JPHutchins/code-review/.github/workflows/review-reusable.yaml@8258e638a168edd714ef36b2a2b87561c0b8b2fb # v0.1.0-alpha.75
     with:
       head_sha:      ${{ github.event.workflow_run.head_sha }}
       head_branch:   ${{ github.event.workflow_run.head_branch }}
